@@ -12,6 +12,8 @@
   list_episodes   … episode 一覧を取得
   build_daybook   … 日次 daybook を生成・保存
   get_daybook     … daybook を取得
+  record_causal_chain … 因果関係を保存
+  get_causal_chain    … 因果関係を取得
 
 recall / loops は既存の recall.sh / loops.sh をサブプロセスで呼ぶ。
 env: EHA_LOG_DIR, EHA_TOOLS_PATH
@@ -240,6 +242,62 @@ def get_daybook(args: dict[str, Any]):
     return _json_text(ms.load_daybook(LOG_DIR, date))
 
 
+def _save_linked_episode(value: Any) -> str:
+    if isinstance(value, dict):
+        return ms.save_episode(LOG_DIR, value)["id"]
+    return ""
+
+
+def record_causal_chain(args: dict[str, Any]):
+    payload = _merge_payload(args, "causal_chain")
+    cause_episode_id = _clean(payload.get("cause_episode_id"))
+    effect_episode_id = _clean(payload.get("effect_episode_id"))
+
+    cause_episode = payload.get("cause_episode")
+    effect_episode = payload.get("effect_episode")
+    if not cause_episode_id:
+        cause_episode_id = _save_linked_episode(cause_episode)
+    if not effect_episode_id:
+        effect_episode_id = _save_linked_episode(effect_episode)
+
+    if not cause_episode_id or not effect_episode_id:
+        return [text("cause_episode_id / effect_episode_id が必要です")], True
+
+    chain_payload = {
+        k: v
+        for k, v in payload.items()
+        if k not in {"cause_episode", "effect_episode", "cause_episode_id", "effect_episode_id"}
+    }
+    chain_payload["cause_episode_id"] = cause_episode_id
+    chain_payload["effect_episode_id"] = effect_episode_id
+    try:
+        chain = ms.save_causal_chain(LOG_DIR, chain_payload, overwrite=_truthy(payload.get("overwrite")))
+    except Exception as e:
+        return [text(f"因果メモの保存に失敗: {e}")], True
+    log(
+        f"[memory-mcp] causal: {chain.get('cause_episode_id', '')} -> {chain.get('effect_episode_id', '')} {chain.get('relation', '')}"
+    )
+    return _json_text(chain)
+
+
+def get_causal_chain(args: dict[str, Any]):
+    chain_id = _clean(args.get("chain_id") or args.get("id"))
+    cause_episode_id = _clean(args.get("cause_episode_id"))
+    effect_episode_id = _clean(args.get("effect_episode_id"))
+    if not cause_episode_id and isinstance(args.get("cause_episode"), dict):
+        cause_episode_id = _clean(args["cause_episode"].get("id"))
+    if not effect_episode_id and isinstance(args.get("effect_episode"), dict):
+        effect_episode_id = _clean(args["effect_episode"].get("id"))
+    return _json_text(
+        ms.get_causal_chain(
+            LOG_DIR,
+            chain_id=chain_id,
+            cause_episode_id=cause_episode_id,
+            effect_episode_id=effect_episode_id,
+        )
+    )
+
+
 def main() -> None:
     serve("memory-mcp", "1.0", {
         "recall": {
@@ -423,6 +481,55 @@ def main() -> None:
                 },
             },
             "handler": get_daybook,
+        },
+        "record_causal_chain": {
+            "spec": {
+                "name": "record_causal_chain",
+                "description": (
+                    "出来事どうしの因果関係を保存する。\n"
+                    "cause_episode_id / effect_episode_id を指定し、必要なら cause_episode / effect_episode も丸ごと渡せる。\n"
+                    "relation は caused / enabled / prevented / correlated のいずれかに正規化される。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "causal_chain": {"type": "object", "description": "causal_chain オブジェクト（任意）"},
+                        "id": {"type": "string"},
+                        "chain_id": {"type": "string"},
+                        "cause_episode_id": {"type": "string"},
+                        "effect_episode_id": {"type": "string"},
+                        "cause_episode": {"type": "object"},
+                        "effect_episode": {"type": "object"},
+                        "relation": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "mechanism": {"type": "string"},
+                        "confidence": {"type": "number"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "support_episode_ids": {"type": "array", "items": {"type": "string"}},
+                        "status": {"type": "string"},
+                        "overwrite": {"type": "boolean"},
+                    },
+                },
+            },
+            "handler": record_causal_chain,
+        },
+        "get_causal_chain": {
+            "spec": {
+                "name": "get_causal_chain",
+                "description": "保存済み causal_chain を取得する。未登録や空 pair なら default を返す。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "chain_id": {"type": "string"},
+                        "id": {"type": "string"},
+                        "cause_episode_id": {"type": "string"},
+                        "effect_episode_id": {"type": "string"},
+                        "cause_episode": {"type": "object"},
+                        "effect_episode": {"type": "object"},
+                    },
+                },
+            },
+            "handler": get_causal_chain,
         },
     })
 

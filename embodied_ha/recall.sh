@@ -7,7 +7,7 @@ set -uo pipefail
 #   - 複数キーワードは OR 検索（どれかにマッチした行を返す）
 #   - 類義語を一緒に渡すと取りこぼしが減る（例: recall エアコン 冷房 設定温度）
 #
-# 検索対象: observations.jsonl（観察）/ explore.jsonl（探索）/ chat_log.jsonl（会話）/ memory.md（長期記憶）
+# 検索対象: daybooks/episodes/causal_chains + observations.jsonl（観察）/ explore.jsonl（探索）/ chat_log.jsonl（会話）/ memory.md（長期記憶）
 
 # symlink(/config/.tools/bin/recall 等)経由でも実体ディレクトリ基準で log を引く。
 # 実行時は run.sh / config.sh が EHA_LOG_DIR を設定するのでそちらが優先される。
@@ -19,8 +19,12 @@ if [ "$#" -eq 0 ]; then
   exit 0
 fi
 
-LOG_DIR="$LOG_DIR" RESIDENT="${RESIDENT:-ユーザー}" python3 - "$@" << 'PYEOF'
-import sys, json, os
+SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" RESIDENT="${RESIDENT:-ユーザー}" python3 - "$@" << 'PYEOF'
+import json, os, sys
+
+script_dir = os.environ["SCRIPT_DIR"]
+sys.path.insert(0, script_dir)
+import memory_state as ms  # type: ignore
 
 log_dir = os.environ["LOG_DIR"]
 resident = os.environ.get("RESIDENT", "ユーザー")
@@ -29,11 +33,51 @@ if not keywords:
     print("（キーワードが空です）")
     raise SystemExit(0)
 
-def match(blob):
-    b = blob.lower()
-    return any(k in b for k in keywords)
 
-hits = []
+def match(blob):
+    return any(k in blob.lower() for k in keywords)
+
+
+def flatten_text(value):
+    parts: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif node is not None:
+            text = str(node).strip()
+            if text:
+                parts.append(text)
+
+    walk(value)
+    return " ".join(parts)
+
+
+def add_hit(bucket_hits, bucket, ts, line):
+    bucket_hits[bucket].append((ts or "", line))
+
+
+bucket_hits = {0: [], 1: [], 2: [], 3: [], 4: []}
+
+# --- structured memory: daybooks / causal chains / episodes ---
+for daybook in ms.list_daybooks(log_dir, reverse=True):
+    if match(flatten_text(daybook)):
+        ts = (daybook.get("generated_at") or daybook.get("date") or "")[:16]
+        add_hit(bucket_hits, 0, ts, ms.daybook_brief(daybook))
+
+for chain in ms.list_causal_chains(log_dir, reverse=True):
+    if match(flatten_text(chain)):
+        ts = (chain.get("created_at") or chain.get("day") or "")[:16]
+        add_hit(bucket_hits, 1, ts, ms.causal_chain_brief(chain))
+
+for episode in ms.list_episodes(log_dir, reverse=True):
+    if match(flatten_text(episode)):
+        ts = (episode.get("timestamp") or episode.get("day") or "")[:16]
+        add_hit(bucket_hits, 2, ts, ms.episode_brief(episode))
 
 # --- jsonl形式のログ ---
 jsonl_sources = [
@@ -41,6 +85,7 @@ jsonl_sources = [
     ("explore.jsonl",        "探索", lambda d: f"{d.get('topic','')} {d.get('private','')}".strip()),
     ("chat_log.jsonl",       "会話", lambda d: f"{resident}「{d.get('user','')}」/ Claude「{d.get('claude','')}」"),
 ]
+raw_hits = []
 for fname, label, extract in jsonl_sources:
     path = os.path.join(log_dir, fname)
     if not os.path.exists(path):
@@ -59,10 +104,15 @@ for fname, label, extract in jsonl_sources:
         values_blob = " ".join(str(v) for v in d.values())
         if match(text + " " + values_blob):
             ts = (d.get("timestamp", "") or "")[:16]
-            hits.append((ts, f"{ts} [{label}] {text}"))
+            raw_hits.append((ts, f"{ts} [{label}] {text}"))
+raw_hits.sort(key=lambda h: h[0] or "")
+raw_hits.reverse()
+for ts, line in raw_hits:
+    add_hit(bucket_hits, 3, ts, line)
 
 # --- memory.md（行単位）---
 mpath = os.path.join(log_dir, "memory.md")
+memory_hits = []
 if os.path.exists(mpath):
     for line in open(mpath, encoding="utf-8"):
         l = line.strip()
@@ -74,17 +124,24 @@ if os.path.exists(mpath):
             if l.startswith("- ") and "|" in l:
                 head = l[2:].split("|", 1)[0].strip()
                 ts = head[:16]
-            hits.append((ts, f"[記憶] {l}"))
+            memory_hits.append((ts, f"[記憶] {l}"))
+memory_hits.sort(key=lambda h: h[0] or "")
+memory_hits.reverse()
+for ts, line in memory_hits:
+    add_hit(bucket_hits, 4, ts, line)
+
+hits = []
+for bucket in sorted(bucket_hits):
+    hits.extend(bucket_hits[bucket])
 
 if not hits:
     print(f"（「{' / '.join(keywords)}」に一致する記憶は見つかりませんでした）")
     raise SystemExit(0)
 
-# 時系列ソート（タイムスタンプ空は末尾）。多すぎる場合は新しい順に40件。
-hits.sort(key=lambda h: h[0] or "0")
 MAX = 40
-shown = hits[-MAX:] if len(hits) > MAX else hits
+shown = hits[:MAX]
 if len(hits) > MAX:
-    print(f"（{len(hits)}件ヒット、新しい{MAX}件を表示）")
+    print(f"（{len(hits)}件ヒット、優先順で新しい{MAX}件を表示）")
 print("\n".join(line for _, line in shown))
+
 PYEOF

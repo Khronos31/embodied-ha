@@ -21,6 +21,7 @@ _DEFAULT_LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
 _MEMORY_DIR = "memory"
 _EPISODES_DIR = "episodes"
 _DAYBOOKS_DIR = "daybooks"
+_CAUSAL_CHAINS_DIR = "causal_chains"
 
 
 def _clean(value: Any) -> str:
@@ -97,6 +98,32 @@ def _normalize_mapping_list(values: Any, *, fallback_key: str = "summary") -> li
     return out
 
 
+_CAUSAL_RELATION_ALIASES = {
+    "caused": {"caused", "cause", "causes", "causing", "triggered", "resulted", "ledto", "led", "produced", "generated", "made"},
+    "enabled": {"enabled", "enable", "enables", "facilitated", "helped", "allowed", "supported", "unlocked"},
+    "prevented": {"prevented", "prevent", "prevents", "blocked", "avoided", "stopped", "suppressed", "hindered"},
+    "correlated": {"correlated", "correlation", "related", "associated", "linked", "cooccurred", "cooccur", "same"},
+}
+
+
+def _normalize_causal_relation(value: Any) -> str:
+    text = re.sub(r"[\s_-]+", "", _clean(value).lower())
+    if not text:
+        return "correlated"
+    for canonical, aliases in _CAUSAL_RELATION_ALIASES.items():
+        if text == canonical or text in aliases:
+            return canonical
+    if text.startswith(("cause", "trigger", "result", "lead", "make")):
+        return "caused"
+    if text.startswith(("enable", "facil", "help", "allow", "support")):
+        return "enabled"
+    if text.startswith(("prevent", "block", "avoid", "stop", "hinder")):
+        return "prevented"
+    if text.startswith(("correl", "relat", "associ", "link", "cooccur")):
+        return "correlated"
+    return "correlated"
+
+
 def _path(log_dir: str | None, *parts: str) -> str:
     base = log_dir or _DEFAULT_LOG_DIR
     return os.path.join(base, _MEMORY_DIR, *parts)
@@ -114,12 +141,20 @@ def daybooks_dir(log_dir: str | None = None) -> str:
     return _path(log_dir, _DAYBOOKS_DIR)
 
 
+def causal_chains_dir(log_dir: str | None = None) -> str:
+    return _path(log_dir, _CAUSAL_CHAINS_DIR)
+
+
 def episode_path(log_dir: str | None, episode_id: str) -> str:
     return _path(log_dir, _EPISODES_DIR, f"{_clean(episode_id)}.json")
 
 
 def daybook_path(log_dir: str | None, date: str) -> str:
     return _path(log_dir, _DAYBOOKS_DIR, f"{_clean(date)}.json")
+
+
+def causal_chain_path(log_dir: str | None, chain_id: str) -> str:
+    return _path(log_dir, _CAUSAL_CHAINS_DIR, f"{_clean(chain_id)}.json")
 
 
 def _load_json(path: str, default: Any) -> Any:
@@ -442,6 +477,16 @@ def list_daybooks(log_dir: str | None, *, limit: int | None = None, reverse: boo
     return items
 
 
+def episode_brief(episode: Mapping[str, Any]) -> str:
+    stamp = _clean(episode.get("timestamp"))
+    stamp = stamp[:16] if stamp else _clean(episode.get("day"))
+    kind = _clean(episode.get("kind")) or "observation"
+    summary = _clean(episode.get("summary")) or "episode"
+    tags = _normalize_text_list(episode.get("tags"))
+    tag_text = f" | tags: {' / '.join(tags[:4])}" if tags else ""
+    return f"- {stamp} | 【エピソード:{kind}】{summary}{tag_text}"
+
+
 def daybook_brief(daybook: Mapping[str, Any]) -> str:
     date = _clean(daybook.get("date"))
     summary = _clean(daybook.get("summary")) or "要約なし"
@@ -450,4 +495,176 @@ def daybook_brief(daybook: Mapping[str, Any]) -> str:
         theme_text = " / ".join(themes[:4])
         return f"- {date} | 【日記】{summary} | themes: {theme_text}"
     return f"- {date} | 【日記】{summary}"
+
+
+
+def _make_causal_chain_id(cause_episode_id: str, effect_episode_id: str) -> str:
+    basis = f"{_clean(cause_episode_id)}|{_clean(effect_episode_id)}"
+    digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+    return f"cc_{digest}"
+
+
+def default_causal_chain(
+    chain_id: str = "",
+    cause_episode_id: str = "",
+    effect_episode_id: str = "",
+) -> dict[str, Any]:
+    return {
+        "id": _clean(chain_id),
+        "cause_episode_id": _clean(cause_episode_id),
+        "effect_episode_id": _clean(effect_episode_id),
+        "relation": "correlated",
+        "summary": "",
+        "mechanism": "",
+        "confidence": 0.5,
+        "tags": [],
+        "support_episode_ids": [],
+        "status": "canonical",
+        "created_at": "",
+        "day": "",
+    }
+
+
+def normalize_causal_chain(
+    raw: Any,
+    *,
+    fallback_id: str = "",
+    fallback_cause_episode_id: str = "",
+    fallback_effect_episode_id: str = "",
+) -> dict[str, Any]:
+    chain = default_causal_chain(fallback_id, fallback_cause_episode_id, fallback_effect_episode_id)
+    if not isinstance(raw, dict):
+        return chain
+
+    source = raw.get("causal_chain") if isinstance(raw.get("causal_chain"), dict) else raw
+
+    chain["id"] = _clean(source.get("id") or source.get("causal_chain_id") or fallback_id)
+    chain["cause_episode_id"] = _clean(source.get("cause_episode_id")) or _clean(fallback_cause_episode_id)
+    chain["effect_episode_id"] = _clean(source.get("effect_episode_id")) or _clean(fallback_effect_episode_id)
+    chain["relation"] = _normalize_causal_relation(source.get("relation"))
+    chain["summary"] = _clean(source.get("summary"))
+    chain["mechanism"] = _clean(source.get("mechanism"))
+    chain["confidence"] = round(_clamp(source.get("confidence"), 0.0, 1.0, 0.5), 3)
+    chain["tags"] = _normalize_text_list(source.get("tags"))
+    support = _normalize_text_list(source.get("support_episode_ids"))
+    for episode_id in (chain["cause_episode_id"], chain["effect_episode_id"]):
+        if episode_id and episode_id not in support:
+            support.append(episode_id)
+    chain["support_episode_ids"] = support
+    chain["status"] = _clean(source.get("status")) or chain["status"]
+    chain["created_at"] = _clean(source.get("created_at"))
+    if not chain["created_at"]:
+        chain["created_at"] = _now().isoformat(timespec="seconds")
+    chain["day"] = _clean(source.get("day")) or _timestamp_to_day(chain["created_at"])
+
+    if chain["cause_episode_id"] and chain["effect_episode_id"]:
+        chain["id"] = _make_causal_chain_id(chain["cause_episode_id"], chain["effect_episode_id"])
+    return chain
+
+
+def save_causal_chain(log_dir: str | None, causal_chain: Mapping[str, Any], *, overwrite: bool = False) -> dict[str, Any]:
+    normalized = normalize_causal_chain(dict(causal_chain))
+    if not normalized["cause_episode_id"] or not normalized["effect_episode_id"]:
+        raise ValueError("cause_episode_id と effect_episode_id が必要です")
+    chain_id = normalized["id"] or _make_causal_chain_id(normalized["cause_episode_id"], normalized["effect_episode_id"])
+    normalized["id"] = chain_id
+    path = causal_chain_path(log_dir, chain_id)
+    if os.path.exists(path) and not overwrite:
+        return load_causal_chain(log_dir, chain_id)
+    _write_json(path, normalized)
+    return normalized
+
+
+def load_causal_chain(
+    log_dir: str | None,
+    chain_id: str = "",
+    *,
+    cause_episode_id: str = "",
+    effect_episode_id: str = "",
+) -> dict[str, Any]:
+    chain_id = _clean(chain_id)
+    cause_episode_id = _clean(cause_episode_id)
+    effect_episode_id = _clean(effect_episode_id)
+    if not chain_id and cause_episode_id and effect_episode_id:
+        chain_id = _make_causal_chain_id(cause_episode_id, effect_episode_id)
+    if not chain_id:
+        return default_causal_chain("", cause_episode_id, effect_episode_id)
+    path = causal_chain_path(log_dir, chain_id)
+    if not os.path.exists(path):
+        return default_causal_chain(chain_id, cause_episode_id, effect_episode_id)
+    data = _load_json(path, default_causal_chain(chain_id, cause_episode_id, effect_episode_id))
+    return normalize_causal_chain(
+        data,
+        fallback_id=chain_id,
+        fallback_cause_episode_id=cause_episode_id,
+        fallback_effect_episode_id=effect_episode_id,
+    )
+
+
+def get_causal_chain(
+    log_dir: str | None,
+    *,
+    chain_id: str = "",
+    cause_episode_id: str = "",
+    effect_episode_id: str = "",
+) -> dict[str, Any]:
+    return load_causal_chain(
+        log_dir,
+        chain_id,
+        cause_episode_id=cause_episode_id,
+        effect_episode_id=effect_episode_id,
+    )
+
+
+def list_causal_chains(
+    log_dir: str | None,
+    *,
+    cause_episode_id: str | None = None,
+    effect_episode_id: str | None = None,
+    relation: str | None = None,
+    limit: int | None = None,
+    reverse: bool = True,
+) -> list[dict[str, Any]]:
+    dir_path = causal_chains_dir(log_dir)
+    if not os.path.isdir(dir_path):
+        return []
+
+    cause_episode_id = _clean(cause_episode_id) if cause_episode_id is not None else ""
+    effect_episode_id = _clean(effect_episode_id) if effect_episode_id is not None else ""
+    relation = _normalize_causal_relation(relation) if relation is not None else ""
+
+    items: list[dict[str, Any]] = []
+    for name in os.listdir(dir_path):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(dir_path, name)
+        chain = normalize_causal_chain(_load_json(path, {}), fallback_id=name[:-5])
+        if cause_episode_id and chain["cause_episode_id"] != cause_episode_id:
+            continue
+        if effect_episode_id and chain["effect_episode_id"] != effect_episode_id:
+            continue
+        if relation and chain["relation"] != relation:
+            continue
+        items.append(chain)
+
+    items.sort(key=lambda item: (item.get("created_at", ""), item.get("id", "")))
+    if reverse:
+        items.reverse()
+    if limit is not None and limit >= 0:
+        items = items[:limit]
+    return items
+
+
+def causal_chain_brief(chain: Mapping[str, Any]) -> str:
+    created = _clean(chain.get("created_at"))
+    stamp = created[:16] if created else _clean(chain.get("day"))
+    cause = _clean(chain.get("cause_episode_id")) or "?"
+    effect = _clean(chain.get("effect_episode_id")) or "?"
+    relation = _clean(chain.get("relation")) or "correlated"
+    summary = _clean(chain.get("summary")) or "因果メモ"
+    mechanism = _clean(chain.get("mechanism"))
+    line = f"- {stamp} | 【因果】{cause} -> {effect} [{relation}] {summary}"
+    if mechanism:
+        line += f" | mechanism: {mechanism}"
+    return line
 
