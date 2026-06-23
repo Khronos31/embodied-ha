@@ -304,8 +304,10 @@ function renderMessages() {
         }
     }
 
-    // Auto-scroll to bottom
+    // Auto-scroll to bottom (instant to avoid visible scroll animation on load)
+    listEl.style.scrollBehavior = 'auto';
     listEl.scrollTop = listEl.scrollHeight;
+    listEl.style.scrollBehavior = '';
 }
 
 // --- Helpers to resolve badges ---
