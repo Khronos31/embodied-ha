@@ -430,10 +430,24 @@ content.append({"type": "text", "text": phase2_prompt})
 
 # --- Phase 2 用 MCP 設定生成（観察中に能動的にHAを掘れるよう・読み取り中心）---
 # 自律操作 ON のときだけ操作サーバー(hacontrol)を繋ぐ＝物理ゲート。OFF ならツール自体が無い。
-_autonomous = os.environ.get("EHA_AUTONOMOUS") == "1"
+_sd = os.environ.get("SCRIPT_DIR", "")
+_boundary_proc = subprocess.run(
+    ["python3", os.path.join(_sd, "boundary.py"), "--json",
+     "--mode", "watch", "--intent", "action", "--hour", str(hour),
+     "--autonomous", os.environ.get("EHA_AUTONOMOUS", "0"),
+     "--prefs-file", os.environ.get("EHA_PREFS_FILE", "")],
+    capture_output=True, text=True,
+    env={**CLAUDE_ENV, "SENSORS_DATA": sensors, "RESIDENT": resident,
+         "EHA_PREFS_FILE": os.environ.get("EHA_PREFS_FILE", "")},
+)
+_boundary = {}
+try:
+    _boundary = json.loads(_boundary_proc.stdout or "{}")
+except Exception:
+    pass
+_autonomous = bool(_boundary.get("allowed"))
 _mcp_path = None
 _allowed = None
-_sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_watch.json"
     _servers = ["sensors", "ha", "camera", "memory"]
@@ -601,8 +615,9 @@ PYEOF
 
 # --- 8. TTS発火（部屋別ルーティング）---
 
-# 安全弁：深夜1〜6時は発話しない
-if [ "$HOUR" -ge 1 ] && [ "$HOUR" -le 6 ]; then
+_speak_boundary_json=$(SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
+if [ "$_speak_allowed" != "True" ]; then
   SPEAK=""
 fi
 

@@ -38,6 +38,7 @@ OPEN_LOOPS=$(loops list 2>/dev/null || echo "なし")
 # --- features.md（アドオンの機能一覧。文脈が自然なら speak で紹介してよい）---
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
+PRESENCE_SENSORS="$(python3 "$SCRIPT_DIR/render-sensors.py" --context watch 2>/dev/null || echo "（センサー取得失敗）")"
 
 # --- 直近の探索ログ（重複探索を避けるため）---
 PREV_EXPLORE="なし"
@@ -142,7 +143,9 @@ esac
 
 # --- 自律操作ゲート（explore モードのみ・ON のときだけ操作サーバーを繋ぐ＝物理ゲート）---
 AUTONOMOUS_NOTE=""
-if [ "${EHA_AUTONOMOUS:-0}" = "1" ] && [ "$MODE" = "explore" ]; then
+_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent action --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_action_allowed=$(printf '%s' "$_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
+if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   ALLOWED_TOOLS="${ALLOWED_TOOLS},mcp__hacontrol__ha_call_service"
   MCP_SERVERS="$MCP_SERVERS hacontrol"
   AUTONOMOUS_NOTE="
@@ -359,7 +362,9 @@ except: print('')
 fi
 
 # --- 発話（深夜は抑制）---
-if [ "$HOUR" -ge 1 ] && [ "$HOUR" -le 6 ]; then
+_speak_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
+if [ "$_speak_allowed" != "True" ]; then
   SPEAK=""
 fi
 
