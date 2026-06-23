@@ -14,6 +14,8 @@ import re
 import sys
 from typing import Any
 
+import sociality_state as ss
+
 
 QUIET_HOURS = range(1, 7)
 
@@ -67,8 +69,28 @@ def _coerce_metadata(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _coerce_body_state(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _presence_any_home(presence: dict[str, bool]) -> bool:
     return any(bool(v) for v in presence.values())
+
+
+def _quiet_hours_reason(intent: str) -> str:
+    if intent == "speak":
+        return "深夜帯（1-6時）のため発話抑制"
+    return "深夜帯（1-6時）のため自律操作抑制"
 
 
 def check(
@@ -79,15 +101,15 @@ def check(
     presence: dict[str, bool],
     policies: list[str],
     metadata: dict[str, Any],
+    person: str = "",
+    body_state: dict[str, Any] | None = None,
+    sociality_log_dir: str | None = None,
 ) -> dict[str, Any]:
-    """Return a normalized boundary decision.
-
-    The function is intentionally pure: callers pass in the current state and the
-    function returns a decision without touching the filesystem or environment.
-    """
+    """Return a normalized boundary decision."""
 
     mode = _compact(mode)
     intent = _compact(intent)
+    person = _compact(person)
     try:
         hour = int(hour)
     except Exception:
@@ -97,6 +119,7 @@ def check(
     presence = _coerce_presence(presence)
     policies = _coerce_policies(policies)
     metadata = _coerce_metadata(metadata)
+    body_state = _coerce_body_state(body_state)
 
     if intent not in {"speak", "action"}:
         return {"allowed": False, "reason": f"未知のintent: {intent or '（空）'}", "fallback": None}
@@ -104,18 +127,40 @@ def check(
     if intent == "action" and mode not in {"watch", "explore"}:
         return {"allowed": False, "reason": f"{mode or 'unknown'}モードでは家電操作しない", "fallback": None}
 
+    if mode == "chat" and intent == "speak":
+        model = ss.get_person_model(sociality_log_dir, person or metadata.get("person", ""))
+        return {
+            "allowed": True,
+            "reason": "chat direct response",
+            "fallback": None,
+            "person": model.get("person", ""),
+            "quiet_window": model.get("boundary", {}).get("quiet_window", {}),
+            "consent": model.get("boundary", {}).get("consent", {}),
+            "turn_taking": model.get("boundary", {}).get("turn_taking", {}),
+            "shared_focus": model.get("shared_focus", {}),
+        }
+
+    model = ss.get_person_model(sociality_log_dir, person or metadata.get("person", "") or os.environ.get("RESIDENT", ""))
+    social = ss.evaluate_interrupt(
+        model,
+        mode=mode,
+        intent=intent,
+        hour=hour,
+        metadata=metadata,
+        body_state=body_state,
+    )
+    if social.get("direct_override") or social.get("urgent_override"):
+        return social
+
     if hour in QUIET_HOURS:
-        if intent == "speak":
-            return {
-                "allowed": False,
-                "reason": "深夜帯（1-6時）のため発話抑制",
-                "fallback": None,
-            }
         return {
             "allowed": False,
-            "reason": "深夜帯（1-6時）のため自律操作抑制",
+            "reason": _quiet_hours_reason(intent),
             "fallback": None,
         }
+
+    if not social.get("allowed", True):
+        return social
 
     if intent == "action":
         if not is_autonomous:
@@ -132,7 +177,7 @@ def check(
             }
         return {"allowed": True, "reason": "許可", "fallback": None}
 
-    return {"allowed": True, "reason": "許可", "fallback": None}
+    return social
 
 
 def _load_json_file(path: str) -> Any:
@@ -230,6 +275,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--policies-json", default="")
     parser.add_argument("--metadata-json", default="")
     parser.add_argument("--sensors-text", default="")
+    parser.add_argument("--person", default=os.environ.get("RESIDENT", ""))
+    parser.add_argument("--body-state-json", default=os.environ.get("EHA_BODY_STATE", ""))
+    parser.add_argument("--sociality-log-dir", default=os.environ.get("EHA_LOG_DIR", ""))
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -255,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             metadata = {}
 
+    body_state = _coerce_body_state(args.body_state_json)
     presence = _load_presence(args, prefs)
     result = check(
         mode=args.mode,
@@ -264,17 +313,17 @@ def main(argv: list[str] | None = None) -> int:
         presence=presence,
         policies=policies,
         metadata=metadata,
+        person=args.person,
+        body_state=body_state,
+        sociality_log_dir=args.sociality_log_dir,
     )
-
     if args.json:
-        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        print(json.dumps(result, ensure_ascii=False))
     else:
-        print(
-            f"allowed={result['allowed']} reason={result['reason']} "
-            f"fallback={result['fallback']}"
-        )
-    return 0
+        print("allowed=" + str(result["allowed"]))
+        print("reason=" + str(result["reason"]))
+    return 0 if result["allowed"] else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

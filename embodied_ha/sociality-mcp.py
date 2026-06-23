@@ -10,6 +10,12 @@ Tools:
   update_social_state     ... record a social-state event
   get_shared_focus       ... return the current shared-attention topic/context
   set_shared_focus       ... update the shared-attention focus
+  get_person_model       ... return the current boundary model for one person
+  record_boundary        ... update quiet_window / consent / turn-taking / focus
+  record_consent         ... record granted/denied consent for speak/action
+  should_interrupt       ... evaluate whether we should speak/intervene now
+  get_turn_taking_state   ... return the current turn-taking state
+  ingest_interaction     ... ingest a recent human/agent interaction
 
 All persistent files live under EHA_LOG_DIR. Missing files return empty/default values.
 """
@@ -22,6 +28,7 @@ import os
 from typing import Any
 
 from mcp_lib import log, serve, text
+import sociality_state as ss
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
@@ -142,6 +149,15 @@ def _social_state_path() -> str:
 
 def _shared_focus_path() -> str:
     return _path(_SHARED_FOCUS_FILE)
+
+
+def _json_load(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
 
 
 def _load_relationships() -> dict[str, Any]:
@@ -271,6 +287,70 @@ def update_social_state(args: dict[str, Any]):
 
 def get_shared_focus(args: dict[str, Any]):
     return _json_text(_load_shared_focus())
+
+
+def get_person_model(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    return _json_text(ss.get_person_model(LOG_DIR, person))
+
+
+def record_boundary(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    patch: dict[str, Any] = {}
+    for key in ("quiet_window", "consent", "turn_taking", "shared_focus", "boundary", "updated_at"):
+        if key in args and args.get(key) is not None:
+            patch[key] = _json_load(args.get(key))
+    return _json_text(ss.record_boundary(LOG_DIR, person, patch))
+
+
+def record_consent(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    kind = _clean(args.get("kind")) or "all"
+    granted = args.get("granted", True)
+    note = _clean(args.get("note"))
+    return _json_text(ss.record_consent(LOG_DIR, person, kind, granted, note=note))
+
+
+def should_interrupt(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    mode = _clean(args.get("mode")) or "watch"
+    intent = _clean(args.get("intent")) or "speak"
+    hour = args.get("hour", 12)
+    metadata = _json_load(args.get("metadata") or args.get("metadata_json") or {})
+    body_state = _json_load(args.get("body_state") or args.get("body_state_json") or {})
+    model = ss.get_person_model(LOG_DIR, person)
+    decision = ss.evaluate_interrupt(
+        model,
+        mode=mode,
+        intent=intent,
+        hour=hour,
+        metadata=metadata if isinstance(metadata, dict) else {},
+        body_state=body_state if isinstance(body_state, dict) else {},
+    )
+    return _json_text(decision)
+
+
+def get_turn_taking_state(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    return _json_text(ss.get_turn_taking_state(LOG_DIR, person))
+
+
+def ingest_interaction(args: dict[str, Any]):
+    person = _clean(args.get("person"))
+    speaker = _clean(args.get("speaker"))
+    kind = _clean(args.get("kind"))
+    text_value = _clean(args.get("text") or args.get("utterance"))
+    shared_focus = _json_load(args.get("shared_focus") or args.get("shared_focus_json") or None)
+    return _json_text(
+        ss.update_turn_taking(
+            LOG_DIR,
+            person,
+            speaker=speaker,
+            kind=kind,
+            text=text_value,
+            shared_focus=shared_focus,
+        )
+    )
 
 
 def set_shared_focus(args: dict[str, Any]):
@@ -426,6 +506,125 @@ def main() -> None:
                 },
             },
             "handler": set_shared_focus,
+        },
+        "get_person_model": {
+            "spec": {
+                "name": "get_person_model",
+                "description": (
+                    "特定の人物について、quiet_window / consent / turn-taking / shared_focus を含む"
+                    " boundary モデルを返す。未登録でも default モデルを返す。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {
+                            "type": "string",
+                            "description": "人物名（空でも可）",
+                        },
+                    },
+                },
+            },
+            "handler": get_person_model,
+        },
+        "record_boundary": {
+            "spec": {
+                "name": "record_boundary",
+                "description": (
+                    "quiet_window / consent / turn-taking / shared_focus の設定や観測を記録する。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {"type": "string"},
+                        "quiet_window": {"type": "object"},
+                        "consent": {"type": "object"},
+                        "turn_taking": {"type": "object"},
+                        "shared_focus": {"type": ["object", "string"]},
+                        "boundary": {"type": "object"},
+                    },
+                },
+            },
+            "handler": record_boundary,
+        },
+        "record_consent": {
+            "spec": {
+                "name": "record_consent",
+                "description": (
+                    "人物ごとの consent を更新する。kind は speak / action など。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "granted": {"type": "boolean"},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["person", "kind", "granted"],
+                },
+            },
+            "handler": record_consent,
+        },
+        "should_interrupt": {
+            "spec": {
+                "name": "should_interrupt",
+                "description": (
+                    "quiet_window / consent / turn-taking / shared_focus / body_state を見て、"
+                    "今 speak / intervene すべきか判定する。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {"type": "string"},
+                        "mode": {"type": "string"},
+                        "intent": {"type": "string"},
+                        "hour": {"type": "integer"},
+                        "metadata": {"type": "object"},
+                        "metadata_json": {"type": "string"},
+                        "body_state": {"type": "object"},
+                        "body_state_json": {"type": "string"},
+                    },
+                },
+            },
+            "handler": should_interrupt,
+        },
+        "get_turn_taking_state": {
+            "spec": {
+                "name": "get_turn_taking_state",
+                "description": (
+                    "人物ごとの turn-taking 状態と、その時点の boundary モデルを返す。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {"type": "string"},
+                    },
+                },
+            },
+            "handler": get_turn_taking_state,
+        },
+        "ingest_interaction": {
+            "spec": {
+                "name": "ingest_interaction",
+                "description": (
+                    "最近の会話・呼びかけ・応答を turn-taking に取り込む。"
+                    "必要なら shared_focus も同時に更新する。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "person": {"type": "string"},
+                        "speaker": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "text": {"type": "string"},
+                        "utterance": {"type": "string"},
+                        "shared_focus": {"type": ["object", "string"]},
+                        "shared_focus_json": {"type": "string"},
+                    },
+                    "required": ["person"],
+                },
+            },
+            "handler": ingest_interaction,
         },
     })
 

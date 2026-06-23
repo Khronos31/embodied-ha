@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "embodied_ha"))
 
 import boundary  # type: ignore  # noqa: E402
+import sociality_state as ss  # type: ignore  # noqa: E402
 
 
 class BoundaryTests(unittest.TestCase):
@@ -107,6 +108,104 @@ class BoundaryTests(unittest.TestCase):
             )
             policies = boundary._load_policies(str(prefs))
             self.assertEqual(policies, ["深夜は発話しない"])
+
+    def test_quiet_window_blocks_spontaneous_speak(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ss.record_boundary(
+                tmpdir,
+                "alice",
+                {"quiet_window": {"active": True, "start": "22:00", "end": "07:00"}},
+            )
+            result = boundary.check(
+                mode="watch",
+                intent="speak",
+                hour=23,
+                is_autonomous=True,
+                presence={"resident": True},
+                policies=[],
+                metadata={},
+                person="alice",
+                sociality_log_dir=tmpdir,
+            )
+            self.assertFalse(result["allowed"])
+            self.assertEqual(result["reason"], "quiet_window")
+
+    def test_direct_call_overrides_quiet_window(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ss.record_boundary(
+                tmpdir,
+                "alice",
+                {"quiet_window": {"active": True, "start": "22:00", "end": "07:00"}},
+            )
+            result = boundary.check(
+                mode="watch",
+                intent="speak",
+                hour=23,
+                is_autonomous=True,
+                presence={"resident": True},
+                policies=[],
+                metadata={"direct": True},
+                person="alice",
+                sociality_log_dir=tmpdir,
+            )
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["reason"], "direct_override")
+
+    def test_urgent_override_overrides_quiet_window(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ss.record_boundary(
+                tmpdir,
+                "alice",
+                {"quiet_window": {"active": True, "start": "22:00", "end": "07:00"}},
+            )
+            result = boundary.check(
+                mode="explore",
+                intent="action",
+                hour=23,
+                is_autonomous=True,
+                presence={"resident": True},
+                policies=[],
+                metadata={"urgent": True},
+                person="alice",
+                sociality_log_dir=tmpdir,
+            )
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["reason"], "urgent_override")
+
+    def test_turn_taking_blocks_background_speak_until_updated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ss.record_boundary(
+                tmpdir,
+                "alice",
+                {"turn_taking": {"state": "waiting", "awaiting_reply": True, "cooldown_seconds": 120}},
+            )
+            blocked = boundary.check(
+                mode="watch",
+                intent="speak",
+                hour=12,
+                is_autonomous=True,
+                presence={"resident": True},
+                policies=[],
+                metadata={},
+                person="alice",
+                sociality_log_dir=tmpdir,
+            )
+            self.assertFalse(blocked["allowed"])
+            self.assertEqual(blocked["reason"], "turn_taking")
+
+            ss.update_turn_taking(tmpdir, "alice", speaker="resident", kind="question", text="今いい?")
+            refreshed = boundary.check(
+                mode="watch",
+                intent="speak",
+                hour=12,
+                is_autonomous=True,
+                presence={"resident": True},
+                policies=[],
+                metadata={"direct": True},
+                person="alice",
+                sociality_log_dir=tmpdir,
+            )
+            self.assertTrue(refreshed["allowed"])
 
 
 if __name__ == "__main__":

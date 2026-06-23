@@ -73,6 +73,73 @@ class SocialityTests(unittest.TestCase):
         self.assertEqual(payload["context"], "今は会話の焦点")
         self.assertTrue(payload["updated_at"])
 
+    def test_get_person_model_returns_defaults_for_empty_and_unknown_person(self):
+        empty_payload = json.loads(self._text(self.sociality.get_person_model({"person": ""})))
+        alice_payload = json.loads(self._text(self.sociality.get_person_model({"person": "alice"})))
+        for payload, expected_person in ((empty_payload, ""), (alice_payload, "alice")):
+            self.assertEqual(payload["person"], expected_person)
+            self.assertFalse(payload["boundary"]["quiet_window"]["active"])
+            self.assertTrue(payload["boundary"]["consent"]["speak"])
+            self.assertTrue(payload["boundary"]["consent"]["action"])
+            self.assertEqual(payload["boundary"]["turn_taking"]["state"], "open")
+            self.assertEqual(payload["shared_focus"]["topic"], "")
+
+    def test_record_boundary_persists_quiet_window_and_turn_taking(self):
+        self.sociality.record_boundary(
+            {
+                "person": "alice",
+                "quiet_window": {"active": True, "start": "22:00", "end": "07:00"},
+                "turn_taking": {"state": "waiting", "awaiting_reply": True},
+            }
+        )
+        payload = json.loads(self._text(self.sociality.get_person_model({"person": "alice"})))
+        self.assertTrue(payload["boundary"]["quiet_window"]["active"])
+        self.assertEqual(payload["boundary"]["quiet_window"]["start"], "22:00")
+        self.assertEqual(payload["boundary"]["turn_taking"]["state"], "waiting")
+        self.assertTrue(payload["boundary"]["turn_taking"]["awaiting_reply"])
+
+    def test_record_consent_reenables_interrupt_after_rejection(self):
+        self.sociality.record_boundary(
+            {
+                "person": "alice",
+                "consent": {"speak": False, "action": True},
+            }
+        )
+        denied = json.loads(
+            self._text(
+                self.sociality.should_interrupt(
+                    {"person": "alice", "mode": "watch", "intent": "speak", "hour": 12}
+                )
+            )
+        )
+        self.assertFalse(denied["allowed"])
+        self.assertIn("consent", denied["reason"])
+
+        self.sociality.record_consent({"person": "alice", "kind": "speak", "granted": True, "note": "OK"})
+        allowed = json.loads(
+            self._text(
+                self.sociality.should_interrupt(
+                    {"person": "alice", "mode": "watch", "intent": "speak", "hour": 12}
+                )
+            )
+        )
+        self.assertTrue(allowed["allowed"])
+
+    def test_ingest_interaction_updates_turn_taking_state(self):
+        self.sociality.ingest_interaction(
+            {
+                "person": "alice",
+                "speaker": "resident",
+                "kind": "question",
+                "text": "今いい?",
+            }
+        )
+        payload = json.loads(self._text(self.sociality.get_turn_taking_state({"person": "alice"})))
+        self.assertEqual(payload["turn_taking"]["state"], "awaiting_reply")
+        self.assertTrue(payload["turn_taking"]["awaiting_reply"])
+        self.assertEqual(payload["turn_taking"]["last_speaker"], "resident")
+        self.assertEqual(payload["turn_taking"]["last_text"], "今いい?")
+
 
 if __name__ == "__main__":
     unittest.main()

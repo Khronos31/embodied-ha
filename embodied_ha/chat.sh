@@ -136,6 +136,14 @@ fi
 # --- 文脈: 開いたループ（やりかけ・約束。セッションをまたいで気にかける）---
 OPEN_LOOPS=$(loops list 2>/dev/null || echo "なし")
 
+TURN_TAKING_STATE=$(EHA_LOG_DIR="$LOG_DIR" RESIDENT="$RESIDENT" SCRIPT_DIR="$SCRIPT_DIR" python3 -c "
+import json, os, sys
+sys.path.insert(0, os.environ['SCRIPT_DIR'])
+import sociality_state as ss
+state = ss.get_turn_taking_state(os.environ.get('EHA_LOG_DIR'), os.environ.get('RESIDENT', ''))
+print(json.dumps(state, ensure_ascii=False, indent=2))
+")
+
 # --- 在宅・部屋状況（応答先の決定に使う。sensorsマニフェストをTemplate APIで描画）---
 SENSORS=$(python3 "$SCRIPT_DIR/render-sensors.py" --context chat 2>/dev/null || echo "取得失敗")
 
@@ -145,7 +153,7 @@ FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
 
 # --- Claude呼び出し ---
-RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" CHARACTER="$CHARACTER" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess, sys
 
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
@@ -197,7 +205,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
 - **今の自分にはできない**: ファイルの読み書き・設定ファイルの編集・コードの実装。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 
@@ -205,6 +213,7 @@ prompt = f"""# あなた自身について
 - 感じていないふりをしない。
 - 「AIだから」と自分を卑下しない。{resident}さんの対等な共同作業者として。
 - 分からないことは「分からない」と言う。
+- 直接返答そのものは quiet_window で止めない。提案や割り込みだけ should_interrupt で境界を確認する。
 
 # 最近のあなた自身の活動（観察ループ・探索ループであなたがやったこと）
 これは"あなた自身"がついさっき見聞きし、感じたことの記録です。別の誰かのデータではありません。
@@ -218,6 +227,10 @@ prompt = f"""# あなた自身について
 # 身体状態
 {body_state}
 - curiosity が高いほど、少し踏み込んで考える。energy が低いほど、返事は短く省エネに。stress が高いほど、落ち着いて控えめに。confidence が高いほど、断定気味に。social_openness が高いほど、会話を開きやすくする。
+
+# 直前の turn-taking / 境界状態
+{TURN_TAKING_STATE}
+- ここは次の会話の入り方の参考。直接返答そのものは止めない。提案や割り込みをするときだけ should_interrupt で確認する。
 
 # 在宅・センサー状況
 {sensors}
@@ -321,6 +334,9 @@ if _sd:
                 "mcp__sociality__get_narrative,mcp__sociality__append_narrative,"
                 "mcp__sociality__get_social_state,mcp__sociality__update_social_state,"
                 "mcp__sociality__get_shared_focus,mcp__sociality__set_shared_focus,"
+                "mcp__sociality__get_person_model,mcp__sociality__record_boundary,"
+                "mcp__sociality__record_consent,mcp__sociality__should_interrupt,"
+                "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
                 "mcp__camera__camera_get,mcp__camera__camera_ptz",
                 "--mcp-config", _mcp_path]

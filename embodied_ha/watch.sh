@@ -410,6 +410,7 @@ phase2_prompt = context + f"""
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
 - loops_add … 「後で気にかけておきたい」こと（消し忘れ・植物の世話・{resident}さんの作業の続き等）があれば text に一言、source="watch" で追加。既に【気にかけていること】にある内容は繰り返さない
+- sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。自発発話を出す前に必要なら見る。
 無理に使う必要はない。観察は手早く。{_action_note}
 
 最後に以下のJSON形式のみで返答してください。マークダウンや余分な説明は不要です。
@@ -439,7 +440,10 @@ _boundary_proc = subprocess.run(
     ["python3", os.path.join(_sd, "boundary.py"), "--json",
      "--mode", "watch", "--intent", "action", "--hour", str(hour),
      "--autonomous", os.environ.get("EHA_AUTONOMOUS", "0"),
-     "--prefs-file", os.environ.get("EHA_PREFS_FILE", "")],
+     "--prefs-file", os.environ.get("EHA_PREFS_FILE", ""),
+     "--person", os.environ.get("RESIDENT", ""),
+     "--body-state-json", os.environ.get("EHA_BODY_STATE", "{}"),
+     "--sociality-log-dir", os.environ.get("EHA_LOG_DIR", "")],
     capture_output=True, text=True,
     env={**CLAUDE_ENV, "SENSORS_DATA": sensors, "RESIDENT": resident,
          "EHA_PREFS_FILE": os.environ.get("EHA_PREFS_FILE", "")},
@@ -454,14 +458,17 @@ _mcp_path = None
 _allowed = None
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_watch.json"
-    _servers = ["sensors", "ha", "camera", "memory"]
+    _servers = ["sensors", "ha", "camera", "memory", "sociality"]
     if _autonomous:
         _servers.append("hacontrol")
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
         _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,"
-                    "mcp__memory__remember,mcp__memory__loops_add")
+                    "mcp__memory__remember,mcp__memory__loops_add,"
+                    "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
+                    "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
+                    "mcp__sociality__record_boundary,mcp__sociality__record_consent")
         if _autonomous:
             _allowed += ",mcp__hacontrol__ha_call_service"
     else:
@@ -619,7 +626,7 @@ PYEOF
 
 # --- 8. TTS発火（部屋別ルーティング）---
 
-_speak_boundary_json=$(SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_speak_boundary_json=$(SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "${EHA_BODY_STATE:-{}}"     --sociality-log-dir "$LOG_DIR"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_speak_allowed" != "True" ]; then
   SPEAK=""

@@ -121,14 +121,15 @@ case "$MODE" in
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
 記録（JSONには書かない）:
 - remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
-- loops_add … 後で気にかけたいことを追加（text に一言、source=\"explore\"）。"
+- loops_add … 後で気にかけたいことを追加（text に一言、source=\"explore\"）。
+- sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
 2. センサーだけでは分からないことは camera_get で確認してもよい（必要なときだけ）
 3. 新しい気づきは remember ツールで残す（既出は繰り返さない）
 4. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__memory__recall,mcp__memory__remember,mcp__memory__loops_add"
-    MCP_SERVERS="sensors ha camera memory"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__memory__recall,mcp__memory__remember,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent"
+    MCP_SERVERS="sensors ha camera memory sociality"
     ;;
   reflect)
     MODE_LABEL="物思いにふける時間"
@@ -163,7 +164,7 @@ esac
 
 # --- 自律操作ゲート（explore モードのみ・ON のときだけ操作サーバーを繋ぐ＝物理ゲート）---
 AUTONOMOUS_NOTE=""
-_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent action --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent action --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "$BODY_STATE"     --sociality-log-dir "$LOG_DIR"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _action_allowed=$(printf '%s' "$_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   ALLOWED_TOOLS="${ALLOWED_TOOLS},mcp__hacontrol__ha_call_service"
@@ -386,7 +387,7 @@ except: print('')
 fi
 
 # --- 発話（深夜は抑制）---
-_speak_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_speak_boundary_json=$(SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode "$MODE" --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "$BODY_STATE"     --sociality-log-dir "$LOG_DIR"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_speak_allowed" != "True" ]; then
   SPEAK=""
