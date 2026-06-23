@@ -79,9 +79,9 @@ permissions on rebuild, only on version update + `ha addons update`.
 ## Multi-agent setup
 
 This project is developed collaboratively by multiple AI agents:
-- **Claude** (Studio Code Server on HAOS): HA config, daily ops, overall add-on management
-- **Codex** (HAOS terminal): code implementation, architecture analysis, code review
-- **Antigravity**: design, image generation, Web UI improvements
+- **Claude** (SCS terminal): HA config, daily ops, overall add-on management
+- **Codex** (SCS terminal): code implementation, architecture analysis, code review
+- **Antigravity** (SCS terminal): design, image generation, Web UI improvements
 
 When in doubt about the broader environment (HAOS persistence rules, HA safety constraints,
 git SSH setup), refer to the global instructions file loaded by your tool.
