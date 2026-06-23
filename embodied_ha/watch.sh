@@ -270,6 +270,7 @@ hour          = int(os.environ.get("HOUR", "12"))
 recent_motion = os.environ.get("RECENT_MOTION_DATA", "なし")
 character     = os.environ.get("CHARACTER", "")
 resident      = os.environ.get("RESIDENT", "ユーザー")
+body_state    = os.environ.get("EHA_BODY_STATE", "") or "{}"
 features_md   = os.environ.get("FEATURES_MD", "")
 features_presented = os.environ.get("FEATURES_PRESENTED", "")
 extra_context = os.environ.get("EXTRA_CONTEXT", "")
@@ -322,6 +323,9 @@ context = f"""# あなた自身について
 【今回のトリガー】{trigger}{trigger_note}
 【内なる衝動】
 {inner_voice}
+【身体状態】
+{body_state}
+- curiosity が高いほど細部を掘る。energy が低いほど短く。stress が高いほど静かに。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
 【気にかけていること（やりかけ・約束。関係する変化があれば speak で触れてよい）】
 {open_loops}
 【センサー状態】

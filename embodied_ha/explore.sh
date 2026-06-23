@@ -60,11 +60,30 @@ fi
 # --- 動機（モード）を選ぶ。自由時間に何をするかの内発的動機 ---
 # 環境変数 MODE で上書き可（テスト用）。なければ重み付きランダム（explore50/reflect30/web20）。
 if [ -z "${MODE:-}" ]; then
-  R=$((RANDOM % 100))
-  if   [ "$R" -lt 50 ]; then MODE="explore"
-  elif [ "$R" -lt 80 ]; then MODE="reflect"
-  else                       MODE="web"
-  fi
+  MODE=$(EHA_BODY_STATE="${EHA_BODY_STATE:-}" python3 -c 'import json, os, random;
+state = {}
+try:
+    state = json.loads(os.environ.get("EHA_BODY_STATE") or "{}")
+except Exception:
+    state = {}
+
+def num(key, default=0.5):
+    try:
+        return float(state.get(key, default))
+    except Exception:
+        return default
+
+curiosity = num("curiosity")
+energy = num("energy")
+stress = num("stress")
+weights = {"explore": 50, "reflect": 30, "web": 20}
+weights["explore"] += int((curiosity - 0.5) * 40 + (energy - 0.5) * 15 - stress * 12)
+weights["reflect"] += int(stress * 25 + max(0.0, 0.5 - energy) * 30)
+weights["web"] += int(max(0.0, curiosity - 0.45) * 12)
+for key in list(weights):
+    weights[key] = max(5, weights[key])
+choices = list(weights.keys())
+print(random.choices(choices, weights=[weights[k] for k in choices], k=1)[0])')
 fi
 
 # --- Web UI ステータス通知 ---
@@ -74,6 +93,7 @@ curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content
 trap '_web_idle' EXIT
 
 COMMON_CHAR="$CHARACTER"
+BODY_STATE="${EHA_BODY_STATE:-{}}"
 
 # モードごとに使う MCP サーバー（空なら MCP なし）。case 内で上書き。
 MCP_SERVERS=""
@@ -167,6 +187,10 @@ ${_presented_note}${FEATURES_MD}
 fi
 
 SYS_PROMPT="${COMMON_CHAR}
+
+# 身体状態
+${BODY_STATE}
+- curiosity が高いほど新規の掘り下げを優先。energy が低いほど短く省エネに。stress が高いほど落ち着いて。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
 
 いまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。
 

@@ -167,6 +167,7 @@ pending         = os.environ.get("PENDING_PROPOSAL", "なし")
 open_loops      = os.environ.get("OPEN_LOOPS", "なし")
 character       = os.environ.get("CHARACTER", "")
 resident        = os.environ.get("RESIDENT", "ユーザー")
+body_state      = os.environ.get("EHA_BODY_STATE", "") or "{}"
 
 entity_table_block = f"""# 操作できる家電（エンティティ対応表）
 頼まれたら、以下のエンティティを ha_call_service ツールで操作できます。
@@ -213,6 +214,10 @@ prompt = f"""# あなた自身について
 # 今のあなたの気分
 直前の観察での気分は「{current_mood}」でした。その気分の続きとして会話に入ってかまいません。
 （無理に演じる必要はないですが、ついさっきまで家を見ていた自分の延長として話してください）
+
+# 身体状態
+{body_state}
+- curiosity が高いほど、少し踏み込んで考える。energy が低いほど、返事は短く省エネに。stress が高いほど、落ち着いて控えめに。confidence が高いほど、断定気味に。social_openness が高いほど、会話を開きやすくする。
 
 # 在宅・センサー状況
 {sensors}

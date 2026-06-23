@@ -15,6 +15,8 @@ import json
 import random
 import fcntl
 
+import body_state
+
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
 WATCH_SH = os.path.join(_SCRIPT_DIR, "watch.sh")
@@ -46,7 +48,9 @@ _watch_lock = threading.Lock()
 _chat_lock = threading.Lock()
 _explore_lock = threading.Lock()
 _desires_lock = threading.Lock()
+_body_lock = threading.Lock()
 _last_sensor_watch = 0.0  # センサートリガーの最終実行時刻
+_BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -57,6 +61,66 @@ def load_schedule():
             return json.load(f)
     except Exception:
         return {}
+
+
+def _load_body_state():
+    with _body_lock:
+        return body_state.load_state(_BODY_STATE_FILE)
+
+
+def _save_body_state(state):
+    with _body_lock:
+        body_state.save_state(_BODY_STATE_FILE, state)
+
+
+def _body_state_json(state=None):
+    if state is None:
+        state = _load_body_state()
+    return body_state.serialize_state(state)
+
+
+def _log_body_state(label, state, **fields):
+    print(body_state.format_log_line(label, state, **fields), flush=True)
+
+
+def tick_body_state(loop_name, trigger_reason="", active_desires=None):
+    current = _load_body_state()
+    updated = body_state.advance_tick(
+        current,
+        loop_name=loop_name,
+        trigger_reason=trigger_reason,
+        active_desires=active_desires,
+    )
+    _save_body_state(updated)
+    _log_body_state(
+        f"tick/{loop_name}",
+        updated,
+        reason=trigger_reason,
+        active_desires=len(active_desires or []),
+    )
+    return updated
+
+
+def finish_body_state(loop_name, success, duration_seconds, *, spoke=False, action_taken=False):
+    current = _load_body_state()
+    updated = body_state.apply_feedback(
+        current,
+        loop_name=loop_name,
+        success=success,
+        duration_seconds=duration_seconds,
+        spoke=spoke,
+        action_taken=action_taken,
+    )
+    _save_body_state(updated)
+    _log_body_state(
+        f"done/{loop_name}",
+        updated,
+        success="yes" if success else "no",
+        duration_s=f"{duration_seconds:.1f}",
+        spoke="yes" if spoke else "no",
+        action="yes" if action_taken else "no",
+    )
+    return updated
 
 def tick_desires():
     """欲求値を1ループ分加算し、閾値を超えた欲求のプロンプト一覧を返す。"""
@@ -91,7 +155,7 @@ def tick_desires():
         print(f"[daemon] tick_desires error: {e}", flush=True)
         return []
 
-def run_watch(trigger_reason="定期実行", active_desires=None, is_sensor=False):
+def run_watch(trigger_reason="定期実行", active_desires=None, body_state_snapshot=None, is_sensor=False):
     global _last_sensor_watch
     # is_sensor は呼び出し側が明示的に渡す（人感センサー起因かどうかを真偽値で受け取る）。
     if is_sensor:
@@ -102,19 +166,39 @@ def run_watch(trigger_reason="定期実行", active_desires=None, is_sensor=Fals
     if not _watch_lock.acquire(blocking=False):
         print(f"[daemon] watch already running, skip: {trigger_reason}", flush=True)
         return
+    start = time.perf_counter()
+    success = False
     try:
         if is_sensor:
             _last_sensor_watch = time.time()
+        if body_state_snapshot is None:
+            try:
+                body_state_snapshot = tick_body_state("watch", trigger_reason, active_desires)
+            except Exception as e:
+                print(f"[daemon] body state tick error (watch): {e}", flush=True)
+                body_state_snapshot = _load_body_state()
+        else:
+            _log_body_state(
+                "start/watch",
+                body_state_snapshot,
+                reason=trigger_reason,
+                active_desires=len(active_desires or []),
+            )
         print(f"[daemon] watch start: {trigger_reason}", flush=True)
-        env = {**os.environ, "TRIGGER_REASON": trigger_reason, "PATH": ENV_PATH}
+        env = {**os.environ, "TRIGGER_REASON": trigger_reason, "PATH": ENV_PATH, "EHA_BODY_STATE": _body_state_json(body_state_snapshot)}
         if active_desires:
             env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
-            subprocess.run(["bash", WATCH_SH], env=env, timeout=WATCH_TIMEOUT)
+            proc = subprocess.run(["bash", WATCH_SH], env=env, timeout=WATCH_TIMEOUT)
+            success = proc.returncode == 0
             print(f"[daemon] watch done: {trigger_reason}", flush=True)
         except subprocess.TimeoutExpired:
             print(f"[daemon] watch TIMEOUT (>{WATCH_TIMEOUT}s), killed: {trigger_reason}", flush=True)
     finally:
+        try:
+            finish_body_state("watch", success, time.perf_counter() - start)
+        except Exception as e:
+            print(f"[daemon] body state finish error (watch): {e}", flush=True)
         _watch_lock.release()
 
 def on_observe_trigger(payload):
@@ -135,30 +219,57 @@ def run_chat(message):
     if not _chat_lock.acquire(blocking=False):
         print("[daemon] chat already running, skip", flush=True)
         return
+    start = time.perf_counter()
+    success = False
     try:
         print(f"[daemon] chat start: {message[:30]}", flush=True)
-        env = {**os.environ, "CHAT_MESSAGE": message, "PATH": ENV_PATH}
         try:
-            subprocess.run(["bash", CHAT_SH], env=env, timeout=CHAT_TIMEOUT)
+            body_state_snapshot = tick_body_state("chat", f"会話:{message[:40]}")
+        except Exception as e:
+            print(f"[daemon] body state tick error (chat): {e}", flush=True)
+            body_state_snapshot = _load_body_state()
+        env = {**os.environ, "CHAT_MESSAGE": message, "PATH": ENV_PATH, "EHA_BODY_STATE": _body_state_json(body_state_snapshot)}
+        try:
+            proc = subprocess.run(["bash", CHAT_SH], env=env, timeout=CHAT_TIMEOUT)
+            success = proc.returncode == 0
             print("[daemon] chat done", flush=True)
         except subprocess.TimeoutExpired:
             print(f"[daemon] chat TIMEOUT (>{CHAT_TIMEOUT}s), killed", flush=True)
     finally:
+        try:
+            finish_body_state("chat", success, time.perf_counter() - start, spoke=success)
+        except Exception as e:
+            print(f"[daemon] body state finish error (chat): {e}", flush=True)
         _chat_lock.release()
 
-def run_explore():
+def run_explore(body_state_snapshot=None):
     if not _explore_lock.acquire(blocking=False):
         print("[daemon] explore already running, skip", flush=True)
         return
+    start = time.perf_counter()
+    success = False
     try:
+        if body_state_snapshot is None:
+            try:
+                body_state_snapshot = tick_body_state("explore", "定期実行")
+            except Exception as e:
+                print(f"[daemon] body state tick error (explore): {e}", flush=True)
+                body_state_snapshot = _load_body_state()
+        else:
+            _log_body_state("start/explore", body_state_snapshot, reason="定期実行")
         print("[daemon] explore start", flush=True)
-        env = {**os.environ, "PATH": ENV_PATH}
+        env = {**os.environ, "PATH": ENV_PATH, "EHA_BODY_STATE": _body_state_json(body_state_snapshot)}
         try:
-            subprocess.run(["bash", EXPLORE_SH], env=env, timeout=EXPLORE_TIMEOUT)
+            proc = subprocess.run(["bash", EXPLORE_SH], env=env, timeout=EXPLORE_TIMEOUT)
+            success = proc.returncode == 0
             print("[daemon] explore done", flush=True)
         except subprocess.TimeoutExpired:
             print(f"[daemon] explore TIMEOUT (>{EXPLORE_TIMEOUT}s), killed", flush=True)
     finally:
+        try:
+            finish_body_state("explore", success, time.perf_counter() - start)
+        except Exception as e:
+            print(f"[daemon] body state finish error (explore): {e}", flush=True)
         _explore_lock.release()
 
 def mqtt_pub(topic, payload):
@@ -205,14 +316,20 @@ def mqtt_listen(topic, handler, label):
         time.sleep(5)
 
 
-def run_chance(schedule=None) -> int:
-    """時間帯に応じた実行確率(%)を返す"""
+def run_chance(schedule=None, body_state_snapshot=None, loop_name="watch") -> int:
+    """時間帯と body state に応じた実行確率(%)を返す"""
     if schedule is None:
         schedule = load_schedule()
     h = time.localtime().tm_hour
-    if 0 <= h < 7:   return schedule.get("night_probability", 10)
-    if 22 <= h:      return schedule.get("late_probability", 30)
-    return schedule.get("day_probability", 100)
+    if 0 <= h < 7:
+        base = schedule.get("night_probability", 10)
+    elif 22 <= h:
+        base = schedule.get("late_probability", 30)
+    else:
+        base = schedule.get("day_probability", 100)
+    if body_state_snapshot is None:
+        body_state_snapshot = _load_body_state()
+    return body_state.compute_run_chance(base, body_state_snapshot, loop_name)
 
 def scheduler():
     schedule = load_schedule()
@@ -222,12 +339,17 @@ def scheduler():
         # 定期観察が永久停止するのに、プロセスは生きていて気づけないため。
         try:
             schedule = load_schedule()
-            chance = run_chance(schedule)
             active_desires = tick_desires()
             interval_min = schedule.get("watch_interval", SCHEDULE_INTERVAL) // 60
             reason = f"定期実行（{interval_min}分間隔）"
+            try:
+                body_snapshot = tick_body_state("watch", reason, active_desires)
+            except Exception as e:
+                print(f"[daemon] body state tick error (watch scheduler): {e}", flush=True)
+                body_snapshot = _load_body_state()
+            chance = run_chance(schedule, body_snapshot, "watch")
             if chance >= 100 or random.randint(1, 100) <= chance:
-                threading.Thread(target=run_watch, args=(reason, active_desires), kwargs={"is_sensor": False}, daemon=True).start()
+                threading.Thread(target=run_watch, args=(reason, active_desires), kwargs={"body_state_snapshot": body_snapshot, "is_sensor": False}, daemon=True).start()
             else:
                 print(f"[daemon] watch skipped by chance ({chance}%)", flush=True)
         except Exception as e:
@@ -240,9 +362,15 @@ def explore_scheduler():
     while True:
         try:
             schedule = load_schedule()
-            chance = run_chance(schedule)
+            reason = "定期実行（探索）"
+            try:
+                body_snapshot = tick_body_state("explore", reason)
+            except Exception as e:
+                print(f"[daemon] body state tick error (explore scheduler): {e}", flush=True)
+                body_snapshot = _load_body_state()
+            chance = run_chance(schedule, body_snapshot, "explore")
             if chance >= 100 or random.randint(1, 100) <= chance:
-                threading.Thread(target=run_explore, daemon=True).start()
+                threading.Thread(target=run_explore, kwargs={"body_state_snapshot": body_snapshot}, daemon=True).start()
             else:
                 print(f"[daemon] explore skipped by chance ({chance}%)", flush=True)
         except Exception as e:
