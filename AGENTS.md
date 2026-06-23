@@ -14,6 +14,7 @@ embodied_ha/          # Add-on source (scripts, MCP servers, web UI)
   ha-mcp.py           # MCP server: ha_get / ha_call_service
   ha-control-mcp.py   # MCP server: home appliance control (autonomous_control gate)
   memory-mcp.py       # MCP server: recall / remember / loops
+  sociality-mcp.py    # MCP server: relationship / narrative / social_state / shared_focus
   sensors-mcp.py      # MCP server: get_sensors
   camera-mcp.py       # MCP server: camera snapshot
   tts-mcp.py          # MCP server: speak (TTS / push notification routing)
