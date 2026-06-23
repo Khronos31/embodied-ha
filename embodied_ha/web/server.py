@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
-import json, os, time, queue, threading, tempfile
+import json, os, subprocess, time, queue, threading, tempfile
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -18,6 +18,9 @@ EXP_LOG  = os.path.join(LOG_DIR, "explore.jsonl")
 PREFS_FILE = os.environ.get("EHA_PREFS_FILE", os.path.join(SCRIPT_DIR, "preferences.json"))
 PREFS_EXAMPLE_FILE = os.path.join(SCRIPT_DIR, "preferences.json.example")
 CHARACTER_FILE = os.environ.get("EHA_CHARACTER_FILE", os.path.join(SCRIPT_DIR, "character.md"))
+
+DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
+EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 
 
 def atomic_write(filepath: str, content: str | bytes) -> bool:
@@ -239,20 +242,22 @@ def get_soliloquy_messages(limit: int = 300) -> list:
     """observations.jsonl + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
     obs = [
         {"timestamp": d["timestamp"], "source": "watch",
-         "private": d.get("private", ""), "emotion": d.get("emotion", "")}
+         "private": d.get("private", ""), "emotion": d.get("emotion", ""),
+         "topic": d.get("topic")}
         for d in read_jsonl(OBS_LOG)
         if d.get("private")
     ]
     cht = [
         {"timestamp": d["timestamp"], "source": "chat",
-         "private": d.get("private", ""), "emotion": d.get("emotion", "")}
+         "private": d.get("private", ""), "emotion": d.get("emotion", ""),
+         "topic": d.get("topic")}
         for d in read_jsonl(CHAT_LOG)
         if d.get("private")
     ]
     exp = [
         {"timestamp": d["timestamp"], "source": "explore",
          "private": d.get("private", ""), "emotion": d.get("emotion", ""),
-         "mode": d.get("mode", "")}
+         "mode": d.get("mode", ""), "topic": d.get("topic")}
         for d in read_jsonl(EXP_LOG)
         if d.get("private")
     ]
@@ -529,6 +534,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(entities)
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/extra-context":
+            filepath = EXTRA_CONTEXT_FILE
+            if not os.path.exists(filepath):
+                filepath = os.path.join(SCRIPT_DIR, "extra_context.conf")
+            content = ""
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, encoding="utf-8") as f:
+                        content = f.read()
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", len(content.encode("utf-8")))
+            self.end_headers()
+            self.wfile.write(content.encode("utf-8"))
         else:
             self.send_error(404)
 
@@ -642,6 +664,37 @@ class Handler(BaseHTTPRequestHandler):
                     content = f.read()
                 atomic_write(target_path, content)
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/extra-context":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body_raw = self.rfile.read(length)
+                content = body_raw.decode("utf-8")
+                atomic_write(EXTRA_CONTEXT_FILE, content)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/speak-test":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length))
+                room = (body.get("room") or "").strip()
+                if not room:
+                    self.send_json({"error": "room is required"}, 400)
+                    return
+                message = "スピーカーの接続テストです。"
+                speak_py = os.path.join(SCRIPT_DIR, "speak.py")
+                env = os.environ.copy()
+                r = subprocess.run(
+                    ["python3", speak_py, room, message],
+                    capture_output=True, text=True, timeout=15, env=env
+                )
+                detail = (r.stdout or "").strip() or (r.stderr or "").strip()
+                if r.returncode != 0:
+                    self.send_json({"error": f"発話できませんでした: {detail}"}, 500)
+                else:
+                    self.send_json({"ok": True, "detail": detail})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         else:

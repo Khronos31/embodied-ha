@@ -15,6 +15,7 @@ let setupMode = false;
 let prefsData = null;
 let entityList = {};
 let characterData = "";
+let extraContextData = "";
 let characterName = 'Claude';
 
 function updateCharacterName(prefs) {
@@ -200,7 +201,8 @@ function renderMessages() {
             type: 'private',
             isUser: false,
             badgeText: '心の内',
-            badgeClass: 'badge-private'
+            badgeClass: 'badge-private',
+            topic: m.topic
         }));
     }
 
@@ -240,7 +242,18 @@ function renderMessages() {
         // Message bubble
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.textContent = m.text;
+        if (m.topic) {
+            const topicEl = document.createElement('div');
+            topicEl.className = 'message-topic';
+            topicEl.textContent = `🔍 探索トピック: ${m.topic}`;
+            bubble.appendChild(topicEl);
+            
+            const textSpan = document.createElement('span');
+            textSpan.textContent = m.text;
+            bubble.appendChild(textSpan);
+        } else {
+            bubble.textContent = m.text;
+        }
 
         // Footer (Time & Read receipt indicator)
         const footer = document.createElement('div');
@@ -557,7 +570,8 @@ async function fetchMessages(room) {
                 type: m.source || 'watch',
                 sender: characterName,
                 private: m.private,
-                emotion: m.emotion
+                emotion: m.emotion,
+                topic: m.topic
             }));
             chatMessages = chatMessages.filter(m => !m.private).concat(mapped);
         }
@@ -883,6 +897,7 @@ async function fetchSettings() {
                 }
             };
             characterData = "# キャラクター定義のモック\n私はエージェントです。";
+            extraContextData = "# モック追加コンテキスト\ndate '+今日は%Y年%m月%d日です'";
             entityList = {
                 media_player: [
                     { entity_id: "media_player.study_speaker", friendly_name: "書斎スピーカー", area: "書斎" },
@@ -913,10 +928,14 @@ async function fetchSettings() {
             return;
         }
 
-        const [prefsRes, charRes, entitiesRes] = await Promise.all([
+        const [prefsRes, charRes, entitiesRes, extraContextRes] = await Promise.all([
             fetch(`${base}/api/preferences`),
             fetch(`${base}/api/character`),
-            fetch(`${base}/api/ha-entities?domain=media_player,tts,notify,camera,binary_sensor,sensor,input_boolean,device_tracker,person,light,switch,climate,cover,fan,script`)
+            fetch(`${base}/api/ha-entities?domain=media_player,tts,notify,camera,binary_sensor,sensor,input_boolean,device_tracker,person,light,switch,climate,cover,fan,script`),
+            fetch(`${base}/api/extra-context`).catch(err => {
+                console.warn("Failed to fetch extra context:", err);
+                return null;
+            })
         ]);
 
         if (!prefsRes.ok || !charRes.ok || !entitiesRes.ok) {
@@ -926,6 +945,10 @@ async function fetchSettings() {
         prefsData = await prefsRes.json();
         updateCharacterName(prefsData);
         characterData = await charRes.text();
+        extraContextData = "";
+        if (extraContextRes && extraContextRes.ok) {
+            extraContextData = await extraContextRes.text();
+        }
         const rawEntities = await entitiesRes.json();
 
         entityList = {};
@@ -952,6 +975,10 @@ function renderSettingsForm() {
     const nameEl = document.getElementById('setting-character-name');
     if (nameEl) nameEl.value = prefsData.character_name || 'Claude';
     document.getElementById('setting-character').value = characterData || "";
+    const extraContextEl = document.getElementById('setting-extra-context');
+    if (extraContextEl) {
+        extraContextEl.value = extraContextData || "";
+    }
 
     const speakersList = document.getElementById('speakers-list');
     speakersList.innerHTML = '';
@@ -1262,9 +1289,15 @@ function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
             <div class="form-group" style="margin-bottom:0; flex:1; max-width:240px;">
                 <input type="text" class="speaker-room-name form-input" placeholder="部屋名 (例: study)" value="${esc(roomName)}" style="font-weight:600;">
             </div>
-            <button type="button" class="btn-remove" onclick="this.closest('.speaker-item').remove()">
-                ✕ 削除
-            </button>
+            <div class="speaker-actions" style="display:flex; align-items:center; gap:8px;">
+                <span class="speak-test-status" style="font-size:12px; font-weight:500;"></span>
+                <button type="button" class="btn btn-secondary btn-sm btn-speak-test" onclick="handleSpeakTest(this)">
+                    📢 テスト
+                </button>
+                <button type="button" class="btn-remove" onclick="this.closest('.speaker-item').remove()">
+                    ✕ 削除
+                </button>
+            </div>
         </div>
         
         <div class="type-selector">
@@ -1595,6 +1628,7 @@ async function handleSaveSettings(e) {
     }
 
     const newCharacter = document.getElementById('setting-character').value;
+    const newExtraContext = document.getElementById('setting-extra-context')?.value || "";
     
     if (!newCharacter || newCharacter.trim().length < 10) {
         showSaveStatus('キャラクター定義が短すぎるか空です。保存を中断しました。', 'error');
@@ -1637,17 +1671,18 @@ async function handleSaveSettings(e) {
     }
 
     if (isStandaloneMode) {
-        console.log("[Mock] Saved local settings simulation:", { nextPrefs, newCharacter });
+        console.log("[Mock] Saved local settings simulation:", { nextPrefs, newCharacter, newExtraContext });
         prefsData = nextPrefs;
         updateCharacterName(prefsData);
         characterData = newCharacter;
+        extraContextData = newExtraContext;
         isSettingsDirty = false;
         showSaveStatus('設定を保存しました（モック）', 'success');
         return;
     }
 
     try {
-        const [prefsRes, charRes] = await Promise.all([
+        const [prefsRes, charRes, extraContextRes] = await Promise.all([
             fetch(`${base}/api/preferences`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -1657,18 +1692,25 @@ async function handleSaveSettings(e) {
                 method: 'PUT',
                 headers: { 'Content-Type': 'text/plain; charset=utf-8' },
                 body: newCharacter
+            }),
+            fetch(`${base}/api/extra-context`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                body: newExtraContext
             })
         ]);
 
-        if (!prefsRes.ok || !charRes.ok) {
+        if (!prefsRes.ok || !charRes.ok || !extraContextRes.ok) {
             const pErr = !prefsRes.ok ? (await prefsRes.json()).error : null;
             const cErr = !charRes.ok ? (await charRes.json()).error : null;
-            throw new Error(pErr || cErr || "保存に失敗しました。");
+            const eErr = !extraContextRes.ok ? (await extraContextRes.json()).error : null;
+            throw new Error(pErr || cErr || eErr || "保存に失敗しました。");
         }
 
         prefsData = nextPrefs;
         updateCharacterName(prefsData);
         characterData = newCharacter;
+        extraContextData = newExtraContext;
         isSettingsDirty = false;
         showSaveStatus('設定を保存しました', 'success');
     } catch (err) {
@@ -1738,5 +1780,66 @@ async function handleResetCharacter() {
     } catch (err) {
         console.error("[Settings] Reset failed:", err);
         showSaveStatus('リセットエラー: ' + err.message, 'error');
+    }
+}
+
+async function handleSpeakTest(btn) {
+    const card = btn.closest('.speaker-item');
+    const roomInput = card.querySelector('.speaker-room-name');
+    const roomName = roomInput ? roomInput.value.trim() : "";
+    const statusEl = card.querySelector('.speak-test-status');
+
+    if (!roomName) {
+        alert("部屋名を入力してください。");
+        return;
+    }
+
+    if (statusEl) {
+        statusEl.textContent = "送信中...";
+        statusEl.style.color = "var(--claude-text-sub)";
+    }
+    btn.disabled = true;
+
+    if (isStandaloneMode) {
+        setTimeout(() => {
+            btn.disabled = false;
+            if (statusEl) {
+                statusEl.textContent = "✓ 成功";
+                statusEl.style.color = "#15803d";
+                setTimeout(() => { statusEl.textContent = ""; }, 4000);
+            }
+        }, 1000);
+        return;
+    }
+
+    try {
+        const response = await fetch(`${base}/api/speak-test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ room: roomName })
+        });
+        btn.disabled = false;
+        if (response.ok) {
+            if (statusEl) {
+                statusEl.textContent = "✓ 成功";
+                statusEl.style.color = "#15803d";
+                setTimeout(() => { statusEl.textContent = ""; }, 4000);
+            }
+        } else {
+            const data = await response.json();
+            const errMsg = data.error || "失敗";
+            if (statusEl) {
+                statusEl.textContent = `✗ 失敗: ${errMsg}`;
+                statusEl.style.color = "#b91c1c";
+                setTimeout(() => { statusEl.textContent = ""; }, 6000);
+            }
+        }
+    } catch (err) {
+        btn.disabled = false;
+        if (statusEl) {
+            statusEl.textContent = `✗ エラー: ${err.message}`;
+            statusEl.style.color = "#b91c1c";
+            setTimeout(() => { statusEl.textContent = ""; }, 6000);
+        }
     }
 }
