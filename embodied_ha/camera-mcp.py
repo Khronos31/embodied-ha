@@ -22,7 +22,7 @@ def parse_args():
     return p.parse_args()
 
 
-TOOL = {
+TOOL_GET = {
     "name": "camera_get",
     "description": (
         "カメラのスナップショットを取得して画像で返す。\n"
@@ -43,9 +43,60 @@ TOOL = {
     }
 }
 
+# pan_left/right の命名注意:
+#   pan_left ボタン = 上から見て時計回り回転 → 部屋の右側が映る
+#   pan_right ボタン = 上から見て反時計回り回転 → 部屋の左側が映る
+# ツールの direction は「どちら側を映したいか」で指定する
+_PTZ_BUTTON = {
+    "left":  "button.rihinkunokamera_pan_right",
+    "right": "button.rihinkunokamera_pan_left",
+    "up":    "button.rihinkunokamera_tilt_up",
+    "down":  "button.rihinkunokamera_tilt_down",
+}
+
+TOOL_PTZ = {
+    "name": "camera_ptz",
+    "description": (
+        "リビングカメラをパン/チルト操作する。\n"
+        "direction は「カメラが映す方向」を指定:\n"
+        "  left  → 部屋の左側（カメラ視点）を向く\n"
+        "  right → 部屋の右側（カメラ視点）を向く\n"
+        "  up    → 上を向く\n"
+        "  down  → 下を向く\n"
+        "1回の呼び出しで少し動く。位置確認には camera_get を併用する。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "direction": {
+                "type": "string",
+                "enum": ["left", "right", "up", "down"],
+                "description": "パン/チルト方向"
+            }
+        },
+        "required": ["direction"]
+    }
+}
+
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
+
+
+def press_button(entity_id, ha_url):
+    base = ha_url.rstrip("/")
+    if base.endswith("/api"):
+        base = base[:-4]
+    url = f"{base}/api/services/button/press"
+    token = get_ha_token()
+    r = subprocess.run(
+        ["curl", "-sf", "--max-time", "5", "-X", "POST",
+         "-H", f"Authorization: Bearer {token}",
+         "-H", "Content-Type: application/json",
+         "-d", json.dumps({"entity_id": entity_id}), url],
+        capture_output=True
+    )
+    return r.returncode == 0
 
 
 def fetch_image(source, ha_url, go2rtc_url):
@@ -100,12 +151,27 @@ def main():
             pass
 
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": [TOOL]}})
+            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": [TOOL_GET, TOOL_PTZ]}})
 
         elif method == "tools/call":
             tool_name = req["params"]["name"]
             call_args = req["params"].get("arguments", {})
-            if tool_name == "camera_get":
+            if tool_name == "camera_ptz":
+                direction = (call_args.get("direction") or "").strip()
+                entity_id = _PTZ_BUTTON.get(direction)
+                if not entity_id:
+                    send({"jsonrpc": "2.0", "id": id_, "result": {
+                        "content": [{"type": "text", "text": f"不明な方向: {direction}"}],
+                        "isError": True
+                    }})
+                    continue
+                ok = press_button(entity_id, args.ha_url)
+                msg = f"カメラを{direction}に向けました" if ok else f"PTZ操作失敗 ({entity_id})"
+                send({"jsonrpc": "2.0", "id": id_, "result": {
+                    "content": [{"type": "text", "text": msg}],
+                    "isError": not ok
+                }})
+            elif tool_name == "camera_get":
                 source = (call_args.get("source") or "").strip()
                 if not source:
                     send({"jsonrpc": "2.0", "id": id_, "result": {

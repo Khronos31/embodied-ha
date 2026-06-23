@@ -196,7 +196,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
 - **今の自分にはできない**: ファイルの読み書き・設定ファイルの編集・コードの実装。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 
@@ -306,7 +306,7 @@ _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path,
-                    "memory", "ha", "sociality", "hacontrol"],
+                    "memory", "ha", "sociality", "hacontrol", "camera"],
                    env={**CLAUDE_ENV, "EHA_ACTOR": "chat"}, check=False)
     if os.path.exists(_mcp_path):
         cmd += ["--allowedTools",
@@ -316,7 +316,8 @@ if _sd:
                 "mcp__sociality__get_narrative,mcp__sociality__append_narrative,"
                 "mcp__sociality__get_social_state,mcp__sociality__update_social_state,"
                 "mcp__sociality__get_shared_focus,mcp__sociality__set_shared_focus,"
-                "mcp__ha__ha_get,mcp__hacontrol__ha_call_service",
+                "mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
+                "mcp__camera__camera_get,mcp__camera__camera_ptz",
                 "--mcp-config", _mcp_path]
 
 r = subprocess.run(
