@@ -1,0 +1,7 @@
+Lora は SIL Open Font License, Version 1.1 で提供されています。
+Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic)
+
+このディレクトリの woff2 は Google Fonts の latin サブセットを再配布したものです。
+OFL 1.1 全文: https://openfontlicense.org/
+
+※公開リポジトリ化の際は OFL.txt 全文を同梱すること。

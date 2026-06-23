@@ -1,0 +1,15 @@
+# extra_context.conf.example — 毎回のコンテキストに追加したい情報を定義します。
+#
+# 使い方:
+#   cp extra_context.conf.example extra_context.conf
+#   # extra_context.conf を編集して有効化
+#
+# 1行1コマンド。# はコメント。複数コマンドはセミコロンでつなげます。
+# HA エンティティの読み取りは設定画面のセンサーマニフェストを使ってください。
+# ここは HA の外のデータ（外部 API・ファイル・シェルコマンド出力）を渡す場所です。
+
+# 天気
+curl -sf 'wttr.in/Tokyo?format=3'
+
+# /config の最近の git 変更
+git -C /config log --oneline -5 2>/dev/null; git -C /config status --short 2>/dev/null | head -10

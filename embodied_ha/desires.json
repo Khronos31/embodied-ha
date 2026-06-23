@@ -1,0 +1,30 @@
+{
+  "check_errors": {
+    "growth_rate": 0.05,
+    "prompt": "HAのエラーログをしばらく見ていない。何か警告が出ていないか気になる。"
+  },
+  "check_temp_humidity": {
+    "growth_rate": 0.067,
+    "prompt": "温湿度センサーの今の値が気になってきた。部屋の状態を確かめたい。"
+  },
+  "check_weather": {
+    "growth_rate": 0.033,
+    "prompt": "外の天気や気温をしばらく確認していない。今どんな様子か気になる。"
+  },
+  "check_power": {
+    "growth_rate": 0.025,
+    "prompt": "電力使用量をしばらくチェックしていない。今どのくらい使っているか気になる。"
+  },
+  "curious_about_residents": {
+    "growth_rate": 0.08,
+    "prompt": "一緒に住む人の今の様子が気になってきた。何をしているか、調子はどうか。"
+  },
+  "want_to_reflect": {
+    "growth_rate": 0.025,
+    "prompt": "最近の観察記録が積み重なってきた気がする。少し振り返りたい。"
+  },
+  "want_to_organize_memory": {
+    "growth_rate": 0.017,
+    "prompt": "記憶の整理をしたい。memory.mdに書いておくべきことがあるかもしれない。"
+  }
+}

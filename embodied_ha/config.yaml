@@ -1,0 +1,33 @@
+name: Embodied HA
+version: "1.0.0"
+slug: embodied_ha
+description: An autonomous agent that lives in your home, running three loops for conversation, observation, and exploration.
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: manual
+# /config を読み書きマウント（/config/.tools の認証・CLIを再利用し、スクリプト群も参照）
+map:
+  - config:rw
+# MQTTブローカー情報を Supervisor から注入してもらう
+services:
+  - mqtt:need
+hassio_api: true
+homeassistant_api: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:robot-outline
+options:
+  resident_name: "ユーザー"
+  claude_api_key: ""
+  claude_config_dir: ""
+  claude_cwd: ""
+  autonomous_control: false
+schema:
+  resident_name: str
+  claude_api_key: str?
+  claude_config_dir: str?
+  claude_cwd: str?
+  autonomous_control: bool

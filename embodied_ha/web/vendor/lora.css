@@ -1,0 +1,17 @@
+/* Lora (latin subset) — ローカル同梱。Google Fonts CDN 依存を排除。
+   可変フォント（weight 400-600）。日本語など latin 外は Georgia 等にフォールバック。
+   Lora は SIL Open Font License 1.1。 */
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('fonts/lora-latin-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Lora';
+  font-style: italic;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('fonts/lora-latin-italic.woff2') format('woff2');
+}

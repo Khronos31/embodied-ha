@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Embodied HA - Claude Room</title>
+    <!-- Lora (serif 見出し用) をローカル同梱。sans は system-ui に委譲（CDN非依存） -->
+    <link rel="stylesheet" href="vendor/lora.css">
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- CodeMirror 5 for JSON editing (Local Bundled) -->
+    <link rel="stylesheet" href="vendor/codemirror.min.css">
+    <script defer src="vendor/codemirror.min.js"></script>
+    <script defer src="vendor/codemirror-javascript.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Room List -->
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <h1 class="brand-title">Embodied Claude</h1>
+                <span class="status-indicator online">Online</span>
+            </header>
+            <div class="room-list">
+                <div class="room-item active" id="room-chat" onclick="switchRoom('chat')">
+                    <div class="room-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path fill="currentColor" d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/>
+                        </svg>
+                    </div>
+                    <div class="room-info">
+                        <div class="room-name-row">
+                            <span class="room-name">会話 (Conversation)</span>
+                            <span class="room-time" id="chat-time">--:--</span>
+                        </div>
+                        <div class="room-preview-row">
+                            <span class="room-preview" id="chat-preview">読み込み中...</span>
+                            <span class="unread-badge" id="chat-unread" style="display: none;">1</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="room-item" id="room-soliloquy" onclick="switchRoom('soliloquy')">
+                    <div class="room-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <ellipse fill="currentColor" cx="13.6" cy="8.0" rx="9.6" ry="7.5" opacity="0.9" />
+                            <circle fill="currentColor" cx="7.2" cy="16.0" r="3.2" />
+                            <circle fill="currentColor" cx="3.8" cy="20.5" r="2.0" />
+                        </svg>
+                    </div>
+                    <div class="room-info">
+                        <div class="room-name-row">
+                            <span class="room-name">独り言 (Soliloquy)</span>
+                            <span class="room-time" id="soliloquy-time">--:--</span>
+                        </div>
+                        <div class="room-preview-row">
+                            <span class="room-preview" id="soliloquy-preview">読み込み中...</span>
+                            <span class="unread-badge" id="soliloquy-unread" style="display: none;">1</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="room-item" id="room-settings" onclick="switchRoom('settings')">
+                    <div class="room-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                        </svg>
+                    </div>
+                    <div class="room-info">
+                        <div class="room-name-row">
+                            <span class="room-name">設定 (Settings)</span>
+                        </div>
+                        <div class="room-preview-row">
+                            <span class="room-preview">環境設定とキャラクター編集</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-area">
+            <header class="chat-header">
+                <div class="chat-header-info">
+                    <h2 class="chat-title" id="active-room-title">会話 (Conversation)</h2>
+                    <p class="chat-subtitle" id="active-room-subtitle">エージェントとの直接会話と、観察・探索時の発話</p>
+                </div>
+                <div class="chat-header-actions">
+                    <div class="toggle-container" id="soliloquy-toggle-container" style="display: none;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="soliloquy-read-toggle" onchange="handleToggleSoliloquyRead(this)">
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label">既読を送る</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Message Timeline -->
+            <div class="messages-container" id="messages-list">
+                <!-- Messages will be injected by JavaScript -->
+            </div>
+
+            <!-- Message Input Area -->
+            <footer class="chat-footer" id="chat-input-area">
+                <form id="message-form" onsubmit="handleSendMessage(event)">
+                    <input type="text" id="message-input" placeholder="メッセージを入力..." autocomplete="off">
+                    <button type="submit" class="send-btn" aria-label="送信">
+                        <svg viewBox="0 0 24 24" width="20" height="20">
+                            <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                    </button>
+                </form>
+            </footer>
+        </main>
+
+        <!-- Settings View -->
+        <main class="settings-view" id="settings-view" style="display:none;">
+            <form id="settings-form" onsubmit="handleSaveSettings(event)">
+                <header class="settings-header">
+                    <div class="settings-header-top">
+                        <h2 class="settings-title">設定 (Settings)</h2>
+                        <p class="settings-subtitle">アドオンの各種パラメータおよびキャラクター定義を変更できます</p>
+                    </div>
+                    <!-- Sub Tabs Navigation -->
+                    <div class="settings-tabs">
+                        <button type="button" class="settings-tab-btn active" onclick="switchSettingsTab('general')">基本設定 (General)</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">デバイス・センサー (Devices)</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('advanced')">高度な設定 (JSON)</button>
+                    </div>
+                </header>
+                
+                <div class="settings-container">
+                    
+                    <!-- Tab 1: General Settings -->
+                    <div class="settings-tab-content" id="settings-tab-general">
+                        <!-- Section: Character.md -->
+                        <section class="settings-section card">
+                            <h3>キャラクター定義 (character.md)</h3>
+                            <p class="section-desc">エージェントの性格、使命、話し方、行動指針を規定する Markdown テキストです。保存すると次回のエージェント起動時から適用されます。</p>
+                            <div class="form-group">
+                                <label class="form-label">キャラクター名</label>
+                                <input type="text" id="setting-character-name" class="form-input" placeholder="Claude" maxlength="30" style="max-width:240px;">
+                                <p class="form-hint">会話・独り言のフキダシ上部に表示される名前です。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">プロンプト定義 (Markdown)</label>
+                                <textarea id="setting-character" rows="12" class="code-textarea" placeholder="キャラクタープロンプトを入力してください..."></textarea>
+                            </div>
+                            <div class="btn-group">
+                                <button type="button" class="btn btn-secondary" onclick="handleResetCharacter()">デフォルトに戻す</button>
+                            </div>
+                        </section>
+
+                        <!-- Section: Presence -->
+                        <section class="settings-section card">
+                            <h3>在宅判定 (presence)</h3>
+                            <p class="section-desc">居住者が在宅しているか判定するためのエンティティを設定します。</p>
+                            <div class="form-group">
+                                <label>在宅判定スイッチ (entity)</label>
+                                <select id="setting-presence-entity" class="ha-entity-select" data-domain="input_boolean,binary_sensor,device_tracker,person">
+                                    <option value="">(未選択 / ロード中...)</option>
+                                </select>
+                            </div>
+                        </section>
+
+                        <!-- Section: Policies -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>行動ポリシー (policies)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addPolicyRow()">ポリシーを追加</button>
+                            </div>
+                            <p class="section-desc">エージェントの行動指針やルールを箇条書きで設定します。</p>
+                            <div id="policies-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 2: Devices & Sensors -->
+                    <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
+                        <!-- Section: Speakers -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>発話先スピーカー (speakers)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
+                            </div>
+                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるかを選択できます。</p>
+                            <div id="speakers-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Cameras -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>カメラ (cameras)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addCameraRow()">カメラを追加</button>
+                            </div>
+                            <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
+                            <div id="cameras-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Entities (操作できる家電) -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>操作できる家電 (entities)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addEntityRow()">家電を追加</button>
+                            </div>
+                            <p class="section-desc">「リビングの電気つけて」のような操作を頼まれたとき、呼び方から entity_id を引くための対応表です。エンティティを選ぶと名前が自動で入ります（編集可）。同名が複数あるものは備考に「要確認」が付くので、不要な行は削除してください。</p>
+                            <div id="entities-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Sensors -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>おもなデバイス (sensors)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addSensorGroup()">グループを追加</button>
+                            </div>
+                            <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
+                            <div id="sensors-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 3: Advanced JSON Settings -->
+                    <div class="settings-tab-content" id="settings-tab-advanced" style="display:none;">
+                        <section class="settings-section card">
+                            <h3>preferences.json の直接編集</h3>
+                            <p class="section-desc">アドオンの設定JSONを直接編集できます。保存前に文法チェックが行われます。</p>
+                            <div class="form-group">
+                                <textarea id="setting-json-editor" placeholder="設定JSONを読み込み中..."></textarea>
+                            </div>
+                        </section>
+                    </div>
+
+                </div>
+                
+                <!-- Floating Save Action Bar -->
+                <div class="settings-action-bar">
+                    <span id="save-status-msg" class="save-status-msg"></span>
+                    <button type="submit" class="btn btn-success btn-large">設定を保存</button>
+                </div>
+            </form>
+        </main>
+    </div>
+    <script defer src="app.js"></script>
+</body>
+</html>
