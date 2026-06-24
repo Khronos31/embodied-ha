@@ -173,6 +173,7 @@ features_md     = os.environ.get("FEATURES_MD", "")
 features_presented = os.environ.get("FEATURES_PRESENTED", "")
 pending         = os.environ.get("PENDING_PROPOSAL", "なし")
 open_loops      = os.environ.get("OPEN_LOOPS", "なし")
+turn_taking_state = os.environ.get("TURN_TAKING_STATE", "")
 character       = os.environ.get("CHARACTER", "")
 resident        = os.environ.get("RESIDENT", "ユーザー")
 body_state      = os.environ.get("EHA_BODY_STATE", "") or "{}"
@@ -229,7 +230,7 @@ prompt = f"""# あなた自身について
 - curiosity が高いほど、少し踏み込んで考える。energy が低いほど、返事は短く省エネに。stress が高いほど、落ち着いて控えめに。confidence が高いほど、断定気味に。social_openness が高いほど、会話を開きやすくする。
 
 # 直前の turn-taking / 境界状態
-{TURN_TAKING_STATE}
+{turn_taking_state}
 - ここは次の会話の入り方の参考。直接返答そのものは止めない。提案や割り込みをするときだけ should_interrupt で確認する。
 
 # 在宅・センサー状況
