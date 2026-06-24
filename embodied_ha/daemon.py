@@ -297,6 +297,49 @@ def run_chat(message):
             print(f"[daemon] body state finish error (chat): {e}", flush=True)
         _chat_lock.release()
 
+def mqtt_pub(topic, payload):
+    """MQTT トピックに1メッセージ publish（MQTT_HOST 未設定時はno-op）。"""
+    if not MQTT_HOST:
+        return
+    try:
+        subprocess.run(
+            ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
+             "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic, "-m", payload],
+            capture_output=True, timeout=5
+        )
+    except Exception as e:
+        print(f"[daemon] mqtt_pub error: {e}", flush=True)
+
+
+def mqtt_listen(topic, handler, label):
+    """mosquitto_sub でトピックを永続購読。切断時は5秒後に再接続。"""
+    cmd = ["mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
+           "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic]
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True)
+            for line in proc.stdout:
+                line = line.strip()
+                if line:
+                    threading.Thread(target=handler, args=(line,), daemon=True).start()
+            proc.wait()
+        except Exception as e:
+            print(f"[daemon] {label} mqtt error: {e}", flush=True)
+        finally:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        time.sleep(5)
+
+
 def run_explore(body_state_snapshot=None, anomaly_state_snapshot=None):
     if not _explore_lock.acquire(blocking=False):
         print("[daemon] explore already running, skip", flush=True)
