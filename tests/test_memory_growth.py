@@ -113,6 +113,20 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertEqual(payload["summary"], "")
         self.assertEqual(payload["episode_ids"], [])
 
+    def test_build_daybook_preserves_zero_raw_entry_count(self):
+        daybook = self._json(
+            self.memory_mcp.build_daybook(
+                {
+                    "date": "2026-06-23",
+                    "summary": "空の要約",
+                    "episode_ids": [],
+                    "raw_entry_count": 0,
+                }
+            )
+        )
+        self.assertEqual(daybook["raw_entry_count"], 0)
+        self.assertEqual(daybook["episode_count"], 0)
+
     def test_mem_context_prioritizes_daybooks(self):
         memory_md = self.log_dir / "memory.md"
         memory_md.write_text(

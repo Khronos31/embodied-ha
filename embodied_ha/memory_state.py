@@ -476,7 +476,7 @@ def build_daybook(
         "highlights": _normalize_mapping_list(list(highlights or [])),
         "open_questions": _normalize_text_list(list(open_questions or [])),
         "importance_cutoff": round(_clamp(importance_cutoff, 0.0, 1.0, 0.65), 3),
-        "raw_entry_count": max(0, int(raw_entry_count or len(episode_id_list))),
+        "raw_entry_count": max(0, int(len(episode_id_list) if raw_entry_count is None else raw_entry_count)),
         "episode_count": len(episode_id_list),
     })
     return save_daybook(log_dir, daybook)
