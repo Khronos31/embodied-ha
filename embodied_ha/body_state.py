@@ -12,6 +12,11 @@ import json
 import os
 from typing import Any, Mapping
 
+from state_utils import clamp as _clamp
+from state_utils import clean as _clean
+from state_utils import now as _now
+from state_utils import parse_ts as _parse_ts
+
 STATE_KEYS = (
     "curiosity",
     "energy",
@@ -31,42 +36,6 @@ DEFAULT_STATE: dict[str, Any] = {
     "last_event": "",
     "last_result": "",
 }
-
-
-def _clean(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _clamp(value: Any, low: float = 0.0, high: float = 1.0) -> float:
-    try:
-        number = float(value)
-    except Exception:
-        number = low
-    return max(low, min(high, number))
-
-
-def _coerce_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _now() -> _dt.datetime:
-    return _dt.datetime.now().astimezone()
-
-
-def _parse_ts(value: Any) -> _dt.datetime | None:
-    text_value = _clean(value)
-    if not text_value:
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(text_value)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_now().tzinfo)
-    return parsed
 
 
 def normalize_state(raw: Any) -> dict[str, Any]:

@@ -12,6 +12,13 @@ import json
 import os
 from typing import Any, Mapping
 
+from state_utils import clamp as _clamp
+from state_utils import clean as _clean
+from state_utils import coerce_float as _coerce_float
+from state_utils import now as _now
+from state_utils import parse_ts as _parse_ts
+from state_utils import read_json as _read_json
+
 STATE_VERSION = 1
 ACTIVATION_THRESHOLD = 0.6
 SATISFIED_DORMANT_THRESHOLD = 0.35
@@ -78,42 +85,6 @@ def _default_catalog_path() -> str:
     return os.path.join(_script_dir(), "desires.json")
 
 
-def _clean(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _clamp(value: Any, low: float = 0.0, high: float = 1.0) -> float:
-    try:
-        number = float(value)
-    except Exception:
-        number = low
-    return max(low, min(high, number))
-
-
-def _coerce_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _now() -> _dt.datetime:
-    return _dt.datetime.now().astimezone()
-
-
-def _parse_ts(value: Any) -> _dt.datetime | None:
-    text_value = _clean(value)
-    if not text_value:
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(text_value)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_now().tzinfo)
-    return parsed
-
-
 def _normalize_tags(value: Any) -> list[str]:
     if isinstance(value, str):
         items = [part.strip() for part in value.replace("，", ",").split(",")]
@@ -158,14 +129,6 @@ def _normalize_state_name(value: Any) -> str:
     if text in {"blocked", "hold", "paused"}:
         return "suppressed"
     return "dormant"
-
-
-def _read_json(path: str) -> Any:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
 
 
 def normalize_desires(raw: Any) -> dict[str, dict[str, Any]]:

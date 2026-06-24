@@ -8,12 +8,17 @@ small pure helpers, normalization, and atomic writes.
 
 from __future__ import annotations
 
-import datetime as _dt
 import hashlib
 import json
 import os
 import re
 from typing import Any, Iterable, Mapping
+
+from state_utils import clamp as _clamp
+from state_utils import clean as _clean
+from state_utils import now as _now
+from state_utils import parse_ts as _parse_ts
+from state_utils import write_json as _write_json
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
@@ -23,35 +28,6 @@ _EPISODES_DIR = "episodes"
 _DAYBOOKS_DIR = "daybooks"
 _CAUSAL_CHAINS_DIR = "causal_chains"
 _CONSOLIDATIONS_DIR = "consolidations"
-
-
-def _clean(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _clamp(value: Any, low: float = 0.0, high: float = 1.0, default: float = 0.0) -> float:
-    try:
-        number = float(value)
-    except Exception:
-        number = default
-    return max(low, min(high, number))
-
-
-def _now() -> _dt.datetime:
-    return _dt.datetime.now().astimezone()
-
-
-def _parse_ts(value: Any) -> _dt.datetime | None:
-    text_value = _clean(value)
-    if not text_value:
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(text_value)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_now().tzinfo)
-    return parsed
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
@@ -173,14 +149,6 @@ def _load_json(path: str, default: Any) -> Any:
     except Exception:
         return default
     return data if isinstance(data, type(default)) else default
-
-
-def _write_json(path: str, data: Any) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
 
 
 def _timestamp_to_day(timestamp: str) -> str:

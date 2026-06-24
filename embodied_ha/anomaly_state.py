@@ -15,6 +15,12 @@ import os
 import re
 from typing import Any, Mapping
 
+from state_utils import clamp as _clamp
+from state_utils import clean as _clean
+from state_utils import coerce_float as _coerce_float
+from state_utils import now as _now
+from state_utils import parse_ts as _parse_ts
+
 STATE_VERSION = 1
 ANOMALY_TYPES = ("sensor_spike", "unresolved_loop", "world_model_mismatch")
 
@@ -98,25 +104,6 @@ def _default_state_path() -> str:
     return os.path.join(os.environ.get("EHA_LOG_DIR", os.path.join(_script_dir(), "log")), "anomaly_state.json")
 
 
-def _clean(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _clamp(value: Any, low: float = 0.0, high: float = 1.0) -> float:
-    try:
-        number = float(value)
-    except Exception:
-        number = low
-    return max(low, min(high, number))
-
-
-def _coerce_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -130,23 +117,6 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
-
-
-def _now() -> _dt.datetime:
-    return _dt.datetime.now().astimezone()
-
-
-def _parse_ts(value: Any) -> _dt.datetime | None:
-    text = _clean(value)
-    if not text:
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(text)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_now().tzinfo)
-    return parsed
 
 
 def _hash_text(text: str) -> str:

@@ -8,21 +8,22 @@ runtime boundary gate.
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import os
 import re
 from typing import Any, Mapping
+
+from state_utils import clean as _clean
+from state_utils import coerce_float as _coerce_float
+from state_utils import now as _now
+from state_utils import parse_ts as _parse_ts
+from state_utils import write_json as _write_json
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
 
 PERSON_MODELS_FILE = "person_models.json"
 SHARED_FOCUS_FILE = "shared_focus.json"
-
-
-def _clean(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
 
 
 def _compact(value: Any) -> str:
@@ -47,30 +48,6 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _coerce_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _now() -> _dt.datetime:
-    return _dt.datetime.now().astimezone()
-
-
-def _parse_ts(value: Any) -> _dt.datetime | None:
-    text_value = _clean(value)
-    if not text_value:
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(text_value)
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_now().tzinfo)
-    return parsed
-
-
 def _path(log_dir: str | None, name: str) -> str:
     return os.path.join(log_dir or _DEFAULT_LOG_DIR, name)
 
@@ -82,14 +59,6 @@ def _load_json(path: str, default: Any) -> Any:
     except Exception:
         return default
     return data if isinstance(data, type(default)) else default
-
-
-def _write_json(path: str, data: Any) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
 
 
 def default_quiet_window() -> dict[str, Any]:
