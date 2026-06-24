@@ -14,6 +14,7 @@
   get_daybook     … daybook を取得
   record_causal_chain … 因果関係を保存
   get_causal_chain    … 因果関係を取得
+  consolidate_memory  … 重複 episode を統合し report を保存
 
 recall / loops は既存の recall.sh / loops.sh をサブプロセスで呼ぶ。
 env: EHA_LOG_DIR, EHA_TOOLS_PATH
@@ -187,6 +188,7 @@ def list_episodes(args: dict[str, Any]):
     day = _clean(args.get("day"))
     source = _clean(args.get("source"))
     kind = _clean(args.get("kind"))
+    status = _clean(args.get("status"))
     limit = args.get("limit")
     try:
         limit_value = int(limit) if limit is not None and _clean(limit) else None
@@ -194,7 +196,7 @@ def list_episodes(args: dict[str, Any]):
         limit_value = None
     reverse = args.get("reverse")
     reverse_value = True if reverse is None else _truthy(reverse)
-    episodes = ms.list_episodes(LOG_DIR, day=day or None, source=source or None, kind=kind or None, limit=limit_value, reverse=reverse_value)
+    episodes = ms.list_episodes(LOG_DIR, day=day or None, source=source or None, kind=kind or None, status=status or None, limit=limit_value, reverse=reverse_value)
     return _json_text(episodes)
 
 
@@ -240,6 +242,24 @@ def build_daybook(args: dict[str, Any]):
 def get_daybook(args: dict[str, Any]):
     date = _clean(args.get("date") or args.get("day"))
     return _json_text(ms.load_daybook(LOG_DIR, date))
+
+
+def consolidate_memory(args: dict[str, Any]):
+    payload = _merge_payload(args, "consolidation")
+    scope = _clean(payload.get("scope") or payload.get("day"))
+    try:
+        report = ms.consolidate_memory(
+            LOG_DIR,
+            scope=scope,
+            day=_clean(payload.get("day")),
+            overwrite=_truthy(payload.get("overwrite")),
+        )
+    except Exception as e:
+        return [text(f"記憶の統合に失敗: {e}")], True
+    log(
+        f"[memory-mcp] consolidate: {report.get('scope', '')} merged={len(report.get('superseded_episode_ids', []))} conflicts={len(report.get('conflict_groups', []))}"
+    )
+    return _json_text(report)
 
 
 def _save_linked_episode(value: Any) -> str:
@@ -433,6 +453,7 @@ def main() -> None:
                         "day": {"type": "string"},
                         "source": {"type": "string"},
                         "kind": {"type": "string"},
+                        "status": {"type": "string"},
                         "limit": {"type": "integer"},
                         "reverse": {"type": "boolean"},
                     },
@@ -530,6 +551,24 @@ def main() -> None:
                 },
             },
             "handler": get_causal_chain,
+        },
+        "consolidate_memory": {
+            "spec": {
+                "name": "consolidate_memory",
+                "description": (
+                    "episode の重複を fingerprint で統合し、矛盾は conflict として残した consolidation report を保存する。\n"
+                    "scope か day を渡すと report ファイル名の目安になる（省略時は all）。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {"type": "string"},
+                        "day": {"type": "string"},
+                        "overwrite": {"type": "boolean"},
+                    },
+                },
+            },
+            "handler": consolidate_memory,
         },
     })
 

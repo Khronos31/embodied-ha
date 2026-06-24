@@ -7,7 +7,7 @@ set -uo pipefail
 #   - 複数キーワードは OR 検索（どれかにマッチした行を返す）
 #   - 類義語を一緒に渡すと取りこぼしが減る（例: recall エアコン 冷房 設定温度）
 #
-# 検索対象: daybooks/episodes/causal_chains + observations.jsonl（観察）/ explore.jsonl（探索）/ chat_log.jsonl（会話）/ memory.md（長期記憶）
+# 検索対象: daybooks / canonical episodes / conflict episodes / causal_chains + observations.jsonl（観察）/ explore.jsonl（探索）/ chat_log.jsonl（会話）/ memory.md（長期記憶）
 
 # symlink(/config/.tools/bin/recall 等)経由でも実体ディレクトリ基準で log を引く。
 # 実行時は run.sh / config.sh が EHA_LOG_DIR を設定するのでそちらが優先される。
@@ -74,7 +74,12 @@ for chain in ms.list_causal_chains(log_dir, reverse=True):
         ts = (chain.get("created_at") or chain.get("day") or "")[:16]
         add_hit(bucket_hits, 1, ts, ms.causal_chain_brief(chain))
 
-for episode in ms.list_episodes(log_dir, reverse=True):
+for episode in ms.list_episodes(log_dir, status="canonical", reverse=True):
+    if match(flatten_text(episode)):
+        ts = (episode.get("timestamp") or episode.get("day") or "")[:16]
+        add_hit(bucket_hits, 2, ts, ms.episode_brief(episode))
+
+for episode in ms.list_episodes(log_dir, status="conflict", reverse=True):
     if match(flatten_text(episode)):
         ts = (episode.get("timestamp") or episode.get("day") or "")[:16]
         add_hit(bucket_hits, 2, ts, ms.episode_brief(episode))

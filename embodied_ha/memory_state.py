@@ -22,6 +22,7 @@ _MEMORY_DIR = "memory"
 _EPISODES_DIR = "episodes"
 _DAYBOOKS_DIR = "daybooks"
 _CAUSAL_CHAINS_DIR = "causal_chains"
+_CONSOLIDATIONS_DIR = "consolidations"
 
 
 def _clean(value: Any) -> str:
@@ -145,6 +146,10 @@ def causal_chains_dir(log_dir: str | None = None) -> str:
     return _path(log_dir, _CAUSAL_CHAINS_DIR)
 
 
+def consolidations_dir(log_dir: str | None = None) -> str:
+    return _path(log_dir, _CONSOLIDATIONS_DIR)
+
+
 def episode_path(log_dir: str | None, episode_id: str) -> str:
     return _path(log_dir, _EPISODES_DIR, f"{_clean(episode_id)}.json")
 
@@ -155,6 +160,10 @@ def daybook_path(log_dir: str | None, date: str) -> str:
 
 def causal_chain_path(log_dir: str | None, chain_id: str) -> str:
     return _path(log_dir, _CAUSAL_CHAINS_DIR, f"{_clean(chain_id)}.json")
+
+
+def consolidation_report_path(log_dir: str | None, scope: str) -> str:
+    return _path(log_dir, _CONSOLIDATIONS_DIR, f"{_slug(scope, 'all')}.json")
 
 
 def _load_json(path: str, default: Any) -> Any:
@@ -196,6 +205,12 @@ def default_episode(episode_id: str = "", day: str = "") -> dict[str, Any]:
         "importance": 0.5,
         "evidence": [],
         "status": "canonical",
+        "fingerprint": "",
+        "topic_fingerprint": "",
+        "consolidated_at": "",
+        "merged_into": "",
+        "conflict_group": "",
+        "conflict_reason": "",
         "links": {"causes": [], "effects": []},
     }
 
@@ -277,6 +292,12 @@ def normalize_episode(raw: Any, *, fallback_id: str = "", fallback_day: str = ""
     episode["importance"] = round(_clamp(source.get("importance"), 0.0, 1.0, 0.5), 3)
     episode["evidence"] = _normalize_evidence(source.get("evidence"))
     episode["status"] = _clean(source.get("status")) or episode["status"]
+    episode["fingerprint"] = _clean(source.get("fingerprint")) or _make_episode_fingerprint(episode)
+    episode["topic_fingerprint"] = _clean(source.get("topic_fingerprint")) or _make_episode_topic_fingerprint(episode)
+    episode["consolidated_at"] = _clean(source.get("consolidated_at"))
+    episode["merged_into"] = _clean(source.get("merged_into"))
+    episode["conflict_group"] = _clean(source.get("conflict_group"))
+    episode["conflict_reason"] = _clean(source.get("conflict_reason"))
     episode["links"] = _normalize_links(source.get("links"))
 
     if not episode["id"]:
@@ -346,6 +367,7 @@ def list_episodes(
     day: str | None = None,
     source: str | None = None,
     kind: str | None = None,
+    status: str | None = None,
     limit: int | None = None,
     reverse: bool = True,
 ) -> list[dict[str, Any]]:
@@ -356,6 +378,7 @@ def list_episodes(
     day = _clean(day) if day is not None else ""
     source = _clean(source) if source is not None else ""
     kind = _clean(kind) if kind is not None else ""
+    status = _clean(status) if status is not None else ""
 
     items: list[dict[str, Any]] = []
     for name in os.listdir(dir_path):
@@ -369,11 +392,14 @@ def list_episodes(
             continue
         if kind and episode["kind"] != kind:
             continue
+        if status and episode["status"] != status:
+            continue
         items.append(episode)
 
     items.sort(key=lambda item: (item.get("timestamp", ""), item.get("id", "")))
     if reverse:
         items.reverse()
+    items.sort(key=lambda item: _episode_status_rank(item.get("status")))
     if limit is not None and limit >= 0:
         items = items[:limit]
     return items
@@ -483,8 +509,10 @@ def episode_brief(episode: Mapping[str, Any]) -> str:
     kind = _clean(episode.get("kind")) or "observation"
     summary = _clean(episode.get("summary")) or "episode"
     tags = _normalize_text_list(episode.get("tags"))
+    status = _clean(episode.get("status"))
+    status_note = f"/{status}" if status and status != "canonical" else ""
     tag_text = f" | tags: {' / '.join(tags[:4])}" if tags else ""
-    return f"- {stamp} | 【エピソード:{kind}】{summary}{tag_text}"
+    return f"- {stamp} | 【エピソード:{kind}{status_note}】{summary}{tag_text}"
 
 
 def daybook_brief(daybook: Mapping[str, Any]) -> str:
@@ -668,3 +696,323 @@ def causal_chain_brief(chain: Mapping[str, Any]) -> str:
         line += f" | mechanism: {mechanism}"
     return line
 
+
+
+def _episode_status_rank(status: Any) -> int:
+    return {"canonical": 0, "conflict": 1, "superseded": 2}.get(_clean(status), 3)
+
+
+def _compact_text(value: Any) -> str:
+    text = _clean(value).lower()
+    if not text:
+        return ""
+    for pattern in [
+        r"ついていた",
+        r"ついてる",
+        r"点いていた",
+        r"点いてる",
+        r"消えていた",
+        r"消えてる",
+        r"開いていた",
+        r"開いてる",
+        r"閉まっていた",
+        r"閉まってる",
+        r"入っていた",
+        r"入ってる",
+        r"切れていた",
+        r"切れてる",
+        r"止まっていた",
+        r"止まってる",
+        r"上がっていた",
+        r"上がってる",
+        r"下がっていた",
+        r"下がってる",
+        r"増えていた",
+        r"増えてる",
+        r"減っていた",
+        r"減ってる",
+        r"\bon\b",
+        r"\boff\b",
+        r"\btrue\b",
+        r"\bfalse\b",
+        r"\benabled\b",
+        r"\bdisabled\b",
+        r"ない",
+        r"なかった",
+        r"ではない",
+        r"じゃない",
+        r"不在",
+        r"失敗",
+        r"成功",
+        r"未",
+    ]:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^0-9A-Za-z_\u3040-\u30ff\u4e00-\u9fff]+", " ", text)
+    return " ".join(text.split())
+
+
+def _episode_fingerprint_basis(episode: Mapping[str, Any]) -> str:
+    return "|".join([
+        _clean(episode.get("kind")),
+        _clean(episode.get("source")),
+        _clean(episode.get("summary")),
+        _clean(episode.get("detail")),
+    ])
+
+
+def _episode_topic_fingerprint_basis(episode: Mapping[str, Any]) -> str:
+    parts = [
+        _clean(episode.get("kind")),
+        _clean(episode.get("source")),
+        _compact_text(f"{episode.get('summary', '')} {episode.get('detail', '')}"),
+        " ".join(_normalize_text_list(episode.get("tags"))),
+        " ".join(_normalize_text_list(episode.get("entities"))),
+        " ".join(_normalize_text_list(episode.get("actors"))),
+    ]
+    return "|".join(part for part in parts if part)
+
+
+def _make_episode_fingerprint(episode: Mapping[str, Any]) -> str:
+    digest = hashlib.sha1(_episode_fingerprint_basis(episode).encode("utf-8")).hexdigest()[:14]
+    return f"ef_{digest}"
+
+
+def _make_episode_topic_fingerprint(episode: Mapping[str, Any]) -> str:
+    digest = hashlib.sha1(_episode_topic_fingerprint_basis(episode).encode("utf-8")).hexdigest()[:14]
+    return f"tf_{digest}"
+
+
+def _best_episode_candidate(episodes: list[Mapping[str, Any]]) -> dict[str, Any]:
+    return dict(min(episodes, key=lambda item: (
+        _episode_status_rank(item.get("status")),
+        -_clamp(item.get("importance"), 0.0, 1.0, 0.5),
+        -len(item.get("evidence") or []),
+        _clean(item.get("timestamp")) or _clean(item.get("day")),
+        _clean(item.get("id")),
+    )))
+
+
+def _merge_unique_dicts(values: Iterable[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {}
+        for key, value in item.items():
+            if isinstance(value, list):
+                row[key] = _unique_list(value)
+            else:
+                text = _clean(value)
+                if text:
+                    row[key] = text
+        if not row:
+            continue
+        sig = json.dumps(row, ensure_ascii=False, sort_keys=True)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(row)
+    return out
+
+
+def _merge_episode_group(episodes: list[dict[str, Any]], canonical: dict[str, Any], now: str, fingerprint: str) -> dict[str, Any]:
+    canonical = dict(canonical)
+    canonical["status"] = "canonical"
+    canonical["fingerprint"] = fingerprint
+    canonical["topic_fingerprint"] = _make_episode_topic_fingerprint(canonical)
+    canonical["consolidated_at"] = now
+    canonical["merged_into"] = ""
+    canonical["conflict_group"] = _clean(canonical.get("conflict_group"))
+    canonical["conflict_reason"] = _clean(canonical.get("conflict_reason"))
+
+    combined_evidence: list[dict[str, Any]] = []
+    combined_tags: list[str] = []
+    combined_entities: list[str] = []
+    combined_actors: list[str] = []
+    combined_causes: list[str] = []
+    combined_effects: list[str] = []
+    max_importance = _clamp(canonical.get("importance"), 0.0, 1.0, 0.5)
+    for item in episodes:
+        combined_evidence.extend(_merge_unique_dicts(item.get("evidence") or []))
+        combined_tags.extend(_normalize_text_list(item.get("tags")))
+        combined_entities.extend(_normalize_text_list(item.get("entities")))
+        combined_actors.extend(_normalize_text_list(item.get("actors")))
+        links = item.get("links") if isinstance(item.get("links"), dict) else {}
+        combined_causes.extend(_normalize_text_list(links.get("causes")))
+        combined_effects.extend(_normalize_text_list(links.get("effects")))
+        max_importance = max(max_importance, _clamp(item.get("importance"), 0.0, 1.0, 0.5))
+
+    if combined_evidence:
+        canonical["evidence"] = combined_evidence
+    canonical["tags"] = _normalize_text_list(combined_tags)
+    canonical["entities"] = _normalize_text_list(combined_entities)
+    canonical["actors"] = _normalize_text_list(combined_actors)
+    canonical["links"] = {"causes": _normalize_text_list(combined_causes), "effects": _normalize_text_list(combined_effects)}
+    canonical["importance"] = round(max_importance, 3)
+    return canonical
+
+
+def _report_core(report: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(report).items()
+        if key != "updated_at"
+    }
+
+
+def _episode_report_relpath(log_dir: str | None, episode_id: str) -> str:
+    return os.path.relpath(episode_path(log_dir, episode_id), log_dir or _DEFAULT_LOG_DIR)
+
+
+def _topic_label(episode: Mapping[str, Any]) -> str:
+    text = _compact_text(f"{episode.get('summary', '')} {episode.get('detail', '')}")
+    if text:
+        return text[:80]
+    return _clean(episode.get("summary")) or _clean(episode.get("kind")) or "topic"
+
+
+def consolidate_memory(
+    log_dir: str | None,
+    *,
+    scope: str = "",
+    day: str = "",
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    scope_value = _clean(scope) or _clean(day) or "all"
+    report_path = consolidation_report_path(log_dir, scope_value)
+    existing_report = _load_json(report_path, {})
+    now = _now().isoformat(timespec="seconds")
+
+    day_filter = _clean(day)
+    if not day_filter and re.fullmatch(r"\d{4}-\d{2}-\d{2}", scope_value):
+        day_filter = scope_value
+    episodes = list_episodes(log_dir, day=day_filter or None, reverse=False)
+    if not episodes:
+        report = {
+            "run_id": f"cons_{_slug(scope_value, 'all')}",
+            "scope": scope_value,
+            "merged_episode_ids": [],
+            "superseded_episode_ids": [],
+            "canonical_episode_ids": [],
+            "conflict_groups": [],
+            "updated_files": [],
+            "episode_count": 0,
+            "updated_at": now,
+        }
+        if not overwrite and existing_report and _report_core(existing_report) == _report_core(report):
+            return existing_report if isinstance(existing_report, dict) else report
+        _write_json(report_path, report)
+        return report
+
+    by_fingerprint: dict[str, list[dict[str, Any]]] = {}
+    by_topic: dict[str, list[dict[str, Any]]] = {}
+    changed_ids: set[str] = set()
+
+    for episode in episodes:
+        fingerprint = _make_episode_fingerprint(episode)
+        topic_fingerprint = _make_episode_topic_fingerprint(episode)
+        if episode.get("fingerprint") != fingerprint:
+            episode["fingerprint"] = fingerprint
+            changed_ids.add(_clean(episode.get("id")))
+        if episode.get("topic_fingerprint") != topic_fingerprint:
+            episode["topic_fingerprint"] = topic_fingerprint
+            changed_ids.add(_clean(episode.get("id")))
+        by_fingerprint.setdefault(fingerprint, []).append(episode)
+        by_topic.setdefault(topic_fingerprint, []).append(episode)
+
+    merged_episode_ids: list[str] = []
+    superseded_episode_ids: list[str] = []
+    canonical_episode_ids: list[str] = []
+
+    for fingerprint in sorted(by_fingerprint):
+        group = by_fingerprint[fingerprint]
+        if len(group) <= 1:
+            continue
+        canonical = _best_episode_candidate(group)
+        canonical_id = _clean(canonical.get("id"))
+        merged = _merge_episode_group(group, canonical, now, fingerprint)
+        for episode in group:
+            episode_id = _clean(episode.get("id"))
+            if episode_id == canonical_id:
+                if episode != merged:
+                    episode.update(merged)
+                    changed_ids.add(episode_id)
+                continue
+            episode["status"] = "superseded"
+            episode["merged_into"] = canonical_id
+            episode["fingerprint"] = fingerprint
+            episode["consolidated_at"] = now
+            episode["conflict_reason"] = _clean(episode.get("conflict_reason"))
+            changed_ids.add(episode_id)
+            superseded_episode_ids.append(episode_id)
+        canonical_episode_ids.append(canonical_id)
+        merged_episode_ids.extend(sorted({_clean(item.get("id")) for item in group if _clean(item.get("id"))}))
+
+    conflict_groups: list[dict[str, Any]] = []
+    for topic_fingerprint in sorted(by_topic):
+        group = by_topic[topic_fingerprint]
+        surviving = [episode for episode in group if _clean(episode.get("status")) != "superseded"]
+        unique_fingerprints = sorted({ _clean(episode.get("fingerprint")) for episode in surviving if _clean(episode.get("fingerprint")) })
+        if len(unique_fingerprints) <= 1:
+            continue
+        representative = _best_episode_candidate(surviving)
+        representative_id = _clean(representative.get("id"))
+        label = _topic_label(representative)
+        conflict_ids = sorted({_clean(item.get("id")) for item in surviving if _clean(item.get("id"))})
+        conflict_groups.append({
+            "topic": label,
+            "topic_fingerprint": topic_fingerprint,
+            "episodes": conflict_ids,
+            "resolution": "both_kept",
+        })
+        for episode in surviving:
+            episode_id = _clean(episode.get("id"))
+            if episode_id == representative_id:
+                if episode.get("status") != "canonical" or episode.get("conflict_group") != topic_fingerprint or episode.get("conflict_reason") != "same_topic_variants":
+                    episode["status"] = "canonical"
+                    episode["conflict_group"] = topic_fingerprint
+                    episode["conflict_reason"] = "same_topic_variants"
+                    episode["consolidated_at"] = now
+                    changed_ids.add(episode_id)
+                continue
+            if episode.get("status") != "conflict" or episode.get("conflict_group") != topic_fingerprint or episode.get("conflict_reason") != "same_topic_variants":
+                episode["status"] = "conflict"
+                episode["conflict_group"] = topic_fingerprint
+                episode["conflict_reason"] = "same_topic_variants"
+                episode["consolidated_at"] = now
+                changed_ids.add(episode_id)
+
+    updated_files: list[str] = []
+    for episode in episodes:
+        episode_id = _clean(episode.get("id"))
+        if not episode_id or episode_id not in changed_ids:
+            continue
+        _write_json(episode_path(log_dir, episode_id), episode)
+        updated_files.append(_episode_report_relpath(log_dir, episode_id))
+
+    updated_files = sorted(dict.fromkeys(updated_files))
+    merged_episode_ids = sorted(dict.fromkeys(merged_episode_ids))
+    superseded_episode_ids = sorted(dict.fromkeys(superseded_episode_ids))
+    canonical_episode_ids = sorted(dict.fromkeys(canonical_episode_ids))
+    conflict_groups = sorted(conflict_groups, key=lambda item: (item.get("topic_fingerprint", ""), ",".join(item.get("episodes", []))))
+
+    report = {
+        "run_id": f"cons_{_slug(scope_value, 'all')}",
+        "scope": scope_value,
+        "merged_episode_ids": merged_episode_ids,
+        "superseded_episode_ids": superseded_episode_ids,
+        "canonical_episode_ids": canonical_episode_ids,
+        "conflict_groups": conflict_groups,
+        "updated_files": updated_files,
+        "episode_count": len(episodes),
+        "updated_at": now,
+    }
+    report["updated_files"].append(os.path.relpath(report_path, log_dir or _DEFAULT_LOG_DIR))
+    report["updated_files"] = sorted(dict.fromkeys(report["updated_files"]))
+
+    if not overwrite and existing_report and _report_core(existing_report) == _report_core(report):
+        return existing_report if isinstance(existing_report, dict) else report
+
+    _write_json(report_path, report)
+    return report

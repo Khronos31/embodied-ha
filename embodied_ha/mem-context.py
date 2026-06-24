@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""structured daybook + memory.md を LLM 送信用に整形する。
+"""structured daybook + consolidated episodes + memory.md を LLM 送信用に整形する。
 
 - daybook があれば先頭に置く
+- その後に統合済み episode を続ける
 - その後に memory.md のコア記憶 + 最近の気づきを続ける
-- memory.md が無くても daybook だけは出せる
+- memory.md が無くても daybook と episode だけは出せる
 
 使い方: mem-context.py <memory.md path> [N=40]
 """
@@ -85,15 +86,34 @@ def _daybook_section(log_dir: str, limit: int = 3) -> str:
     return "\n".join(lines)
 
 
+def _episode_section(log_dir: str, limit: int = 12) -> str:
+    canonical = ms.list_episodes(log_dir, status="canonical", limit=limit, reverse=True) if log_dir else []
+    conflict_limit = max(4, min(8, limit // 2 if limit else 4))
+    conflict = ms.list_episodes(log_dir, status="conflict", limit=conflict_limit, reverse=True) if log_dir else []
+    if not canonical and not conflict:
+        return ""
+
+    lines = ["## 統合済みエピソード"]
+    for episode in canonical:
+        lines.append(ms.episode_brief(episode))
+
+    if conflict:
+        lines.append("## conflict episodes")
+        for episode in conflict:
+            lines.append(ms.episode_brief(episode))
+    return "\n".join(lines)
+
+
 def main() -> None:
     path = sys.argv[1] if len(sys.argv) > 1 else ""
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 40
     log_dir = os.path.dirname(path) if path else os.environ.get("EHA_LOG_DIR", "")
 
     daybooks = _daybook_section(log_dir, limit=3) if log_dir else ""
+    episodes = _episode_section(log_dir, limit=min(12, max(6, n // 2))) if log_dir else ""
     legacy = _legacy_memory_text(_read_text(path), n) if path else ""
 
-    sections = [section for section in (daybooks, legacy) if section and section.strip()]
+    sections = [section for section in (daybooks, episodes, legacy) if section and section.strip()]
     if not sections:
         print("なし")
         return

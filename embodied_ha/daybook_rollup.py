@@ -344,6 +344,19 @@ def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, An
         print(f"[DAYBOOK] {day} 記録完了（既存ブリーフ再利用）: {daybook.get('summary', '')[:40]}...")
 
 
+def _maybe_consolidate(log_dir: str, scope: str, day: str | None = None) -> None:
+    if not _truthy(os.environ.get("CONSOLIDATE_MEMORY")):
+        return
+    try:
+        report = ms.consolidate_memory(log_dir, scope=scope, day=day or scope)
+    except Exception as e:
+        print(f"[DAYBOOK] consolidation error: {e}")
+        return
+    print(
+        f"[DAYBOOK] consolidation done: {scope} merged={len(report.get('superseded_episode_ids', []))} conflicts={len(report.get('conflict_groups', []))}"
+    )
+
+
 def main() -> None:
     log_file = os.environ["LOG_FILE"]
     memory_file = os.environ["MEMORY_FILE"]
@@ -412,6 +425,7 @@ def main() -> None:
                 print(f"[DAYBOOK] 既存の structured daybook を反映: {target_day}")
             else:
                 print(f"[DAYBOOK] 既存の structured daybook を再利用: {target_day}")
+            _maybe_consolidate(log_dir, target_day, target_day)
             new_marker = target_day
         else:
             draft = _summarize_with_claude(target_day, entries_by_day[target_day])
@@ -419,6 +433,7 @@ def main() -> None:
                 draft = _fallback_draft(target_day, entries_by_day[target_day])
             normalized = _normalize_draft(target_day, entries_by_day[target_day], draft)
             _write_daybook(log_dir, memory_file, target_day, normalized, entries_by_day[target_day])
+            _maybe_consolidate(log_dir, target_day, target_day)
             new_marker = target_day
 
     if new_marker:
