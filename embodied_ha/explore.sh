@@ -127,14 +127,15 @@ case "$MODE" in
 - record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
 - loops_add … 後で気にかけたいことを追加（text に一言、source="explore"）。
-- sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。"
+- sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
+- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
 2. センサーだけでは分からないことは camera_get で確認してもよい（必要なときだけ）
 3. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 4. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__get_episode,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent"
-    MCP_SERVERS="sensors ha camera memory sociality"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__get_episode,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    MCP_SERVERS="sensors ha camera memory sociality http"
     ;;
   reflect)
     MODE_LABEL="物思いにふける時間"
