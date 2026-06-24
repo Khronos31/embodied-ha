@@ -16,6 +16,7 @@ import random
 import fcntl
 
 import body_state
+import anomaly_state
 import desire_state
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +52,7 @@ _desires_lock = threading.Lock()
 _body_lock = threading.Lock()
 _last_sensor_watch = 0.0  # センサートリガーの最終実行時刻
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
+_ANOMALY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "anomaly_state.json")
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -82,6 +84,36 @@ def _body_state_json(state=None):
 def _log_body_state(label, state, **fields):
     print(body_state.format_log_line(label, state, **fields), flush=True)
 
+def _load_anomaly_state():
+    with _body_lock:
+        return anomaly_state.load_state(_ANOMALY_STATE_FILE)
+
+
+def _save_anomaly_state(state):
+    with _body_lock:
+        anomaly_state.save_state(_ANOMALY_STATE_FILE, state)
+
+
+def _anomaly_state_json(state=None):
+    if state is None:
+        state = _load_anomaly_state()
+    return anomaly_state.serialize_state(state)
+
+
+def _log_anomaly_state(label, state, **fields):
+    print(anomaly_state.format_log_line(label, state, **fields), flush=True)
+
+
+def _anomaly_context(state=None):
+    if state is None:
+        state = _load_anomaly_state()
+    return anomaly_state.format_context_block(state)
+
+
+def _anomaly_urgency(state=None):
+    if state is None:
+        state = _load_anomaly_state()
+    return anomaly_state.compute_explore_urgency(state)
 def _load_desire_catalog():
     with _desires_lock:
         return desire_state.load_desires(DESIRES_FILE)
@@ -265,7 +297,7 @@ def run_chat(message):
             print(f"[daemon] body state finish error (chat): {e}", flush=True)
         _chat_lock.release()
 
-def run_explore(body_state_snapshot=None):
+def run_explore(body_state_snapshot=None, anomaly_state_snapshot=None):
     if not _explore_lock.acquire(blocking=False):
         print("[daemon] explore already running, skip", flush=True)
         return
@@ -280,8 +312,22 @@ def run_explore(body_state_snapshot=None):
                 body_state_snapshot = _load_body_state()
         else:
             _log_body_state("start/explore", body_state_snapshot, reason="定期実行")
+        if anomaly_state_snapshot is None:
+            try:
+                anomaly_state_snapshot = _load_anomaly_state()
+            except Exception as e:
+                print(f"[daemon] anomaly state load error (explore): {e}", flush=True)
+                anomaly_state_snapshot = anomaly_state.normalize_state(None)
+        else:
+            _log_anomaly_state("start/explore", anomaly_state_snapshot, reason="定期実行")
         print("[daemon] explore start", flush=True)
-        env = {**os.environ, "PATH": ENV_PATH, "EHA_BODY_STATE": _body_state_json(body_state_snapshot)}
+        env = {
+            **os.environ,
+            "PATH": ENV_PATH,
+            "EHA_BODY_STATE": _body_state_json(body_state_snapshot),
+            "ANOMALY_CONTEXT": anomaly_state.format_context_block(anomaly_state_snapshot),
+            "ANOMALY_URGENCY": str(anomaly_state.compute_explore_urgency(anomaly_state_snapshot)),
+        }
         try:
             proc = subprocess.run(["bash", EXPLORE_SH], env=env, timeout=EXPLORE_TIMEOUT)
             success = proc.returncode == 0
@@ -295,51 +341,8 @@ def run_explore(body_state_snapshot=None):
             print(f"[daemon] body state finish error (explore): {e}", flush=True)
         _explore_lock.release()
 
-def mqtt_pub(topic, payload):
-    """MQTT トピックに1メッセージ publish（MQTT_HOST 未設定時はno-op）。"""
-    if not MQTT_HOST:
-        return
-    try:
-        subprocess.run(
-            ["mosquitto_pub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
-             "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic, "-m", payload],
-            capture_output=True, timeout=5
-        )
-    except Exception as e:
-        print(f"[daemon] mqtt_pub error: {e}", flush=True)
 
-
-def mqtt_listen(topic, handler, label):
-    """mosquitto_sub でトピックを永続購読。切断時は5秒後に再接続。"""
-    cmd = ["mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
-           "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic]
-    while True:
-        proc = None
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True)
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    threading.Thread(target=handler, args=(line,), daemon=True).start()
-            proc.wait()
-        except Exception as e:
-            print(f"[daemon] {label} mqtt error: {e}", flush=True)
-        finally:
-            # 例外で抜けても mosquitto_sub を残さない（再接続のたびに増殖するのを防ぐ）
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-        time.sleep(5)
-
-
-def run_chance(schedule=None, body_state_snapshot=None, loop_name="watch", desire_pressure=0.0) -> int:
+def run_chance(schedule=None, body_state_snapshot=None, loop_name="watch", desire_pressure=0.0, anomaly_urgency=0) -> int:
     """時間帯と body state に応じた実行確率(%)を返す"""
     if schedule is None:
         schedule = load_schedule()
@@ -358,6 +361,8 @@ def run_chance(schedule=None, body_state_snapshot=None, loop_name="watch", desir
             chance += round(desire_pressure * 14)
         else:
             chance += round(desire_pressure * 18)
+    if loop_name == "explore" and anomaly_urgency:
+        chance += int(anomaly_urgency)
     return max(5, min(100, chance))
 
 def scheduler():
@@ -402,12 +407,22 @@ def explore_scheduler():
             except Exception as e:
                 print(f"[daemon] body state tick error (explore scheduler): {e}", flush=True)
                 body_snapshot = _load_body_state()
+            try:
+                anomaly_snapshot = _load_anomaly_state()
+            except Exception as e:
+                print(f"[daemon] anomaly state load error (explore scheduler): {e}", flush=True)
+                anomaly_snapshot = anomaly_state.normalize_state(None)
             _, desire_pressure = tick_desires(body_snapshot, "explore", reason, emit_active=False)
-            chance = run_chance(schedule, body_snapshot, "explore", desire_pressure)
+            anomaly_urgency = anomaly_state.compute_explore_urgency(anomaly_snapshot)
+            chance = run_chance(schedule, body_snapshot, "explore", desire_pressure, anomaly_urgency=anomaly_urgency)
             if chance >= 100 or random.randint(1, 100) <= chance:
-                threading.Thread(target=run_explore, kwargs={"body_state_snapshot": body_snapshot}, daemon=True).start()
+                threading.Thread(
+                    target=run_explore,
+                    kwargs={"body_state_snapshot": body_snapshot, "anomaly_state_snapshot": anomaly_snapshot},
+                    daemon=True,
+                ).start()
             else:
-                print(f"[daemon] explore skipped by chance ({chance}%)", flush=True)
+                print(f"[daemon] explore skipped by chance ({chance}%, anomaly={anomaly_urgency})", flush=True)
         except Exception as e:
             print(f"[daemon] explore_scheduler error: {e}", flush=True)
         time.sleep(schedule.get("explore_interval", EXPLORE_INTERVAL))

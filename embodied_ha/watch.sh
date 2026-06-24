@@ -57,13 +57,37 @@ tlog "2a.人感センサー履歴"
 
 # --- 2c. 開いたループ（やりかけ・約束。発話で蒸し返せる）---
 OPEN_LOOPS=$(loops list 2>/dev/null || echo "なし")
+OPEN_LOOPS_JSON=$(loops list-json 2>/dev/null || echo "[]")
 
 # --- features.md（アドオンの機能一覧。LLMが文脈次第で自然に紹介する）---
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
 tlog "2c.loops list"
 
+# --- 2d. anomaly 検出（センサー急変 / 未解決ループ / ズレ）---
+ANOMALY_CONTEXT=$(SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" SENSORS_DATA="$SENSORS" OPEN_LOOPS_JSON="$OPEN_LOOPS_JSON" TRIGGER_REASON="${TRIGGER_REASON:-定期実行}" python3 << 'PYEOF'
+import os
+import sys
 
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+import anomaly_state as ast  # type: ignore
+
+log_dir = os.environ["LOG_DIR"]
+path = os.path.join(log_dir, "anomaly_state.json")
+state = ast.load_state(path)
+updated = ast.detect_anomalies(
+    os.environ.get("SENSORS_DATA", ""),
+    os.environ.get("OPEN_LOOPS_JSON", "[]"),
+    state,
+    trigger_reason=os.environ.get("TRIGGER_REASON", ""),
+    loop_name="watch",
+)
+ast.save_state(path, updated)
+print(ast.format_context_block(updated))
+PYEOF
+)
+
+tlog "2d.anomaly detect"
 
 # --- 4. 過去ログ（直近20件）---
 PREV_LOG="なし"
@@ -159,7 +183,7 @@ fi
 tlog "4d.直近の会話"
 
 # --- 4. Claude呼び出し（2フェーズ: カメラ選択 → 観察）---
-RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
+RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
 import base64, json, os, subprocess, urllib.request, time
 
 def _ptime(label):
@@ -268,6 +292,7 @@ recent_chat = os.environ.get("CHAT_DATA", "なし")
 open_loops    = os.environ.get("OPEN_LOOPS_DATA", "なし")
 hour          = int(os.environ.get("HOUR", "12"))
 recent_motion = os.environ.get("RECENT_MOTION_DATA", "なし")
+anomaly_context = os.environ.get("ANOMALY_CONTEXT", "（特になし）")
 character     = os.environ.get("CHARACTER", "")
 resident      = os.environ.get("RESIDENT", "ユーザー")
 body_state    = os.environ.get("EHA_BODY_STATE", "") or "{}"
@@ -321,6 +346,8 @@ context = f"""# あなた自身について
 {_cam_list}
 
 【今回のトリガー】{trigger}{trigger_note}
+【異常トリガー】
+{anomaly_context}
 【内なる衝動】
 {inner_voice}
 【身体状態】
@@ -370,6 +397,8 @@ phase1_prompt = f"""今、家のどのカメラを確認すべきか判断して
 {sensors}
 【直近15分の人感センサー履歴（部屋の移動の流れ）】
 {recent_motion}
+【異常トリガー】
+{anomaly_context}
 
 センサーと履歴を踏まえて、今回確認すべきカメラを選んでください。
 以下のJSON形式のみで返答:

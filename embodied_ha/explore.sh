@@ -60,7 +60,7 @@ fi
 # --- 動機（モード）を選ぶ。自由時間に何をするかの内発的動機 ---
 # 環境変数 MODE で上書き可（テスト用）。なければ重み付きランダム（explore50/reflect30/web20）。
 if [ -z "${MODE:-}" ]; then
-  MODE=$(EHA_BODY_STATE="${EHA_BODY_STATE:-}" python3 -c 'import json, os, random;
+  MODE=$(ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" EHA_BODY_STATE="${EHA_BODY_STATE:-}" python3 -c 'import json, os, random;
 state = {}
 try:
     state = json.loads(os.environ.get("EHA_BODY_STATE") or "{}")
@@ -76,10 +76,13 @@ def num(key, default=0.5):
 curiosity = num("curiosity")
 energy = num("energy")
 stress = num("stress")
+anomaly_urgency = num("ANOMALY_URGENCY", 0)
 weights = {"explore": 50, "reflect": 30, "web": 20}
 weights["explore"] += int((curiosity - 0.5) * 40 + (energy - 0.5) * 15 - stress * 12)
 weights["reflect"] += int(stress * 25 + max(0.0, 0.5 - energy) * 30)
 weights["web"] += int(max(0.0, curiosity - 0.45) * 12)
+if anomaly_urgency > 0:
+    weights["explore"] += int(anomaly_urgency * 1.5)
 for key in list(weights):
     weights[key] = max(5, weights[key])
 choices = list(weights.keys())
@@ -195,6 +198,9 @@ SYS_PROMPT="${COMMON_CHAR}
 ${BODY_STATE}
 - curiosity が高いほど新規の掘り下げを優先。energy が低いほど短く省エネに。stress が高いほど落ち着いて。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
 
+# 異常トリガー
+${ANOMALY_CONTEXT}
+
 いまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。
 
 ${TOOLS_DESC}
@@ -218,7 +224,7 @@ ${OPEN_LOOPS}
 では、始めてください。"
 
 # --- Claude エージェント起動（モードに応じた MCP ツールを許可）---
-RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-（特になし）}" ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess
 
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
