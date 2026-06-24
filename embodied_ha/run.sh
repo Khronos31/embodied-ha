@@ -87,11 +87,22 @@ fi
 
 # --- desires.json（欲求システム定義。ユーザーが JSON で編集可能）---
 # 同梱デフォルト（$SCRIPT_DIR/desires.json）を初期化元に、EHA_DATA_DIR 配下へ seed-once。
-# 既存ファイルは上書きしない（アップデートでユーザー追加の欲求が消えないよう）。
+# 初期化時の正規化は desire_state.py に寄せる。既存ファイルは上書きしない。
 export EHA_DESIRES_FILE="${EHA_DESIRES_FILE:-$EHA_DATA_DIR/desires.json}"
 if [ ! -f "$EHA_DESIRES_FILE" ]; then
-    if cp "$SCRIPT_DIR/desires.json" "$EHA_DESIRES_FILE" 2>/dev/null; then
-        echo "[run] desires.json を同梱デフォルトから初期化（$EHA_DESIRES_FILE）"
+    if SCRIPT_DIR="$SCRIPT_DIR" EHA_DESIRES_FILE="$EHA_DESIRES_FILE" python3 - <<'PY'
+import os
+import sys
+
+script_dir = os.environ["SCRIPT_DIR"]
+dest = os.environ["EHA_DESIRES_FILE"]
+sys.path.insert(0, script_dir)
+import desire_state  # type: ignore
+
+desire_state.seed_catalog(os.path.join(script_dir, "desires.json"), dest)
+PY
+    then
+        echo "[run] desires.json を desire_state.py 経由で初期化（$EHA_DESIRES_FILE）"
     else
         echo "[run] desires.json 初期化失敗（同梱デフォルトを使用）"
         export EHA_DESIRES_FILE="$SCRIPT_DIR/desires.json"
