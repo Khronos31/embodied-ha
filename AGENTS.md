@@ -74,7 +74,7 @@ permissions on rebuild, only on version update + `ha addons update`.
 |---|---|
 | Codex | `Co-Authored-By: Codex <noreply@openai.com>` |
 | Antigravity | `Co-Authored-By: Antigravity <noreply@google.com>` |
-| Claude | `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` |
+| Claude | `Co-Authored-By: Claude Code <noreply@anthropic.com>` |
 
 例:
 ```
