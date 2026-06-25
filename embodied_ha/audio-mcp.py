@@ -95,6 +95,10 @@ def build_listen_spec() -> dict:
                     "type": "boolean",
                     "description": "STT を行うか。デフォルト false",
                 },
+                "save": {
+                    "type": "boolean",
+                    "description": "true にすると録音ファイルを /config/embodied-ha/last_recording.wav に保存する。音量確認用。",
+                },
             },
         },
     }
@@ -124,10 +128,9 @@ def find_ffmpeg() -> str | None:
 
 def build_record_command(source: str, duration: int) -> list[str]:
     if source == "default":
-        # HAOS の audio:true は PulseAudio を注入する（raw ALSA は無音になる）
         return [
             "ffmpeg",
-            "-f", "pulse",
+            "-f", "alsa",
             "-i", "default",
             "-ar", "16000",
             "-ac", "1",
@@ -231,6 +234,8 @@ def listen(args: dict):
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    save_arg = args.get("save", False)
+    save = save_arg if isinstance(save_arg, bool) else _truthy(save_arg)
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = None
     try:
@@ -244,6 +249,15 @@ def listen(args: dict):
             return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
 
         peak_db, mean_db = analyze_volume(tmp_path)
+        saved_path = None
+        if save:
+            save_dest = os.path.join(
+                os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"),
+                "last_recording.wav",
+            )
+            import shutil as _shutil
+            _shutil.copy2(tmp_path, save_dest)
+            saved_path = save_dest
         payload = {
             "source": source,
             "duration": duration,
@@ -253,6 +267,8 @@ def listen(args: dict):
             "mean_db": mean_db,
             "transcript": None,
         }
+        if saved_path:
+            payload["saved_to"] = saved_path
         if transcribe:
             payload["transcript"] = transcribe_audio(tmp_path)
         return [text(json.dumps(payload, ensure_ascii=False))]
