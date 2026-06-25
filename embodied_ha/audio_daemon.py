@@ -526,19 +526,27 @@ def should_record_non_speech_event(reason: str, features: dict) -> bool:
         duration_sec = float(features.get("duration_sec") or 0)
     except Exception:
         duration_sec = 0.0
+    try:
+        speech_ratio = float(features.get("speech_ratio") or 0.0)
+    except Exception:
+        speech_ratio = 0.0
     high_energy = float(features.get("high_energy") or 0.0)
     mid_energy = float(features.get("mid_energy") or 0.0)
     transient = features.get("transient") is True
 
     if duration_sec < MIN_SEGMENT_SECONDS or peak_db is None:
         return False
-    if reason == "empty_transcription" and peak_db >= -43.0:
+    if reason == "empty_transcription":
+        if peak_db >= -32.0:
+            return True
+        if peak_db >= -38.0 and speech_ratio >= 0.10:
+            return True
+        return False
+    if peak_db >= -34.0:
         return True
-    if peak_db >= -36.0:
+    if transient and peak_db >= -38.0 and speech_ratio >= 0.08:
         return True
-    if transient and peak_db >= -42.0:
-        return True
-    if duration_sec <= 1.5 and peak_db >= -43.0 and (high_energy >= 0.45 or mid_energy >= 0.45):
+    if duration_sec <= 1.2 and peak_db >= -39.0 and speech_ratio >= 0.08 and (high_energy >= 0.55 or mid_energy >= 0.55):
         return True
     return False
 

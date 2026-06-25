@@ -117,6 +117,20 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertIsNone(reason)
 
+    def test_should_record_non_speech_event_rejects_weak_empty_transcription(self):
+        should_record = self.audio_daemon.should_record_non_speech_event(
+            "empty_transcription",
+            {
+                "duration_sec": 1.28,
+                "peak_db": -38.5,
+                "speech_ratio": 0.05,
+                "high_energy": 0.2,
+                "mid_energy": 0.4,
+                "transient": True,
+            },
+        )
+        self.assertFalse(should_record)
+
     def test_load_enabled_audio_sources_filters_and_normalizes(self):
         prefs = {
             "audio_sources": [
