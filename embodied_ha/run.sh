@@ -215,6 +215,11 @@ fi
 export EHA_LOG_DIR="${EHA_LOG_DIR:-$EHA_DATA_DIR/log}"
 mkdir -p "$EHA_LOG_DIR"
 
+# --- FTS5インデックス初期化（既存エピソード・memory.md を初回インデックス化）---
+EHA_LOG_DIR="$EHA_LOG_DIR" python3 "$SCRIPT_DIR/init_fts.py" \
+    && echo "[run] fts_index 初期化完了" \
+    || echo "[run] fts_index 初期化失敗（スキップ。起動は続ける）"
+
 # --- Web UI サーバー（認証前でも起動。セットアップ画面を出すため）---
 echo "[run] web server 起動（ポート ${INGRESS_PORT:-8099}）"
 python3 "$SCRIPT_DIR/web/server.py" &
