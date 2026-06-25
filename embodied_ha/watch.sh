@@ -435,9 +435,11 @@ phase2_prompt = context + f"""
 読み取り（必要なときだけ）:
 - ha_get … センサー欄に無い個別エンティティの現在値・履歴を読む（気になったときだけ）
 - get_sensors … 主要センサーをまとめて取り直す
-- camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）
+- camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
+- record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。
+- get_working_memory … 直前に活性化した episode を確認する。
 - loops_add … 「後で気にかけておきたい」こと（消し忘れ・植物の世話・{resident}さんの作業の続き等）があれば text に一言、source="watch" で追加。既に【気にかけていること】にある内容は繰り返さない
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。自発発話を出す前に必要なら見る。
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。
@@ -495,7 +497,7 @@ if _sd:
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
         _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,"
-                    "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_counterfactual,"
+                    "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                     "mcp__sociality__record_boundary,mcp__sociality__record_consent,"

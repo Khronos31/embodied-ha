@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import subprocess
 from typing import Any, Mapping
 
@@ -36,6 +37,7 @@ LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
 RECALL = os.path.join(_DIR, "recall.sh")
 LOOPS = os.path.join(_DIR, "loops.sh")
 MEMORY_FILE = "memory.md"
+_EPISODE_ID_RE = re.compile(r"\bep_[0-9A-Za-z_.-]+")
 
 
 def _clean(value: Any) -> str:
@@ -119,6 +121,8 @@ def recall(args: dict[str, Any]):
         return [text("keywords が空です（例: [\"エアコン\", \"冷房\"]）")], True
     r = subprocess.run(["bash", RECALL, *kw], capture_output=True, text=True, timeout=20, env=_child_env())
     out = (r.stdout or "").strip()
+    for episode_id in dict.fromkeys(_EPISODE_ID_RE.findall(out)):
+        ms.update_working_memory(LOG_DIR, episode_id, "recall")
     return [text(out if out else "（ヒットなし）")]
 
 
@@ -174,6 +178,7 @@ def loops_close(args: dict[str, Any]):
 def record_episode(args: dict[str, Any]):
     payload = _merge_payload(args, "episode")
     episode = ms.save_episode(LOG_DIR, payload)
+    ms.update_working_memory(LOG_DIR, episode.get("id", ""), "record_episode")
     log(f"[memory-mcp] episode: {episode.get('id', '')} {episode.get('summary', '')[:40]}")
     return _json_text(episode)
 
@@ -202,7 +207,14 @@ def get_episode(args: dict[str, Any]):
     episode_id = _clean(args.get("episode_id") or args.get("id"))
     if not episode_id and isinstance(args.get("episode"), dict):
         episode_id = _clean(args["episode"].get("id"))
-    return _json_text(ms.load_episode(LOG_DIR, episode_id))
+    episode = ms.load_episode(LOG_DIR, episode_id)
+    if episode.get("id"):
+        ms.update_working_memory(LOG_DIR, episode["id"], "get_episode")
+    return _json_text(episode)
+
+
+def get_working_memory(args: dict[str, Any]):
+    return _json_text(ms.get_working_memory(LOG_DIR))
 
 
 def list_episodes(args: dict[str, Any]):
@@ -442,7 +454,7 @@ def main() -> None:
                         "entities": {"type": "array", "items": {"type": "string"}},
                         "actors": {"type": "array", "items": {"type": "string"}},
                         "importance": {"type": "number"},
-                        "evidence": {"type": "array", "items": {"type": "object"}},
+                        "evidence": {"type": "array", "items": {"type": "object"}, "description": "根拠。camera_context オブジェクトを含められる"},
                         "status": {"type": "string"},
                         "links": {"type": "object"},
                     },
@@ -485,6 +497,14 @@ def main() -> None:
                 },
             },
             "handler": get_episode,
+        },
+        "get_working_memory": {
+            "spec": {
+                "name": "get_working_memory",
+                "description": "直近で活性化した episode を activation の高い順に最大5件返す。",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            "handler": get_working_memory,
         },
         "list_episodes": {
             "spec": {

@@ -60,6 +60,48 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertEqual(loaded["day"], payload["day"])
         self.assertTrue((self.log_dir / "memory" / "episodes" / f"{recorded['id']}.json").exists())
 
+
+    def test_working_memory_tracks_episode_activation(self):
+        recorded = self._json(
+            self.memory_mcp.record_episode(
+                {
+                    "timestamp": "2026-06-23T10:00:00+09:00",
+                    "day": "2026-06-23",
+                    "source": "watch",
+                    "kind": "observation",
+                    "summary": "机の上に青いマグがある",
+                }
+            )
+        )
+        self._json(self.memory_mcp.get_episode({"episode_id": recorded["id"]}))
+        working = self._json(self.memory_mcp.get_working_memory({}))
+        self.assertEqual(working[0]["episode_id"], recorded["id"])
+        self.assertEqual(working[0]["reason"], "get_episode")
+
+    def test_episode_evidence_preserves_camera_context(self):
+        recorded = self._json(
+            self.memory_mcp.record_episode(
+                {
+                    "timestamp": "2026-06-23T10:00:00+09:00",
+                    "day": "2026-06-23",
+                    "source": "watch",
+                    "kind": "observation",
+                    "summary": "ソファに本が置かれている",
+                    "evidence": [
+                        {
+                            "camera_context": {
+                                "source": "camera.living",
+                                "room": "リビング",
+                                "preset": "sofa",
+                                "direction": "left",
+                            }
+                        }
+                    ],
+                }
+            )
+        )
+        self.assertEqual(recorded["evidence"][0]["camera_context"]["preset"], "sofa")
+
     def test_get_episode_returns_default_for_missing_id(self):
         payload = self._json(self.memory_mcp.get_episode({}))
         self.assertEqual(payload["id"], "")

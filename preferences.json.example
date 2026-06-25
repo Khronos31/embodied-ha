@@ -7,11 +7,17 @@
     {
       "source": "capture_tv",
       "label": "テレビ",
+      "room": "living",
+      "preset": "tv",
+      "direction": "front",
       "note": "HDDレコーダー出力。今何が放送されているか確認できる"
     },
     {
       "source": "camera.living_room_entity_id",
       "label": "リビング",
+      "room": "living",
+      "preset": "wide",
+      "direction": "front",
       "note": "リビングの広角カメラ"
     }
   ],

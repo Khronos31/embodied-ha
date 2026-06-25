@@ -18,6 +18,7 @@ from state_utils import clamp as _clamp
 from state_utils import clean as _clean
 from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
+from state_utils import read_json as _read_json
 from state_utils import write_json as _write_json
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,8 @@ _EPISODES_DIR = "episodes"
 _DAYBOOKS_DIR = "daybooks"
 _CAUSAL_CHAINS_DIR = "causal_chains"
 _CONSOLIDATIONS_DIR = "consolidations"
+_WORKING_MEMORY_FILE = "working_memory.json"
+WORKING_MEMORY_MAX = 5
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
@@ -126,6 +129,11 @@ def consolidations_dir(log_dir: str | None = None) -> str:
     return _path(log_dir, _CONSOLIDATIONS_DIR)
 
 
+def working_memory_path(log_dir: str | None = None) -> str:
+    base = log_dir or _DEFAULT_LOG_DIR
+    return os.path.join(base, _WORKING_MEMORY_FILE)
+
+
 def episode_path(log_dir: str | None, episode_id: str) -> str:
     return _path(log_dir, _EPISODES_DIR, f"{_clean(episode_id)}.json")
 
@@ -211,17 +219,29 @@ def _make_episode_id(data: Mapping[str, Any]) -> str:
     return f"ep_{day.replace('-', '')}_{source}_{kind}_{digest}"
 
 
-def _normalize_evidence(values: Any) -> list[dict[str, str]]:
+def _normalize_camera_context(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {"source", "room", "preset", "direction", "timestamp"}
+    return {key: _clean(value.get(key)) for key in allowed if _clean(value.get(key))}
+
+
+def _normalize_evidence(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         return []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for item in values:
         if isinstance(item, dict):
-            cleaned = {
-                key: _clean(value)
-                for key, value in item.items()
-                if _clean(value)
-            }
+            cleaned: dict[str, Any] = {}
+            for key, value in item.items():
+                if key == "camera_context":
+                    camera_context = _normalize_camera_context(value)
+                    if camera_context:
+                        cleaned[key] = camera_context
+                    continue
+                text = _clean(value)
+                if text:
+                    cleaned[key] = text
             if cleaned:
                 out.append(cleaned)
         else:
@@ -448,6 +468,63 @@ def build_daybook(
         "episode_count": len(episode_id_list),
     })
     return save_daybook(log_dir, daybook)
+
+
+
+
+def _normalize_working_memory_item(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    episode_id = _clean(raw.get("episode_id") or raw.get("id"))
+    if not episode_id:
+        return {}
+    return {
+        "episode_id": episode_id,
+        "reason": _clean(raw.get("reason")),
+        "activation": round(_clamp(raw.get("activation"), 0.0, 1.0, 0.0), 3),
+        "last_activated_at": _clean(raw.get("last_activated_at")),
+    }
+
+
+def _load_working_memory(log_dir: str | None = None) -> list[dict[str, Any]]:
+    data = _read_json(working_memory_path(log_dir), [])
+    if not isinstance(data, list):
+        return []
+    return [item for item in (_normalize_working_memory_item(row) for row in data) if item]
+
+
+def update_working_memory(log_dir: str | None, episode_id: str, reason: str) -> None:
+    episode_id = _clean(episode_id)
+    if not episode_id:
+        return
+    now_text = _now().isoformat(timespec="seconds")
+    reason = _clean(reason) or "activated"
+    items = _load_working_memory(log_dir)
+    found = False
+    for item in items:
+        item["activation"] = round(_clamp(item.get("activation"), 0.0, 1.0, 0.0) * 0.82, 3)
+        if item["episode_id"] == episode_id:
+            item["activation"] = round(_clamp(item["activation"] + 0.45, 0.0, 1.0, 1.0), 3)
+            item["reason"] = reason
+            item["last_activated_at"] = now_text
+            found = True
+    if not found:
+        items.append({
+            "episode_id": episode_id,
+            "reason": reason,
+            "activation": 0.75,
+            "last_activated_at": now_text,
+        })
+    items = [item for item in items if _clamp(item.get("activation"), 0.0, 1.0, 0.0) >= 0.05]
+    items.sort(key=lambda item: (_clamp(item.get("activation"), 0.0, 1.0, 0.0), _clean(item.get("last_activated_at"))), reverse=True)
+    _write_json(working_memory_path(log_dir), items[:WORKING_MEMORY_MAX])
+
+
+def get_working_memory(log_dir: str | None = None) -> list[dict[str, Any]]:
+    items = _load_working_memory(log_dir)
+    items = [item for item in items if _clamp(item.get("activation"), 0.0, 1.0, 0.0) >= 0.05]
+    items.sort(key=lambda item: (_clamp(item.get("activation"), 0.0, 1.0, 0.0), _clean(item.get("last_activated_at"))), reverse=True)
+    return items[:WORKING_MEMORY_MAX]
 
 
 def list_daybooks(log_dir: str | None, *, limit: int | None = None, reverse: bool = True) -> list[dict[str, Any]]:

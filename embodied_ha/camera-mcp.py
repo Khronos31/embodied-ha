@@ -10,7 +10,7 @@ source の形式で自動判別:
   --ha-url      HA API ベース URL   (env: HA_URL)
   --go2rtc-url  go2rtc ベース URL   (env: GO2RTC_BASE)
 """
-import sys, json, base64, subprocess, os, argparse
+import sys, json, base64, subprocess, os, argparse, datetime
 
 
 def parse_args():
@@ -81,6 +81,42 @@ TOOL_PTZ = {
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
+
+
+def _clean(value):
+    return " ".join(str(value or "").split()).strip()
+
+
+def _load_camera_prefs():
+    path = os.environ.get("EHA_PREFS_FILE", "")
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    cameras = data.get("cameras") if isinstance(data, dict) else []
+    return cameras if isinstance(cameras, list) else []
+
+
+def camera_context(source):
+    source = _clean(source)
+    context = {
+        "source": source,
+        "room": "",
+        "preset": "",
+        "direction": "",
+        "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    for item in _load_camera_prefs():
+        if not isinstance(item, dict) or _clean(item.get("source")) != source:
+            continue
+        context["room"] = _clean(item.get("room") or item.get("label"))
+        context["preset"] = _clean(item.get("preset"))
+        context["direction"] = _clean(item.get("direction"))
+        break
+    return context
 
 
 def press_button(entity_id, ha_url):
@@ -181,8 +217,12 @@ def main():
                     continue
                 b64, url = fetch_image(source, args.ha_url, args.go2rtc_url)
                 if b64:
+                    context = camera_context(source)
                     send({"jsonrpc": "2.0", "id": id_, "result": {
-                        "content": [{"type": "image", "data": b64, "mimeType": "image/jpeg"}]
+                        "content": [
+                            {"type": "text", "text": json.dumps({"camera_context": context}, ensure_ascii=False)},
+                            {"type": "image", "data": b64, "mimeType": "image/jpeg"},
+                        ]
                     }})
                 else:
                     send({"jsonrpc": "2.0", "id": id_, "result": {
