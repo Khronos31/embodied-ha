@@ -56,7 +56,7 @@ if [ -z "${PULSE_SERVER:-}" ]; then
     unset _pulse_sock
 fi
 if [ -z "${PULSE_SERVER:-}" ]; then
-    echo "[run] PulseAudio: ソケット見つからず（/run ls: $(ls /run 2>/dev/null | tr '\n' ' ')）"
+    echo "[run] PulseAudio: ソケット見つからず（/run ls: $(find /run -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)）"
 fi
 
 # --- 永続データの置き場（/config/embodied-ha/）---
