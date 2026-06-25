@@ -134,7 +134,7 @@ action:
 | `character.md` | エージェントの性格・口調・価値観 | Web UI 設定画面 or File Editor |
 | `preferences.json` | センサー・スピーカー・カメラ・音声ソース・エンティティ対応表 | Web UI 設定画面 or 会話 |
 | `desires.json` | 欲求の種類と蓄積速度 | File Editor |
-| `personal.inc` | TV番組ガイドなど個人的な追加コンテキスト（シェルスクリプト） | File Editor |
+| `extra_context.conf` | TV番組ガイドやローカルAPI仕様などの追加コンテキスト（1行1コマンド） | Web UI 設定画面 or File Editor |
 
 ### 欲求システム
 
@@ -176,7 +176,7 @@ action:
 | `character.md` | キャラクター定義 |
 | `preferences.json` | センサー・スピーカー・カメラ・音声ソース設定 |
 | `desires.json` | 欲求定義 |
-| `personal.inc` | 個人コンテキスト |
+| `extra_context.conf` | 追加コンテキスト |
 | `log/memory.md` | 長期記憶 |
 | `log/observations.jsonl` | 観察ログ |
 | `log/explore.jsonl` | 探索ログ |
