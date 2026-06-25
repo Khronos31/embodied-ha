@@ -898,7 +898,7 @@ async function fetchSettings() {
                     { source: "camera.living_room", label: "リビング", note: "リビング広角カメラ" }
                 ],
                 audio_sources: [
-                    { source: "rtsp://localhost:8554/capture_tv", label: "TV・レコーダー", note: "go2rtc経由のTV/レコーダー音声" },
+                    { source: "rtsp://localhost:8554/capture_tv", label: "TV・レコーダー", note: "go2rtc経由のTV/レコーダー音声", background_hearing_enabled: false },
                     { source: "alsa", label: "スタディマイク", note: "USBマイク直接録音（/dev/snd 必要）" }
                 ],
                 stt_provider: "wyoming",
@@ -1596,6 +1596,7 @@ function addAudioSourceRow(source = {}) {
     const sttEnabledVal = !!source.stt_enabled;
     const sttRetentionVal = source.stt_retention_hours !== undefined ? source.stt_retention_hours : 60;
     const wakeWordEnabledVal = !!source.wake_word_enabled;
+    const backgroundHearingEnabledVal = source.background_hearing_enabled !== false;
 
     card.innerHTML = `
         <div class="setting-item-header">
@@ -1639,6 +1640,14 @@ function addAudioSourceRow(source = {}) {
                 </label>
             </div>
         </div>
+
+        <div class="form-group" style="margin-top:12px; margin-bottom:0;">
+            <label class="checkbox-label" style="margin-bottom: 4px;">
+                <input type="checkbox" class="audio-source-background-hearing-enabled" ${backgroundHearingEnabledVal ? 'checked' : ''}>
+                背景音として気配を拾う
+            </label>
+            <small class="form-hint">保存期間が0のとき、STTは行わず音量/VADだけを背景聴覚ログに残します。レコーダーなど「見たい・聞きたいときだけ接続する」音源はOFFにしてください。</small>
+        </div>
     `;
 
     listEl.appendChild(card);
@@ -1664,6 +1673,7 @@ function getAudioSourcesFromUI() {
         const sttRetentionRaw = parseInt(card.querySelector('.audio-source-stt-retention').value, 10);
         const stt_retention_hours = Number.isNaN(sttRetentionRaw) ? 60 : Math.max(0, sttRetentionRaw);
         const wake_word_enabled = card.querySelector('.audio-source-wake-word-enabled').checked;
+        const background_hearing_enabled = card.querySelector('.audio-source-background-hearing-enabled').checked;
         
         if (source) {
             const srcObj = { source };
@@ -1672,6 +1682,7 @@ function getAudioSourcesFromUI() {
             srcObj.stt_enabled = stt_enabled;
             srcObj.stt_retention_hours = stt_retention_hours;
             srcObj.wake_word_enabled = wake_word_enabled;
+            srcObj.background_hearing_enabled = background_hearing_enabled;
             sources.push(srcObj);
         }
     });

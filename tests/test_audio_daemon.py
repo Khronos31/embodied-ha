@@ -95,7 +95,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
 
-    def test_load_enabled_audio_sources_keeps_zero_retention_as_background(self):
+    def test_load_enabled_audio_sources_keeps_zero_retention_as_background_by_default(self):
         prefs = {
             "audio_sources": [
                 {"source": "default", "label": "Desk", "stt_enabled": True, "stt_retention_hours": 0},
@@ -109,6 +109,30 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(sources[0].retention_hours, 24)
         self.assertEqual(sources[1].label, "TV")
         self.assertFalse(sources[1].background_only)
+
+    def test_load_enabled_audio_sources_skips_zero_retention_when_background_disabled(self):
+        prefs = {
+            "audio_sources": [
+                {
+                    "source": "rtsp://example/recorder",
+                    "label": "Recorder",
+                    "stt_enabled": True,
+                    "stt_retention_hours": 0,
+                    "background_hearing_enabled": False,
+                },
+                {
+                    "source": "rtsp://example/google-tv",
+                    "label": "Google TV",
+                    "stt_enabled": True,
+                    "stt_retention_hours": 0,
+                    "background_hearing_enabled": True,
+                },
+            ]
+        }
+        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].label, "Google TV")
+        self.assertTrue(sources[0].background_only)
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
@@ -155,7 +179,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertFalse(settings.stt_enabled)
         self.assertFalse(settings.config.wake_word_enabled)
 
-    def test_load_runtime_settings_disables_zero_retention_source(self):
+    def test_load_runtime_settings_uses_zero_retention_as_background_by_default(self):
         base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
         settings = self.audio_daemon.load_runtime_settings(
             base_config,
@@ -175,6 +199,26 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertFalse(settings.stt_enabled)
         self.assertTrue(settings.config.background_only)
         self.assertEqual(settings.config.retention_hours, 24)
+
+    def test_load_runtime_settings_disables_background_when_requested(self):
+        base_config = self.audio_daemon.AudioSourceConfig("rtsp://example", "Recorder", 24, False, background_only=True)
+        settings = self.audio_daemon.load_runtime_settings(
+            base_config,
+            {
+                "stt_provider": "stt.home_assistant_cloud",
+                "audio_sources": [
+                    {
+                        "source": "rtsp://example",
+                        "label": "Recorder",
+                        "stt_enabled": True,
+                        "stt_retention_hours": 0,
+                        "background_hearing_enabled": False,
+                    }
+                ],
+            },
+        )
+        self.assertFalse(settings.stt_enabled)
+        self.assertFalse(settings.config.background_only)
 
     def test_append_background_audio_log_prunes_only_matching_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:

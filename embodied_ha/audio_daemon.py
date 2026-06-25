@@ -128,6 +128,12 @@ def load_preferences() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def background_hearing_enabled(item: dict) -> bool:
+    if "background_hearing_enabled" in item:
+        return item.get("background_hearing_enabled") is True
+    return True
+
+
 def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSourceConfig]:
     prefs = preferences if isinstance(preferences, dict) else load_preferences()
     raw_sources = prefs.get("audio_sources")
@@ -149,6 +155,8 @@ def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSou
         except Exception:
             retention = 60
         background_only = retention <= 0
+        if background_only and not background_hearing_enabled(item):
+            continue
         enabled.append(
             AudioSourceConfig(
                 source=source,
@@ -208,7 +216,7 @@ def load_runtime_settings(
                 retention = int(item.get("stt_retention_hours", base_config.retention_hours))
             except Exception:
                 retention = base_config.retention_hours
-            background_only = retention <= 0
+            background_only = retention <= 0 and background_hearing_enabled(item)
             effective_config = AudioSourceConfig(
                 source=base_config.source,
                 label=base_config.label,
@@ -216,7 +224,7 @@ def load_runtime_settings(
                 wake_word_enabled=bool(item.get("wake_word_enabled")),
                 background_only=background_only,
             )
-            stt_enabled = item.get("stt_enabled") is True and not background_only
+            stt_enabled = item.get("stt_enabled") is True and retention > 0
             break
 
     return RuntimeSettings(
