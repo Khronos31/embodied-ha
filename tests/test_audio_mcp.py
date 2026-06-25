@@ -66,6 +66,13 @@ class AudioMcpTests(unittest.TestCase):
                 "/config/embodied-ha/log/active_listen_log.jsonl",
             )
 
+    def test_default_auditory_events_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_mcp.default_auditory_events_path(),
+                "/config/embodied-ha/log/auditory_events.jsonl",
+            )
+
     def test_listen_defaults_to_first_configured_audio_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = Path(tmpdir) / "preferences.json"
@@ -188,6 +195,21 @@ class AudioMcpTests(unittest.TestCase):
                  mock.patch.object(self.audio_mcp, "now", return_value=self.audio_mcp.parse_ts("2026-06-25T11:00:00+09:00")):
                 payload = self._json(self.audio_mcp.read_audio_log({"limit": 5, "since_minutes": 10}))
         self.assertEqual([entry["text"] for entry in payload], ["recent"])
+
+    def test_read_heard_audio_log_filters_recent_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "auditory_events.jsonl"
+            log_path.write_text(
+                "\n".join([
+                    json.dumps({"timestamp": "2026-06-25T10:00:00+09:00", "source": "A", "transcript": "old"}, ensure_ascii=False),
+                    json.dumps({"timestamp": "2026-06-25T10:55:00+09:00", "source": "A", "transcript": "recent"}, ensure_ascii=False),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(self.audio_mcp, "AUDITORY_EVENTS_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "now", return_value=self.audio_mcp.parse_ts("2026-06-25T11:00:00+09:00")):
+                payload = self._json(self.audio_mcp.read_heard_audio_log({"limit": 5, "since_minutes": 10}))
+        self.assertEqual([entry["transcript"] for entry in payload], ["recent"])
 
     def test_transcribe_routes_to_ha_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -28,6 +28,7 @@ DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
 DEFAULT_ACTIVE_LISTEN_LOG_FILE = "/data/embodied-ha/log/active_listen_log.jsonl"
+DEFAULT_AUDITORY_EVENTS_FILE = "/data/embodied-ha/log/auditory_events.jsonl"
 _ACTIVE_LISTEN_LOCK = threading.Lock()
 
 
@@ -45,11 +46,23 @@ def default_active_listen_log_path() -> str:
     return "/config/embodied-ha/log/active_listen_log.jsonl"
 
 
+def default_auditory_events_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "auditory_events.jsonl")
+    return "/config/embodied-ha/log/auditory_events.jsonl"
+
+
 AUDIO_LOG_FILE = clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path()
 ACTIVE_LISTEN_LOG_FILE = (
     clean(os.environ.get("EHA_ACTIVE_LISTEN_LOG_FILE"))
     or default_active_listen_log_path()
     or DEFAULT_ACTIVE_LISTEN_LOG_FILE
+)
+AUDITORY_EVENTS_FILE = (
+    clean(os.environ.get("EHA_AUDITORY_EVENTS_FILE"))
+    or default_auditory_events_path()
+    or DEFAULT_AUDITORY_EVENTS_FILE
 )
 
 
@@ -154,7 +167,26 @@ TOOL_LISTEN = build_listen_spec()
 
 TOOL_READ_AUDIO_LOG = {
     "name": "read_audio_log",
-    "description": "最近の音声認識ログを読む。STTデーモンが記録した発話テキストの一覧。",
+    "description": "最近の常時STT生ログを読む。VAD/STTの成功・失敗・スキップ診断を含む。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "返す件数。デフォルト20",
+            },
+            "since_minutes": {
+                "type": "integer",
+                "description": "指定した分以内のログだけ返す",
+            },
+        },
+    },
+}
+
+
+TOOL_READ_HEARD_AUDIO_LOG = {
+    "name": "read_heard_audio_log",
+    "description": "最近の常時STTで聞こえた発話ログを読む。会話コンテキストに入る聴覚イベント。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -336,6 +368,14 @@ def transcribe_audio(path: str) -> str | None:
 
 
 def read_audio_log(args: dict):
+    return read_jsonl_log(AUDIO_LOG_FILE, args)
+
+
+def read_heard_audio_log(args: dict):
+    return read_jsonl_log(AUDITORY_EVENTS_FILE, args)
+
+
+def read_jsonl_log(path: str, args: dict):
     try:
         limit = int(args.get("limit", 20) or 20)
     except Exception:
@@ -354,7 +394,7 @@ def read_audio_log(args: dict):
 
     entries = []
     try:
-        with open(AUDIO_LOG_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -440,43 +480,7 @@ def build_audio_context(entry: dict) -> dict:
 
 
 def read_active_listen_log(args: dict):
-    try:
-        limit = int(args.get("limit", 20) or 20)
-    except Exception:
-        limit = 20
-    limit = max(1, min(limit, 200))
-
-    since_minutes = args.get("since_minutes")
-    cutoff = None
-    if since_minutes is not None:
-        try:
-            minutes = int(since_minutes)
-            if minutes > 0:
-                cutoff = now() - timedelta(minutes=minutes)
-        except Exception:
-            cutoff = None
-
-    entries = []
-    try:
-        with open(ACTIVE_LISTEN_LOG_FILE, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except Exception:
-                    continue
-                if not isinstance(entry, dict):
-                    continue
-                if cutoff is not None:
-                    ts = parse_ts(entry.get("timestamp"))
-                    if ts is None or ts < cutoff:
-                        continue
-                entries.append(entry)
-    except FileNotFoundError:
-        entries = []
-    return [text(json.dumps(entries[-limit:], ensure_ascii=False))]
+    return read_jsonl_log(ACTIVE_LISTEN_LOG_FILE, args)
 
 
 def listen(args: dict):
@@ -559,5 +563,6 @@ if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
+        "read_heard_audio_log": {"spec": TOOL_READ_HEARD_AUDIO_LOG, "handler": read_heard_audio_log},
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
     })
