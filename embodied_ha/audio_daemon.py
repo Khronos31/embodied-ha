@@ -20,6 +20,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from auditory_context import append_auditory_event
+from sensory_origin import classify_sensory_origin
 from state_utils import clean, now, parse_ts
 
 try:
@@ -58,6 +59,8 @@ class AudioSourceConfig:
     retention_hours: int
     wake_word_enabled: bool
     background_only: bool = False
+    room: str = ""
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -164,6 +167,8 @@ def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSou
                 retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
                 wake_word_enabled=bool(item.get("wake_word_enabled")),
                 background_only=background_only,
+                room=clean(item.get("room")),
+                note=clean(item.get("note")),
             )
         )
     return enabled
@@ -223,6 +228,8 @@ def load_runtime_settings(
                 retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
                 wake_word_enabled=bool(item.get("wake_word_enabled")),
                 background_only=background_only,
+                room=clean(item.get("room")) or base_config.room,
+                note=clean(item.get("note")) or base_config.note,
             )
             stt_enabled = item.get("stt_enabled") is True and retention > 0
             break
@@ -469,6 +476,13 @@ def build_background_audio_event(
     vad_mode: str,
     diagnostics: dict | None = None,
 ) -> dict:
+    sensory = classify_sensory_origin(
+        source=config.source,
+        label=config.label,
+        room=config.room,
+        note=config.note,
+        modality="auditory",
+    )
     entry = {
         "timestamp": now().isoformat(timespec="seconds"),
         "kind": "background_audio",
@@ -481,6 +495,7 @@ def build_background_audio_event(
         "stt_requested": False,
         "transcript": None,
         "vad_mode": vad_mode,
+        **sensory,
     }
     if isinstance(diagnostics, dict):
         for key in ("speech_ratio", "peak_db", "mean_db"):
@@ -524,6 +539,13 @@ def build_auditory_event(
     timestamp: str,
     diagnostics: dict | None = None,
 ) -> dict:
+    sensory = classify_sensory_origin(
+        source=config.source,
+        label=config.label,
+        room=config.room,
+        note=config.note,
+        modality="auditory",
+    )
     event = {
         "timestamp": timestamp,
         "modality": "auditory",
@@ -536,6 +558,7 @@ def build_auditory_event(
         "stt_language": language,
         "confidence": None,
         "raw_audio_ref": None,
+        **sensory,
     }
     if isinstance(diagnostics, dict):
         for key in ("vad_mode", "speech_ratio", "peak_db", "mean_db"):

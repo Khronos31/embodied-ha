@@ -12,6 +12,8 @@ source の形式で自動判別:
 """
 import sys, json, base64, subprocess, os, argparse, datetime
 
+from sensory_origin import classify_sensory_origin
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -109,13 +111,24 @@ def camera_context(source):
         "direction": "",
         "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
+    matched = {}
     for item in _load_camera_prefs():
         if not isinstance(item, dict) or _clean(item.get("source")) != source:
             continue
+        matched = item
         context["room"] = _clean(item.get("room") or item.get("label"))
         context["preset"] = _clean(item.get("preset"))
         context["direction"] = _clean(item.get("direction"))
         break
+
+    sensory = classify_sensory_origin(
+        source=source,
+        label=matched.get("label") if isinstance(matched, dict) else "",
+        room=matched.get("room") if isinstance(matched, dict) else "",
+        note=matched.get("note") if isinstance(matched, dict) else "",
+        modality="visual",
+    )
+    context.update(sensory)
     return context
 
 

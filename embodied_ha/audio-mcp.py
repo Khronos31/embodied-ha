@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 from mcp_lib import serve, text
+from sensory_origin import classify_sensory_origin
 from state_utils import clean, now, parse_ts
 
 DEFAULT_SOURCES = [
@@ -233,6 +234,17 @@ def _source_config_map() -> dict[str, dict]:
 def label_for_source(source: str) -> str:
     item = _source_config_map().get(clean(source))
     return clean(item.get("label")) if item else clean(source)
+
+
+def sensory_for_source(source: str, label: str, modality: str = "auditory") -> dict:
+    item = _source_config_map().get(clean(source)) or {}
+    return classify_sensory_origin(
+        source=source,
+        label=label,
+        room=item.get("room") if isinstance(item, dict) else "",
+        note=item.get("note") if isinstance(item, dict) else "",
+        modality=modality,
+    )
 
 
 def active_listen_retention_hours(source: str) -> int:
@@ -472,6 +484,14 @@ def build_audio_context(entry: dict) -> dict:
         "transcript": entry.get("transcript"),
         "stt_provider": entry.get("stt_provider"),
         "stt_language": entry.get("stt_language"),
+        "body_room": entry.get("body_room"),
+        "body_room_label": entry.get("body_room_label"),
+        "source_room": entry.get("source_room"),
+        "source_room_label": entry.get("source_room_label"),
+        "sensory_origin": entry.get("sensory_origin"),
+        "access_mode": entry.get("access_mode"),
+        "move_cost": entry.get("move_cost"),
+        "move_path": entry.get("move_path"),
         "log_ref": {
             "file": active_listen_log_name(),
             "timestamp": entry.get("timestamp"),
@@ -494,6 +514,7 @@ def listen(args: dict):
     timestamp = now().isoformat(timespec="seconds")
     actor = clean(os.environ.get("EHA_ACTOR")) or "unknown"
     source_label = label_for_source(source)
+    sensory = sensory_for_source(source, source_label)
 
     def base_payload() -> dict:
         return {
@@ -506,6 +527,7 @@ def listen(args: dict):
             "duration": duration,
             "duration_sec": duration,
             "transcribe_requested": transcribe,
+            **sensory,
         }
 
     # 未登録でも rtsp:// または default なら直接使用する

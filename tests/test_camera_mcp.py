@@ -10,7 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_camera_mcp_module():
+    import sys
+
     path = ROOT / "embodied_ha" / "camera-mcp.py"
+    sys.path.insert(0, str(ROOT / "embodied_ha"))
     spec = importlib.util.spec_from_file_location("camera_mcp_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
