@@ -542,9 +542,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 status, raw = ha_api_raw_request(f"/stt/{provider}")
                 if status == 200:
-                    self.send_json(json.loads(raw))
+                    try:
+                        self.send_json(json.loads(raw))
+                    except Exception as e:
+                        print(f"[web] /api/stt-info invalid JSON for provider={provider}: {e}; body={raw[:500]}", flush=True)
+                        self.send_json({"languages": [], "error": "invalid JSON from HA STT API"}, 502)
                 else:
-                    self.send_json({"languages": [], "error": f"HTTP {status}"})
+                    print(f"[web] /api/stt-info failed for provider={provider}: status={status} body={raw[:500]}", flush=True)
+                    self.send_json({"languages": [], "error": f"HTTP {status}", "detail": raw[:500]}, 502)
         elif path == "/api/extra-context":
             filepath = EXTRA_CONTEXT_FILE
             if not os.path.exists(filepath):

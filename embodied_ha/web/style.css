@@ -1229,3 +1229,79 @@ select.ha-entity-select {
     border-color: var(--claude-accent) !important;
     box-shadow: 0 0 0 3px rgba(204, 90, 55, 0.15) !important;
 }
+
+/* --- STT UX Improvements --- */
+
+/* Select wrapper for positioning spinner */
+.stt-select-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    max-width: 320px;
+    width: 100%;
+}
+
+.stt-select-wrapper select {
+    width: 100%;
+    max-width: 100%;
+}
+
+/* Inline spinner shown next to label during language reload */
+.stt-loading-indicator {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--claude-text-sub);
+}
+
+.stt-loading-indicator.visible {
+    display: flex;
+}
+
+/* Small CSS-only spinner */
+.stt-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--claude-border);
+    border-top-color: var(--claude-accent);
+    border-radius: 50%;
+    animation: stt-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes stt-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Select "loading" visual: slightly dimmed + pointer disabled */
+select.stt-loading {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+/* Error banner shown below a select on fetch failure */
+.stt-error-banner {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background-color: #fdf2f0;
+    border: 1px solid #f0cec8;
+    color: #9b3c28;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.stt-error-banner.visible {
+    display: flex;
+}
+
+.stt-error-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+}
+

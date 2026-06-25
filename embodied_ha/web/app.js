@@ -56,8 +56,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Verify backend connection and swap to live data mode if available
     checkBackendMode();
 
-    document.getElementById('setting-stt-provider')?.addEventListener('change', function() {
-        loadSttLanguages(this.value.trim());
+    document.getElementById('setting-stt-provider')?.addEventListener('change', async function() {
+        const langLoading = document.getElementById('stt-language-loading');
+        const langError   = document.getElementById('stt-language-error');
+        const langSel     = document.getElementById('setting-stt-language');
+        if (langLoading) langLoading.classList.add('visible');
+        if (langError)   langError.classList.remove('visible');
+        if (langSel)     langSel.classList.add('stt-loading');
+        await loadSttLanguages(this.value.trim());
     });
 });
 
@@ -986,22 +992,33 @@ async function fetchSettings() {
 }
 
 async function loadSttLanguages(provider) {
-    const sel = document.getElementById('setting-stt-language');
+    const sel      = document.getElementById('setting-stt-language');
+    const loading  = document.getElementById('stt-language-loading');
+    const errorBnr = document.getElementById('stt-language-error');
     if (!sel) return;
+
     const current = sel.value || 'ja-JP';
-    sel.innerHTML = '<option value="">（読み込み中…）</option>';
+
+    // Show loading state
+    sel.classList.add('stt-loading');
     sel.disabled = true;
+    if (loading)  loading.classList.add('visible');
+    if (errorBnr) errorBnr.classList.remove('visible');
+
     if (!provider) {
         sel.innerHTML = '<option value="">（プロバイダー未設定）</option>';
         sel.disabled = false;
+        sel.classList.remove('stt-loading');
+        if (loading) loading.classList.remove('visible');
         return;
     }
+
     try {
-        const res = await fetch(`/api/stt-info?provider=${encodeURIComponent(provider)}`);
+        const res = await fetch(`${base}/api/stt-info?provider=${encodeURIComponent(provider)}`);
         const data = await res.json();
         const langs = data.languages || [];
         if (langs.length === 0) {
-            sel.innerHTML = '<option value="">（言語一覧を取得できませんでした）</option>';
+            sel.innerHTML = '<option value="">（言語なし）</option>';
         } else {
             sel.innerHTML = langs.map(l =>
                 `<option value="${l}"${l === current ? ' selected' : ''}>${l}</option>`
@@ -1012,16 +1029,29 @@ async function loadSttLanguages(provider) {
             }
         }
     } catch (e) {
-        sel.innerHTML = '<option value="">（取得エラー）</option>';
+        sel.innerHTML = '<option value=""></option>';
+        if (errorBnr) errorBnr.classList.add('visible');
+    } finally {
+        sel.disabled = false;
+        sel.classList.remove('stt-loading');
+        if (loading) loading.classList.remove('visible');
     }
-    sel.disabled = false;
 }
 
 async function loadSttProviders(currentProvider) {
-    const sel = document.getElementById('setting-stt-provider');
+    const sel      = document.getElementById('setting-stt-provider');
+    const loading  = document.getElementById('stt-provider-loading');
+    const errorBnr = document.getElementById('stt-provider-error');
     if (!sel) return;
+
+    // Show loading state
+    sel.classList.add('stt-loading');
+    sel.disabled = true;
+    if (loading)  loading.classList.add('visible');
+    if (errorBnr) errorBnr.classList.remove('visible');
+
     try {
-        const res = await fetch('/api/ha-entities?domain=stt');
+        const res = await fetch(`${base}/api/ha-entities?domain=stt`);
         const entities = await res.json();
         const opts = ['<option value="">（未設定）</option>'];
         for (const e of (entities || [])) {
@@ -1038,7 +1068,12 @@ async function loadSttProviders(currentProvider) {
             sel.insertBefore(opt, sel.children[1]);
         }
     } catch (e) {
-        sel.innerHTML = '<option value="">（取得エラー）</option>';
+        sel.innerHTML = '<option value=""></option>';
+        if (errorBnr) errorBnr.classList.add('visible');
+    } finally {
+        sel.disabled = false;
+        sel.classList.remove('stt-loading');
+        if (loading) loading.classList.remove('visible');
     }
 }
 

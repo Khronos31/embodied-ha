@@ -225,16 +225,36 @@
                             </p>
                             <div class="form-group">
                                 <label class="form-label">STTプロバイダー (stt_provider)</label>
-                                <select id="setting-stt-provider" class="form-input" style="max-width:320px;">
-                                    <option value="">（読み込み中…）</option>
-                                </select>
+                                <div class="stt-select-wrapper">
+                                    <select id="setting-stt-provider" class="form-input stt-loading">
+                                        <option value=""></option>
+                                    </select>
+                                </div>
+                                <div class="stt-loading-indicator visible" id="stt-provider-loading">
+                                    <span class="stt-spinner"></span>
+                                    <span>プロバイダー一覧を読み込んでいます…</span>
+                                </div>
+                                <div class="stt-error-banner" id="stt-provider-error">
+                                    <span class="stt-error-icon">⚠️</span>
+                                    <span>プロバイダー一覧の取得に失敗しました。HAの接続を確認してください。</span>
+                                </div>
                                 <p class="form-hint">HA統合で利用可能なSTTプロバイダー。未設定の場合は音量のみ検出します。</p>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">STT言語 (stt_language)</label>
-                                <select id="setting-stt-language" class="form-input" style="max-width:320px;">
-                                    <option value="">（読み込み中…）</option>
-                                </select>
+                                <div class="stt-select-wrapper">
+                                    <select id="setting-stt-language" class="form-input stt-loading">
+                                        <option value=""></option>
+                                    </select>
+                                </div>
+                                <div class="stt-loading-indicator visible" id="stt-language-loading">
+                                    <span class="stt-spinner"></span>
+                                    <span>言語一覧を読み込んでいます…</span>
+                                </div>
+                                <div class="stt-error-banner" id="stt-language-error">
+                                    <span class="stt-error-icon">⚠️</span>
+                                    <span>言語一覧の取得に失敗しました。STTプロバイダーを確認してください。</span>
+                                </div>
                                 <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
                             </div>
                             <div class="form-group">
@@ -243,6 +263,7 @@
                                 <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
                             </div>
                         </section>
+
 
                         <!-- Section: Speakers -->
                         <section class="settings-section card">
