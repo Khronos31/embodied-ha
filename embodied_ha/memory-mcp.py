@@ -481,7 +481,7 @@ def main() -> None:
                         "entities": {"type": "array", "items": {"type": "string"}},
                         "actors": {"type": "array", "items": {"type": "string"}},
                         "importance": {"type": "number"},
-                        "evidence": {"type": "array", "items": {"type": "object"}, "description": "根拠。camera_context オブジェクトを含められる"},
+                        "evidence": {"type": "array", "items": {"type": "object"}, "description": "根拠。camera_context / audio_context オブジェクトを含められる"},
                         "status": {"type": "string"},
                         "links": {"type": "object"},
                     },

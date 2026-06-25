@@ -1,5 +1,5 @@
 name: Embodied HA
-version: "1.6.2"
+version: "1.7.0"
 slug: embodied_ha
 description: An autonomous agent that lives in your home, running three loops for conversation, observation, and exploration.
 arch:
@@ -11,6 +11,8 @@ boot: manual
 # /config を読み書きマウント（/config/.tools の認証・CLIを再利用し、スクリプト群も参照）
 map:
   - config:rw
+devices:
+  - /dev/snd
 # MQTTブローカー情報を Supervisor から注入してもらう
 services:
   - mqtt:need

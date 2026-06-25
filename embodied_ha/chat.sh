@@ -206,7 +206,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）、短時間の音声確認（listen）
 - **今の自分にはできない**: ファイルの読み書き・設定ファイルの編集・コードの実装。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 
@@ -338,7 +338,7 @@ _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path,
-                    "memory", "ha", "sociality", "hacontrol", "camera", "http"],
+                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "http"],
                    env={**CLAUDE_ENV, "EHA_ACTOR": "chat"}, check=False)
     if os.path.exists(_mcp_path):
         cmd += ["--allowedTools",
@@ -354,7 +354,7 @@ if _sd:
                 "mcp__sociality__record_consent,mcp__sociality__should_interrupt,"
                 "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
-                "mcp__camera__camera_get,mcp__camera__camera_ptz,"
+                "mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,"
                 "mcp__http__http_get,mcp__http__http_post",
                 "--mcp-config", _mcp_path]
 
@@ -596,4 +596,3 @@ if p and mqtt_host:
          "-r", "-t", "embodied_ha/observation/state", "-m", p[:255]],
         capture_output=True, timeout=5)
 PYEOF
-

@@ -231,6 +231,30 @@ def _normalize_camera_context(value: Any) -> dict[str, str]:
     return {key: _clean(value.get(key)) for key in allowed if _clean(value.get(key))}
 
 
+def _normalize_audio_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    source = _clean(value.get("source"))
+    if source:
+        out["source"] = source
+    try:
+        duration = int(value.get("duration"))
+    except Exception:
+        duration = None
+    if duration is not None:
+        out["duration"] = duration
+    try:
+        peak_db = float(value.get("peak_db"))
+    except Exception:
+        peak_db = None
+    if peak_db is not None:
+        out["peak_db"] = peak_db
+    if isinstance(value.get("has_sound"), bool):
+        out["has_sound"] = value["has_sound"]
+    return out
+
+
 def _normalize_evidence(values: Any) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         return []
@@ -243,6 +267,11 @@ def _normalize_evidence(values: Any) -> list[dict[str, Any]]:
                     camera_context = _normalize_camera_context(value)
                     if camera_context:
                         cleaned[key] = camera_context
+                    continue
+                if key == "audio_context":
+                    audio_context = _normalize_audio_context(value)
+                    if audio_context:
+                        cleaned[key] = audio_context
                     continue
                 text = _clean(value)
                 if text:

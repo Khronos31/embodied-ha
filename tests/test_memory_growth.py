@@ -103,6 +103,30 @@ class MemoryGrowthTests(unittest.TestCase):
         )
         self.assertEqual(recorded["evidence"][0]["camera_context"]["preset"], "sofa")
 
+    def test_episode_evidence_preserves_audio_context(self):
+        recorded = self._json(
+            self.memory_mcp.record_episode(
+                {
+                    "timestamp": "2026-06-23T10:00:00+09:00",
+                    "day": "2026-06-23",
+                    "source": "watch",
+                    "kind": "observation",
+                    "summary": "テレビから音がしている",
+                    "evidence": [
+                        {
+                            "audio_context": {
+                                "source": "capture_tv",
+                                "duration": 5,
+                                "peak_db": -12.3,
+                                "has_sound": True,
+                            }
+                        }
+                    ],
+                }
+            )
+        )
+        self.assertEqual(recorded["evidence"][0]["audio_context"]["source"], "capture_tv")
+
     def test_get_episode_returns_default_for_missing_id(self):
         payload = self._json(self.memory_mcp.get_episode({}))
         self.assertEqual(payload["id"], "")

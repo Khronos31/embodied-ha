@@ -5,7 +5,7 @@
 サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
 明示的に env ブロックへ注入する（env継承に依存しない）。
 
-サーバー名: camera / ha / hacontrol / http / tts / memory / sensors / sociality
+サーバー名: audio / camera / ha / hacontrol / http / tts / memory / sensors / sociality
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_PREFS_FILE, EHA_LOG_DIR, EHA_TOOLS_PATH, PATH
 """
@@ -32,6 +32,7 @@ def _server(script, extra_args=None):
 
 
 REGISTRY = {
+    "audio":   lambda: _server("audio-mcp.py"),
     "camera": lambda: _server("camera-mcp.py", [
         "--ha-url",     os.environ["HA_URL"],
         "--go2rtc-url", os.environ.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
