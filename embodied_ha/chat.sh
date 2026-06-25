@@ -147,6 +147,7 @@ print(json.dumps(state, ensure_ascii=False, indent=2))
 
 # --- 在宅・部屋状況（応答先の決定に使う。sensorsマニフェストをTemplate APIで描画）---
 SENSORS=$(python3 "$SCRIPT_DIR/render-sensors.py" --context chat 2>/dev/null || echo "取得失敗")
+BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
 
 # --- features.md（アドオンの機能一覧。会話の文脈が自然なら紹介してよい）---
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
@@ -166,7 +167,7 @@ PYEOF
 fi
 
 # --- Claude呼び出し ---
-RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess, sys
 
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
@@ -190,6 +191,7 @@ turn_taking_state = os.environ.get("TURN_TAKING_STATE", "")
 character       = os.environ.get("CHARACTER", "")
 resident        = os.environ.get("RESIDENT", "ユーザー")
 body_state      = os.environ.get("EHA_BODY_STATE", "") or "{}"
+body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "")
 
 entity_table_block = f"""# 操作できる家電（エンティティ対応表）
@@ -247,6 +249,8 @@ prompt = f"""# あなた自身について
 # 身体状態
 {body_state}
 - curiosity が高いほど、少し踏み込んで考える。energy が低いほど、返事は短く省エネに。stress が高いほど、落ち着いて控えめに。confidence が高いほど、断定気味に。social_openness が高いほど、会話を開きやすくする。
+
+{body_location_context}
 
 # 直前の turn-taking / 境界状態
 {turn_taking_state}

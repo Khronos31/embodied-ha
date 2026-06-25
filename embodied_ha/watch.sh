@@ -65,6 +65,7 @@ FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || 
 tlog "2c.loops list"
 
 # --- 2d. anomaly 検出（センサー急変 / 未解決ループ / ズレ）---
+BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
 ANOMALY_CONTEXT=$(SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" SENSORS_DATA="$SENSORS" OPEN_LOOPS_JSON="$OPEN_LOOPS_JSON" TRIGGER_REASON="${TRIGGER_REASON:-定期実行}" python3 << 'PYEOF'
 import os
 import sys
@@ -183,7 +184,7 @@ fi
 tlog "4d.直近の会話"
 
 # --- 4. Claude呼び出し（2フェーズ: カメラ選択 → 観察）---
-RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
+RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
 import base64, json, os, subprocess, urllib.request, time
 
 def _ptime(label):
@@ -296,6 +297,7 @@ anomaly_context = os.environ.get("ANOMALY_CONTEXT", "（特になし）")
 character     = os.environ.get("CHARACTER", "")
 resident      = os.environ.get("RESIDENT", "ユーザー")
 body_state    = os.environ.get("EHA_BODY_STATE", "") or "{}"
+body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 features_md   = os.environ.get("FEATURES_MD", "")
 features_presented = os.environ.get("FEATURES_PRESENTED", "")
 extra_context = os.environ.get("EXTRA_CONTEXT", "")
@@ -353,6 +355,8 @@ context = f"""# あなた自身について
 【身体状態】
 {body_state}
 - curiosity が高いほど細部を掘る。energy が低いほど短く。stress が高いほど静かに。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
+
+{body_location_context}
 【気にかけていること（やりかけ・約束。関係する変化があれば speak で触れてよい）】
 {open_loops}
 【センサー状態】
@@ -392,6 +396,8 @@ phase1_prompt = f"""今、家のどのカメラを確認すべきか判断して
 # 利用可能なカメラ
 {_cam_list}
 （不要なカメラは選ばない。カメラが設定されていない or 確認不要なら [] で返答可）
+
+{body_location_context}
 
 【センサー状態】
 {sensors}

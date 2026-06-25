@@ -97,6 +97,7 @@ trap '_web_idle' EXIT
 
 COMMON_CHAR="$CHARACTER"
 BODY_STATE="${EHA_BODY_STATE:-{}}"
+BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
 
 # モードごとに使う MCP サーバー（空なら MCP なし）。case 内で上書き。
 MCP_SERVERS=""
@@ -202,6 +203,8 @@ SYS_PROMPT="${COMMON_CHAR}
 # 身体状態
 ${BODY_STATE}
 - curiosity が高いほど新規の掘り下げを優先。energy が低いほど短く省エネに。stress が高いほど落ち着いて。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
+
+${BODY_LOCATION_CONTEXT}
 
 # 異常トリガー
 ${ANOMALY_CONTEXT}
