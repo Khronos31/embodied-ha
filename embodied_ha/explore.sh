@@ -120,6 +120,7 @@ case "$MODE" in
 読み取り:
 - get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
 - ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
+- get_location / move_to / estimate_move_cost … 今どの部屋にいるかを確認し、必要なら部屋グラフ上で移動する。別室を確認する前に、直接行くかスマホ/HAでremote確認するかを意識する。
 - camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
 - listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
 - read_heard_audio_log … 常時STTで聞こえた最近の発話ログを読む。
@@ -129,7 +130,7 @@ case "$MODE" in
 - remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
 - record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。音は意味がある出来事だけ記録し、必要なときだけ audio_context を evidence に含める。
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
-- loops_add … 後で気にかけたいことを追加（text に一言、source="explore"）。
+- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。"
     TASK="# やってほしいこと
@@ -137,15 +138,15 @@ case "$MODE" in
 2. センサーだけでは分からないことは camera_get / listen で確認してもよい（必要なときだけ。STTは費用がかかるので、文字で知りたいときだけtranscribe:true）
 3. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 4. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
-    MCP_SERVERS="sensors ha camera audio memory sociality http"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    MCP_SERVERS="sensors ha camera audio body memory sociality http"
     ;;
   reflect)
     MODE_LABEL="物思いにふける時間"
     TOOLS_DESC="# 使えるツール
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。思い出したいことがあれば使ってよい（複数キーワードはOR検索）。
 - remember … 思ったこと・気づいたパターンを長期記憶に残す（note に一文）。
-- loops_add … 後で気にかけたいことを追加（text に一言、source=\"explore\"）。"
+- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。"
     TASK="# やってほしいこと
 今は手を動かす時間じゃなく、静かに考える時間です。
 1. ${RESIDENT}さんや最近の家の出来事、自分が見てきたことを思い返す
@@ -160,7 +161,7 @@ case "$MODE" in
     TOOLS_DESC="# 使えるツール
 - WebSearch … Web検索。気になったことを自由に調べてください。
 - remember … 知って面白かったこと・覚えておきたいことを長期記憶に残す（note に一文）。
-- loops_add … 後で気にかけたいことを追加（text に一言、source=\"explore\"）。"
+- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。"
     TASK="# やってほしいこと
 今は自分の興味で調べ物をしていい時間です。
 1. 最近の家の出来事や${RESIDENT}さんとの会話、自分の関心から、調べてみたいことを見つける（家と無関係なことでもいい。純粋な好奇心でOK）

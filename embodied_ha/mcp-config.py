@@ -5,11 +5,12 @@
 サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
 明示的に env ブロックへ注入する（env継承に依存しない）。
 
-サーバー名: audio / camera / ha / hacontrol / http / tts / memory / sensors / sociality
+サーバー名: audio / body / camera / ha / hacontrol / http / tts / memory / sensors / sociality
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_PREFS_FILE, EHA_LOG_DIR, EHA_DATA_DIR, EHA_AUDIO_LOG_FILE,
      EHA_AUDITORY_EVENTS_FILE, EHA_ACTIVE_LISTEN_LOG_FILE,
      EHA_ACTIVE_LISTEN_RETENTION_HOURS, EHA_BACKGROUND_AUDIO_LOG_FILE,
+     EHA_ROOM_GRAPH_FILE, EHA_BODY_LOCATION_FILE, EHA_BODY_LOCATION_LOG_FILE,
      EHA_TOOLS_PATH, PATH
 """
 import sys
@@ -24,6 +25,7 @@ _ENV_KEYS = (
     "EHA_PREFS_FILE", "EHA_LOG_DIR", "EHA_DATA_DIR", "EHA_AUDIO_LOG_FILE",
     "EHA_AUDITORY_EVENTS_FILE", "EHA_ACTIVE_LISTEN_LOG_FILE",
     "EHA_ACTIVE_LISTEN_RETENTION_HOURS", "EHA_BACKGROUND_AUDIO_LOG_FILE",
+    "EHA_ROOM_GRAPH_FILE", "EHA_BODY_LOCATION_FILE", "EHA_BODY_LOCATION_LOG_FILE",
     "EHA_TOOLS_PATH", "EHA_ACTOR", "PATH",
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
@@ -39,6 +41,7 @@ def _server(script, extra_args=None):
 
 REGISTRY = {
     "audio":   lambda: _server("audio-mcp.py"),
+    "body":    lambda: _server("body-mcp.py"),
     "camera": lambda: _server("camera-mcp.py", [
         "--ha-url",     os.environ["HA_URL"],
         "--go2rtc-url", os.environ.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
