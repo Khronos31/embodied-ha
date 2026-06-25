@@ -7,7 +7,9 @@
 
 サーバー名: audio / camera / ha / hacontrol / http / tts / memory / sensors / sociality
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
-     EHA_PREFS_FILE, EHA_LOG_DIR, EHA_TOOLS_PATH, PATH
+     EHA_PREFS_FILE, EHA_LOG_DIR, EHA_DATA_DIR, EHA_AUDIO_LOG_FILE,
+     EHA_ACTIVE_LISTEN_LOG_FILE, EHA_ACTIVE_LISTEN_RETENTION_HOURS,
+     EHA_TOOLS_PATH, PATH
 """
 import sys
 import os
@@ -18,7 +20,9 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 # MCPサーバーへ引き継ぐ環境変数（存在するものだけ）
 _ENV_KEYS = (
     "HA_URL", "GO2RTC_BASE", "SUPERVISOR_TOKEN",
-    "EHA_PREFS_FILE", "EHA_LOG_DIR", "EHA_TOOLS_PATH", "EHA_ACTOR", "PATH",
+    "EHA_PREFS_FILE", "EHA_LOG_DIR", "EHA_DATA_DIR", "EHA_AUDIO_LOG_FILE",
+    "EHA_ACTIVE_LISTEN_LOG_FILE", "EHA_ACTIVE_LISTEN_RETENTION_HOURS",
+    "EHA_TOOLS_PATH", "EHA_ACTOR", "PATH",
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
 

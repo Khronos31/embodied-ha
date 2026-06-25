@@ -121,6 +121,8 @@ case "$MODE" in
 - get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
 - ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
 - camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
+- listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false。文字で知りたいときだけ true。
+- read_active_listen_log … 自分から listen で聞きに行った最近のログを読む。
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
 記録（JSONには書かない）:
 - remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
@@ -131,11 +133,11 @@ case "$MODE" in
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
-2. センサーだけでは分からないことは camera_get で確認してもよい（必要なときだけ）
+2. センサーだけでは分からないことは camera_get / listen で確認してもよい（必要なときだけ。STTは費用がかかるので、文字で知りたいときだけtranscribe:true）
 3. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 4. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
-    MCP_SERVERS="sensors ha camera memory sociality http"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    MCP_SERVERS="sensors ha camera audio memory sociality http"
     ;;
   reflect)
     MODE_LABEL="物思いにふける時間"

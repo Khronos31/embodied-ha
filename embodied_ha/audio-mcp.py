@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import timedelta
 import urllib.error
 import urllib.request
@@ -26,6 +27,8 @@ DEFAULT_SOURCES = [
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
+DEFAULT_ACTIVE_LISTEN_LOG_FILE = "/data/embodied-ha/log/active_listen_log.jsonl"
+_ACTIVE_LISTEN_LOCK = threading.Lock()
 
 
 def default_audio_log_path() -> str:
@@ -35,7 +38,19 @@ def default_audio_log_path() -> str:
     return "/config/embodied-ha/log/audio_log.jsonl"
 
 
+def default_active_listen_log_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "active_listen_log.jsonl")
+    return "/config/embodied-ha/log/active_listen_log.jsonl"
+
+
 AUDIO_LOG_FILE = clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path()
+ACTIVE_LISTEN_LOG_FILE = (
+    clean(os.environ.get("EHA_ACTIVE_LISTEN_LOG_FILE"))
+    or default_active_listen_log_path()
+    or DEFAULT_ACTIVE_LISTEN_LOG_FILE
+)
 
 
 def _prefs_path() -> str:
@@ -54,10 +69,11 @@ def load_preferences() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def load_audio_sources() -> list[dict]:
+def load_audio_source_configs() -> list[dict]:
     sources = load_preferences().get("audio_sources")
     if not isinstance(sources, list):
-        return list(DEFAULT_SOURCES)
+        sources = DEFAULT_SOURCES
+
     normalized = []
     for item in sources:
         if not isinstance(item, dict):
@@ -67,13 +83,23 @@ def load_audio_sources() -> list[dict]:
             source = "default"
         if not source:
             continue
-        normalized.append(
-            {
-                "source": source,
-                "label": clean(item.get("label")) or source,
-            }
-        )
+        config = dict(item)
+        config["source"] = source
+        config["label"] = clean(item.get("label")) or source
+        normalized.append(config)
     return normalized or list(DEFAULT_SOURCES)
+
+
+def load_audio_sources() -> list[dict]:
+    return [
+        {"source": item["source"], "label": item["label"]}
+        for item in load_audio_source_configs()
+    ]
+
+
+def default_listen_source() -> str:
+    sources = load_audio_sources()
+    return sources[0]["source"] if sources else DEFAULT_SOURCE
 
 
 def load_stt_provider() -> str | None:
@@ -141,8 +167,53 @@ TOOL_READ_AUDIO_LOG = {
 }
 
 
+TOOL_READ_ACTIVE_LISTEN_LOG = {
+    "name": "read_active_listen_log",
+    "description": "最近、自分から listen で聞きに行った音声ログを読む。常時STTログとは別。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "返す件数。デフォルト20",
+            },
+            "since_minutes": {
+                "type": "integer",
+                "description": "指定した分以内のログだけ返す",
+            },
+        },
+    },
+}
+
+
 def _source_map() -> dict[str, dict]:
     return {clean(item.get("source")): item for item in load_audio_sources()}
+
+
+def _source_config_map() -> dict[str, dict]:
+    return {clean(item.get("source")): item for item in load_audio_source_configs()}
+
+
+def label_for_source(source: str) -> str:
+    item = _source_config_map().get(clean(source))
+    return clean(item.get("label")) if item else clean(source)
+
+
+def active_listen_retention_hours(source: str) -> int:
+    item = _source_config_map().get(clean(source))
+    if item:
+        try:
+            retention = int(item.get("stt_retention_hours", 0))
+        except Exception:
+            retention = 0
+        if retention > 0:
+            return retention
+
+    try:
+        fallback = int(clean(os.environ.get("EHA_ACTIVE_LISTEN_RETENTION_HOURS")) or 24)
+    except Exception:
+        fallback = 24
+    return max(1, fallback)
 
 
 def normalize_duration(value) -> int:
@@ -300,21 +371,123 @@ def read_audio_log(args: dict):
     return [text(json.dumps(entries[-limit:], ensure_ascii=False))]
 
 
+def append_active_listen_log(entry: dict, retention_hours: int, source: str) -> None:
+    path = ACTIVE_LISTEN_LOG_FILE
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    cutoff = now() - timedelta(hours=max(1, retention_hours))
+    source_key = clean(source)
+
+    with _ACTIVE_LISTEN_LOCK:
+        entries: list[dict] = []
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed = json.loads(line)
+                        except Exception:
+                            continue
+                        if not isinstance(parsed, dict):
+                            continue
+                        ts = parse_ts(parsed.get("timestamp"))
+                        if source_key and clean(parsed.get("source")) == source_key and ts and ts < cutoff:
+                            continue
+                        entries.append(parsed)
+            except Exception:
+                entries = []
+        entries.append(entry)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for item in entries:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, path)
+
+
+def record_active_listen(entry: dict, source: str) -> None:
+    try:
+        append_active_listen_log(entry, active_listen_retention_hours(source), source)
+    except Exception:
+        pass
+
+
+def read_active_listen_log(args: dict):
+    try:
+        limit = int(args.get("limit", 20) or 20)
+    except Exception:
+        limit = 20
+    limit = max(1, min(limit, 200))
+
+    since_minutes = args.get("since_minutes")
+    cutoff = None
+    if since_minutes is not None:
+        try:
+            minutes = int(since_minutes)
+            if minutes > 0:
+                cutoff = now() - timedelta(minutes=minutes)
+        except Exception:
+            cutoff = None
+
+    entries = []
+    try:
+        with open(ACTIVE_LISTEN_LOG_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if cutoff is not None:
+                    ts = parse_ts(entry.get("timestamp"))
+                    if ts is None or ts < cutoff:
+                        continue
+                entries.append(entry)
+    except FileNotFoundError:
+        entries = []
+    return [text(json.dumps(entries[-limit:], ensure_ascii=False))]
+
+
 def listen(args: dict):
-    source = clean(args.get("source")) or DEFAULT_SOURCE
+    source = clean(args.get("source")) or default_listen_source()
     if source == "alsa":
         source = "default"
-    # 未登録でも rtsp:// または default なら直接使用する
-    if source not in _source_map() and not (source.startswith("rtsp://") or source == "default"):
-        return [text(json.dumps({"error": f"unknown source: {source}"}, ensure_ascii=False))], True
-
-    ffmpeg = find_ffmpeg()
-    if not ffmpeg:
-        return [text(json.dumps({"error": "ffmpeg not found"}, ensure_ascii=False))]
 
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    timestamp = now().isoformat(timespec="seconds")
+    actor = clean(os.environ.get("EHA_ACTOR")) or "unknown"
+    source_label = label_for_source(source)
+
+    def base_payload() -> dict:
+        return {
+            "timestamp": timestamp,
+            "kind": "active_listen",
+            "actor": actor,
+            "source": source,
+            "source_label": source_label,
+            "duration": duration,
+            "transcribe_requested": transcribe,
+        }
+
+    # 未登録でも rtsp:// または default なら直接使用する
+    if source not in _source_map() and not (source.startswith("rtsp://") or source == "default"):
+        payload = {**base_payload(), "error": f"unknown source: {source}"}
+        record_active_listen(payload, source)
+        return [text(json.dumps({"error": payload["error"]}, ensure_ascii=False))], True
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        payload = {**base_payload(), "error": "ffmpeg not found"}
+        record_active_listen(payload, source)
+        return [text(json.dumps({"error": "ffmpeg not found"}, ensure_ascii=False))]
+
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = None
     try:
@@ -325,20 +498,23 @@ def listen(args: dict):
         record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
         if record.returncode != 0:
             message = clean(record.stderr) or clean(record.stdout) or "recording failed"
+            payload = {**base_payload(), "error": message}
+            record_active_listen(payload, source)
             return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
 
         peak_db, mean_db = analyze_volume(tmp_path)
         payload = {
-            "source": source,
-            "duration": duration,
-            "timestamp": now().isoformat(timespec="seconds"),
+            **base_payload(),
             "has_sound": has_sound_from_peak(peak_db),
             "peak_db": peak_db,
             "mean_db": mean_db,
             "transcript": None,
         }
         if transcribe:
+            payload["stt_provider"] = load_stt_provider()
+            payload["stt_language"] = load_stt_language()
             payload["transcript"] = transcribe_audio(tmp_path)
+        record_active_listen(payload, source)
         return [text(json.dumps(payload, ensure_ascii=False))]
     finally:
         if tmp_path:
@@ -352,4 +528,5 @@ if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
+        "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
     })

@@ -58,9 +58,30 @@ class AudioMcpTests(unittest.TestCase):
                 "/config/embodied-ha/log/audio_log.jsonl",
             )
 
+
+    def test_default_active_listen_log_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_mcp.default_active_listen_log_path(),
+                "/config/embodied-ha/log/active_listen_log.jsonl",
+            )
+
+    def test_listen_defaults_to_first_configured_audio_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            prefs.write_text(
+                json.dumps({"audio_sources": [{"source": "rtsp://example.local/tv", "label": "TV"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs)}, clear=False):
+                self.assertEqual(self.audio_mcp.default_listen_source(), "rtsp://example.local/tv")
+
     def test_listen_returns_ffmpeg_missing_error(self):
-        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value=None):
-            payload = self._json(self.audio_mcp.listen({}))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value=None):
+                payload = self._json(self.audio_mcp.listen({}))
         self.assertEqual(payload["error"], "ffmpeg not found")
 
     def test_listen_go2rtc_without_stt(self):
@@ -68,9 +89,12 @@ class AudioMcpTests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="", stderr=""),
             mock.Mock(returncode=0, stdout="", stderr="mean_volume: -28.1 dB\nmax_volume: -12.3 dB\n"),
         ]
-        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
-             mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
-            payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5}))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+                 mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
+                payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5}))
 
         self.assertEqual(payload["source"], "rtsp://localhost:8554/capture_tv")
         self.assertEqual(payload["duration"], 5)
@@ -88,13 +112,54 @@ class AudioMcpTests(unittest.TestCase):
             mock.Mock(returncode=0, stdout="", stderr=""),
             mock.Mock(returncode=0, stdout="", stderr="mean_volume: -80.0 dB\nmax_volume: -70.0 dB\n"),
         ]
-        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
-             mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
-            payload = self._json(self.audio_mcp.listen({"source": "alsa", "duration": 3}))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+                 mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
+                payload = self._json(self.audio_mcp.listen({"source": "alsa", "duration": 3}))
 
         first_cmd = run_mock.call_args_list[0].args[0]
         self.assertEqual(first_cmd[:5], ["/usr/bin/ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertFalse(payload["has_sound"])
+
+
+    def test_listen_records_active_log_with_transcript(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            responses = [mock.Mock(returncode=0, stdout="", stderr="")]
+            fixed_now = self.audio_mcp.parse_ts("2026-06-26T10:00:00+09:00")
+            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+                 mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses), \
+                 mock.patch.object(self.audio_mcp, "analyze_volume", return_value=(-11.0, -24.0)), \
+                 mock.patch.object(self.audio_mcp, "transcribe_audio", return_value="聞こえました"), \
+                 mock.patch.object(self.audio_mcp, "now", return_value=fixed_now), \
+                 mock.patch.dict(os.environ, {"EHA_ACTOR": "explore"}, clear=False):
+                payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5, "transcribe": True}))
+
+            self.assertEqual(payload["transcript"], "聞こえました")
+            entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["kind"], "active_listen")
+            self.assertEqual(entries[0]["actor"], "explore")
+            self.assertTrue(entries[0]["transcribe_requested"])
+            self.assertEqual(entries[0]["transcript"], "聞こえました")
+
+    def test_read_active_listen_log_filters_recent_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            log_path.write_text(
+                "\n".join([
+                    json.dumps({"timestamp": "2026-06-26T09:00:00+09:00", "source": "A", "transcript": "old"}, ensure_ascii=False),
+                    json.dumps({"timestamp": "2026-06-26T09:55:00+09:00", "source": "A", "transcript": "recent"}, ensure_ascii=False),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "now", return_value=self.audio_mcp.parse_ts("2026-06-26T10:00:00+09:00")):
+                payload = self._json(self.audio_mcp.read_active_listen_log({"limit": 5, "since_minutes": 10}))
+        self.assertEqual([entry["transcript"] for entry in payload], ["recent"])
 
     def test_read_audio_log_filters_recent_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:

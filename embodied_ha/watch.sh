@@ -436,7 +436,7 @@ phase2_prompt = context + f"""
 - ha_get … センサー欄に無い個別エンティティの現在値・履歴を読む（気になったときだけ）
 - get_sensors … 主要センサーをまとめて取り直す
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
-- listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false。声や音楽を文字で知りたいときだけ true にする。
+- listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false。声や音楽を文字で知りたいときだけ true にする。結果は active_listen_log に残る。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
 - record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。
@@ -500,7 +500,7 @@ if _sd:
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
-        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,"
+        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_active_listen_log,"
                     "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"

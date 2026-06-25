@@ -78,7 +78,9 @@ if [ -f "$EHA_DATA_DIR/audio_log.jsonl" ] && [ ! -f "$EHA_DATA_DIR/log/audio_log
     echo "[run] migrated audio log to $EHA_DATA_DIR/log/audio_log.jsonl"
 fi
 export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-$EHA_DATA_DIR/log/audio_log.jsonl}"
+export EHA_ACTIVE_LISTEN_LOG_FILE="${EHA_ACTIVE_LISTEN_LOG_FILE:-$EHA_DATA_DIR/log/active_listen_log.jsonl}"
 echo "[run] audio log: ${EHA_AUDIO_LOG_FILE}"
+echo "[run] active listen log: ${EHA_ACTIVE_LISTEN_LOG_FILE}"
 
 # --- Claude 設定ディレクトリ ---
 # デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。
