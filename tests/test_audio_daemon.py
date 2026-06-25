@@ -27,6 +27,20 @@ class AudioDaemonTests(unittest.TestCase):
     def setUp(self):
         self.audio_daemon = load_audio_daemon_module()
 
+    def test_default_audio_log_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_daemon.default_audio_log_path(),
+                "/config/embodied-ha/audio_log.jsonl",
+            )
+
+    def test_summarize_chunk_levels_ignores_non_finite_values(self):
+        peak_db, mean_db = self.audio_daemon.summarize_chunk_levels(
+            [float("-inf"), -33.24, -12.05]
+        )
+        self.assertEqual(peak_db, -12.1)
+        self.assertEqual(mean_db, -22.6)
+
     def test_load_enabled_audio_sources_filters_and_normalizes(self):
         prefs = {
             "audio_sources": [
@@ -63,6 +77,39 @@ class AudioDaemonTests(unittest.TestCase):
 
             rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual([row["text"] for row in rows], ["old tv", "new desk"])
+
+    def test_process_segment_records_diagnostics_on_empty_transcription(self):
+        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        logged_entries: list[dict] = []
+
+        def capture_entry(entry, retention_hours, source_label):
+            logged_entries.append(entry)
+
+        with mock.patch.object(self.audio_daemon, "write_wav"), \
+             mock.patch.object(self.audio_daemon, "transcribe_wav", side_effect=RuntimeError("empty transcription")), \
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry):
+            self.audio_daemon.process_segment(
+                config,
+                b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
+                "stt.google_ai_stt",
+                "ja-JP",
+                "token",
+                [],
+                diagnostics={
+                    "vad_mode": "fallback",
+                    "speech_ratio": 0.625,
+                    "peak_db": -17.4,
+                    "mean_db": -34.8,
+                },
+            )
+
+        self.assertEqual(len(logged_entries), 1)
+        entry = logged_entries[0]
+        self.assertEqual(entry["error"], "empty transcription")
+        self.assertEqual(entry["vad_mode"], "fallback")
+        self.assertEqual(entry["speech_ratio"], 0.625)
+        self.assertEqual(entry["peak_db"], -17.4)
+        self.assertEqual(entry["mean_db"], -34.8)
 
 
 if __name__ == "__main__":

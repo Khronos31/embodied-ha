@@ -51,6 +51,13 @@ class AudioMcpTests(unittest.TestCase):
         self.assertEqual(cmd[:5], ["ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertIn("7", cmd)
 
+    def test_default_audio_log_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_mcp.default_audio_log_path(),
+                "/config/embodied-ha/audio_log.jsonl",
+            )
+
     def test_listen_returns_ffmpeg_missing_error(self):
         with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value=None):
             payload = self._json(self.audio_mcp.listen({}))

@@ -26,7 +26,16 @@ DEFAULT_SOURCES = [
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
-AUDIO_LOG_FILE = os.environ.get("EHA_AUDIO_LOG_FILE", "/data/embodied-ha/audio_log.jsonl")
+
+
+def default_audio_log_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "audio_log.jsonl")
+    return "/config/embodied-ha/audio_log.jsonl"
+
+
+AUDIO_LOG_FILE = clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path()
 
 
 def _prefs_path() -> str:

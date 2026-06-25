@@ -60,7 +60,6 @@ if [ -z "${PULSE_SERVER:-}" ]; then
 fi
 
 mkdir -p /data/embodied-ha
-export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-/data/embodied-ha/audio_log.jsonl}"
 
 # --- 永続データの置き場（/config/embodied-ha/）---
 # HA設定ディレクトリ配下に置くことで、Studio Code Server / Samba / File Editor
@@ -73,6 +72,8 @@ if ! mkdir -p "$EHA_DATA_DIR" 2>/dev/null; then
     echo "[run] /config/embodied-ha が使えないため /data/embodied-ha にフォールバック"
 fi
 echo "[run] 永続データ: ${EHA_DATA_DIR}"
+export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-$EHA_DATA_DIR/audio_log.jsonl}"
+echo "[run] audio log: ${EHA_AUDIO_LOG_FILE}"
 
 # --- Claude 設定ディレクトリ ---
 # デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。

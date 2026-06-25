@@ -59,8 +59,15 @@ def prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
 
+def default_audio_log_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "audio_log.jsonl")
+    return "/config/embodied-ha/audio_log.jsonl"
+
+
 def audio_log_path() -> str:
-    return os.environ.get("EHA_AUDIO_LOG_FILE", DEFAULT_AUDIO_LOG_FILE)
+    return clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path() or DEFAULT_AUDIO_LOG_FILE
 
 
 def canonical_source(value: str) -> str:
@@ -211,6 +218,15 @@ def detect_voice(chunk: bytes, detector) -> float:
         return fallback_voice_probability(chunk)
 
 
+def summarize_chunk_levels(levels: list[float]) -> tuple[float | None, float | None]:
+    finite_levels = [level for level in levels if math.isfinite(level)]
+    if not finite_levels:
+        return None, None
+    peak_db = max(finite_levels)
+    mean_db = sum(finite_levels) / len(finite_levels)
+    return round(peak_db, 1), round(mean_db, 1)
+
+
 def write_wav(path: str, audio_bytes: bytes) -> None:
     with wave.open(path, "wb") as wav_file:
         wav_file.setnchannels(CHANNELS)
@@ -315,6 +331,7 @@ def process_segment(
     language: str,
     token: str,
     wake_words: list[str],
+    diagnostics: dict | None = None,
 ) -> None:
     duration_sec = len(audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH)
     if duration_sec < MIN_SEGMENT_SECONDS:
@@ -327,6 +344,8 @@ def process_segment(
         "source": config.label,
         "duration_sec": round(duration_sec, 2),
     }
+    if isinstance(diagnostics, dict):
+        entry.update(diagnostics)
     tmp_path: str | None = None
     try:
         if not provider:
@@ -344,7 +363,13 @@ def process_segment(
     except Exception as exc:
         entry["error"] = str(exc)
         append_audio_log(entry, config.retention_hours, config.label)
-        log(f"segment processing failed for {config.label}: {exc}")
+        log(
+            "segment processing failed for "
+            f"{config.label}: {exc} "
+            f"(duration={entry.get('duration_sec')}s, vad={entry.get('vad_mode','unknown')}, "
+            f"speech_ratio={entry.get('speech_ratio')}, peak_db={entry.get('peak_db')}, "
+            f"mean_db={entry.get('mean_db')})"
+        )
     finally:
         if tmp_path:
             try:
@@ -356,12 +381,12 @@ def process_segment(
 def new_vad():
     if SileroVoiceActivityDetector is None:
         log("pysilero_vad unavailable; using -50dB fallback VAD")
-        return None
+        return None, "fallback"
     try:
-        return SileroVoiceActivityDetector()
+        return SileroVoiceActivityDetector(), "silero"
     except Exception as exc:
         log(f"failed to initialize pysilero_vad; using fallback VAD: {exc}")
-        return None
+        return None, "fallback"
 
 
 def audio_worker(
@@ -377,14 +402,16 @@ def audio_worker(
 
     while True:
         proc: subprocess.Popen | None = None
-        detector = new_vad()
+        detector, vad_mode = new_vad()
         prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
         segment_chunks: list[bytes] = []
+        segment_levels: list[float] = []
+        segment_speech_chunks = 0
         silence_chunks = 0
         active = False
         try:
             cmd = build_ffmpeg_command(config.source)
-            log(f"starting ffmpeg for {config.label}: {' '.join(cmd)}")
+            log(f"starting ffmpeg for {config.label} ({vad_mode}): {' '.join(cmd)}")
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -401,11 +428,17 @@ def audio_worker(
 
                 voice_prob = detect_voice(chunk, detector)
                 is_speech = voice_prob > VAD_THRESHOLD
+                level_db = chunk_db(chunk)
 
                 if active:
                     segment_chunks.append(chunk)
+                    segment_levels.append(level_db)
+                    if is_speech:
+                        segment_speech_chunks += 1
                     silence_chunks = 0 if is_speech else silence_chunks + 1
                     if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
+                        peak_db, mean_db = summarize_chunk_levels(segment_levels)
+                        speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
                         process_segment(
                             config,
                             b"".join(segment_chunks),
@@ -413,8 +446,16 @@ def audio_worker(
                             language,
                             token,
                             wake_words,
+                            diagnostics={
+                                "vad_mode": vad_mode,
+                                "speech_ratio": speech_ratio,
+                                "peak_db": peak_db,
+                                "mean_db": mean_db,
+                            },
                         )
                         segment_chunks = []
+                        segment_levels = []
+                        segment_speech_chunks = 0
                         silence_chunks = 0
                         active = False
                         prebuffer.clear()
@@ -426,6 +467,9 @@ def audio_worker(
                 elif is_speech:
                     segment_chunks = list(prebuffer)
                     segment_chunks.append(chunk)
+                    segment_levels = [chunk_db(buffered) for buffered in prebuffer]
+                    segment_levels.append(level_db)
+                    segment_speech_chunks = 1
                     silence_chunks = 0
                     active = True
                     prebuffer.clear()
@@ -433,6 +477,8 @@ def audio_worker(
                     prebuffer.append(chunk)
 
             if active and segment_chunks:
+                peak_db, mean_db = summarize_chunk_levels(segment_levels)
+                speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
                 process_segment(
                     config,
                     b"".join(segment_chunks),
@@ -440,6 +486,12 @@ def audio_worker(
                     language,
                     token,
                     wake_words,
+                    diagnostics={
+                        "vad_mode": vad_mode,
+                        "speech_ratio": speech_ratio,
+                        "peak_db": peak_db,
+                        "mean_db": mean_db,
+                    },
                 )
 
             rc = proc.wait(timeout=2)
