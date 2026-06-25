@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
+from auditory_context import append_auditory_event
 from state_utils import clean, now, parse_ts
 
 try:
@@ -120,6 +121,8 @@ def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSou
             retention = int(item.get("stt_retention_hours", 60))
         except Exception:
             retention = 60
+        if retention <= 0:
+            continue
         enabled.append(
             AudioSourceConfig(
                 source=source,
@@ -178,6 +181,9 @@ def load_runtime_settings(
                 retention = int(item.get("stt_retention_hours", base_config.retention_hours))
             except Exception:
                 retention = base_config.retention_hours
+            if retention <= 0:
+                stt_enabled = False
+                break
             effective_config = AudioSourceConfig(
                 source=base_config.source,
                 label=base_config.label,
@@ -387,6 +393,35 @@ def append_audio_log(entry: dict, retention_hours: int, source_label: str) -> No
         os.replace(tmp_path, path)
 
 
+def build_auditory_event(
+    config: AudioSourceConfig,
+    transcript: str,
+    duration_sec: float,
+    provider: str | None,
+    language: str,
+    timestamp: str,
+    diagnostics: dict | None = None,
+) -> dict:
+    event = {
+        "timestamp": timestamp,
+        "modality": "auditory",
+        "origin": config.source,
+        "source": config.label,
+        "speaker_hint": "user" if config.wake_word_enabled else "unknown",
+        "transcript": transcript,
+        "duration_sec": round(duration_sec, 2),
+        "stt_provider": provider,
+        "stt_language": language,
+        "confidence": None,
+        "raw_audio_ref": None,
+    }
+    if isinstance(diagnostics, dict):
+        for key in ("vad_mode", "speech_ratio", "peak_db", "mean_db"):
+            if key in diagnostics:
+                event[key] = diagnostics[key]
+    return event
+
+
 def should_trigger_wake_word(text_value: str, wake_words: list[str]) -> bool:
     lowered = clean(text_value).lower()
     return bool(lowered) and any(word in lowered for word in wake_words)
@@ -456,6 +491,19 @@ def process_segment(
         text_value = transcribe_wav(tmp_path, provider, language, token)
         entry["text"] = text_value
         append_audio_log(entry, config.retention_hours, config.label)
+        append_auditory_event(
+            build_auditory_event(
+                config,
+                text_value,
+                duration_sec,
+                provider,
+                language,
+                timestamp,
+                diagnostics=diagnostics,
+            ),
+            config.retention_hours,
+            config.label,
+        )
         if config.wake_word_enabled and should_trigger_wake_word(text_value, wake_words):
             post_wake_message(text_value)
     except Exception as exc:

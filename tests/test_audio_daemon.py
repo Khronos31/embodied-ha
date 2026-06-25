@@ -34,6 +34,15 @@ class AudioDaemonTests(unittest.TestCase):
                 "/config/embodied-ha/log/audio_log.jsonl",
             )
 
+    def test_default_auditory_events_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            from auditory_context import default_auditory_events_path
+
+            self.assertEqual(
+                default_auditory_events_path(),
+                "/config/embodied-ha/log/auditory_events.jsonl",
+            )
+
     def test_summarize_chunk_levels_ignores_non_finite_values(self):
         peak_db, mean_db = self.audio_daemon.summarize_chunk_levels(
             [float("-inf"), -33.24, -12.05]
@@ -79,6 +88,17 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
 
+    def test_load_enabled_audio_sources_skips_zero_retention(self):
+        prefs = {
+            "audio_sources": [
+                {"source": "default", "label": "Desk", "stt_enabled": True, "stt_retention_hours": 0},
+                {"source": "rtsp://example", "label": "TV", "stt_enabled": True, "stt_retention_hours": 1},
+            ]
+        }
+        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].label, "TV")
+
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
         settings = self.audio_daemon.load_runtime_settings(
@@ -123,6 +143,25 @@ class AudioDaemonTests(unittest.TestCase):
         )
         self.assertFalse(settings.stt_enabled)
         self.assertFalse(settings.config.wake_word_enabled)
+
+    def test_load_runtime_settings_disables_zero_retention_source(self):
+        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        settings = self.audio_daemon.load_runtime_settings(
+            base_config,
+            {
+                "stt_provider": "stt.home_assistant_cloud",
+                "audio_sources": [
+                    {
+                        "source": "default",
+                        "label": "Desk",
+                        "stt_enabled": True,
+                        "stt_retention_hours": 0,
+                        "wake_word_enabled": True,
+                    }
+                ],
+            },
+        )
+        self.assertFalse(settings.stt_enabled)
 
     def test_should_trigger_wake_word_is_case_insensitive(self):
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("AkAnE, listen", ["akane"]))
@@ -180,15 +219,71 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(entry["peak_db"], -17.4)
         self.assertEqual(entry["mean_db"], -34.8)
 
+    def test_process_segment_writes_auditory_event_on_success(self):
+        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        logged_entries: list[dict] = []
+        auditory_events: list[dict] = []
+
+        def capture_log(entry, retention_hours, source_label):
+            logged_entries.append(entry)
+
+        def capture_event(entry, retention_hours=None, source_label=None):
+            auditory_events.append((entry, retention_hours, source_label))
+
+        with mock.patch.object(self.audio_daemon, "write_wav"), \
+             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="こんにちは。聞こえますか？"), \
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_log), \
+             mock.patch.object(self.audio_daemon, "append_auditory_event", side_effect=capture_event):
+            self.audio_daemon.process_segment(
+                config,
+                b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
+                "stt.home_assistant_cloud",
+                "ja-JP",
+                "token",
+                [],
+                diagnostics={
+                    "vad_mode": "fallback",
+                    "speech_ratio": 0.42,
+                    "peak_db": -36.8,
+                    "mean_db": -49.7,
+                },
+            )
+
+        self.assertEqual(len(logged_entries), 1)
+        self.assertEqual(logged_entries[0]["text"], "こんにちは。聞こえますか？")
+        self.assertEqual(len(auditory_events), 1)
+        event, retention_hours, source_label = auditory_events[0]
+        self.assertEqual(retention_hours, 24)
+        self.assertEqual(source_label, "Desk")
+        self.assertEqual(event["modality"], "auditory")
+        self.assertEqual(event["transcript"], "こんにちは。聞こえますか？")
+        self.assertEqual(event["source"], "Desk")
+        self.assertEqual(event["origin"], "default")
+        self.assertEqual(event["speaker_hint"], "user")
+        self.assertEqual(event["duration_sec"], 1.0)
+        self.assertEqual(event["stt_provider"], "stt.home_assistant_cloud")
+        self.assertEqual(event["stt_language"], "ja-JP")
+        self.assertEqual(event["vad_mode"], "fallback")
+        self.assertEqual(event["speech_ratio"], 0.42)
+        self.assertEqual(event["peak_db"], -36.8)
+        self.assertEqual(event["mean_db"], -49.7)
+        self.assertIsNone(event["confidence"])
+        self.assertIsNone(event["raw_audio_ref"])
+
     def test_process_segment_skips_fallback_noise_before_stt(self):
         config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
         logged_entries: list[dict] = []
+        auditory_events: list[dict] = []
 
         def capture_entry(entry, retention_hours, source_label):
             logged_entries.append(entry)
 
+        def capture_event(entry, retention_hours=None, source_label=None):
+            auditory_events.append((entry, retention_hours, source_label))
+
         with mock.patch.object(self.audio_daemon, "transcribe_wav") as transcribe_mock, \
-             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry):
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry), \
+             mock.patch.object(self.audio_daemon, "append_auditory_event", side_effect=capture_event):
             self.audio_daemon.process_segment(
                 config,
                 b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
@@ -209,6 +304,76 @@ class AudioDaemonTests(unittest.TestCase):
         entry = logged_entries[0]
         self.assertTrue(entry["skipped"])
         self.assertEqual(entry["skip_reason"], "fallback_gate_low_speech_ratio")
+        self.assertEqual(auditory_events, [])
+
+    def test_format_recent_auditory_prompt_is_voice_specific(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "auditory_events.jsonl"
+            rows = [
+                {
+                    "timestamp": "2026-06-25T09:59:00+09:00",
+                    "modality": "auditory",
+                    "origin": "default",
+                    "source": "Desk",
+                    "speaker_hint": "unknown",
+                    "transcript": "別の発話",
+                    "duration_sec": 1.1,
+                    "peak_db": -30.4,
+                    "speech_ratio": 0.31,
+                },
+                {
+                    "timestamp": "2026-06-25T10:00:00+09:00",
+                    "modality": "auditory",
+                    "origin": "default",
+                    "source": "Desk",
+                    "speaker_hint": "user",
+                    "transcript": "こんにちは",
+                    "duration_sec": 2.4,
+                    "peak_db": -36.8,
+                    "speech_ratio": 0.42,
+                },
+            ]
+            events_path.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"EHA_AUDITORY_EVENTS_FILE": str(events_path)}, clear=False):
+                from auditory_context import format_recent_auditory_prompt
+
+                prompt = format_recent_auditory_prompt("こんにちは")
+
+        self.assertIn("# 直近の聴覚入力", prompt)
+        self.assertIn("これはテキストチャットではなく、部屋の音声入力からSTTされた発話です。", prompt)
+        self.assertIn("時刻: 2026-06-25T10:00:00+09:00", prompt)
+        self.assertIn("音源: Desk (default)", prompt)
+        self.assertIn("話者推定: user", prompt)
+        self.assertIn("内容: 「こんにちは」", prompt)
+        self.assertIn("duration=2.4s, peak=-36.8dB, speech_ratio=0.42", prompt)
+        self.assertNotIn("別の発話", prompt)
+
+    def test_append_auditory_event_prunes_only_matching_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "auditory_events.jsonl"
+            events_path.write_text(
+                "\n".join([
+                    json.dumps({"timestamp": "2026-06-25T08:00:00+09:00", "source": "Desk", "transcript": "old desk"}, ensure_ascii=False),
+                    json.dumps({"timestamp": "2026-06-25T08:00:00+09:00", "source": "TV", "transcript": "old tv"}, ensure_ascii=False),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"EHA_AUDITORY_EVENTS_FILE": str(events_path)}, clear=False), \
+                 mock.patch("auditory_context.now", return_value=self.audio_daemon.parse_ts("2026-06-25T10:00:00+09:00")):
+                from auditory_context import append_auditory_event
+
+                append_auditory_event(
+                    {"timestamp": "2026-06-25T10:00:00+09:00", "source": "Desk", "transcript": "new desk"},
+                    retention_hours=1,
+                    source_label="Desk",
+                )
+
+            rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual([row["transcript"] for row in rows], ["old tv", "new desk"])
 
 
 if __name__ == "__main__":
