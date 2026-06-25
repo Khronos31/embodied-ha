@@ -330,7 +330,7 @@ msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type
 # --- MCP 設定生成（recall/ha_get/remember/loops/sociality/ha_call_service を配線）---
 # 家電操作・記憶・社会性レイヤー・ループはすべて MCP ツール呼びで処理する。
 # chat はユーザー起点なので操作サーバー(hacontrol)を常時繋ぐ。
-ユーザー発話に「それ」「あれ」「これ」「さっきの」などの指示語があり、文脈上カメラや直前 scene の対象を指しそうなら resolve_reference を使う。
+# ユーザー発話に「それ」「あれ」「これ」「さっきの」などの指示語があり、文脈上カメラや直前 scene の対象を指しそうなら resolve_reference を使う。
 # JSON は reply / private / proposal_resolved / preferences_update のみ。
 cmd = [CLAUDE, "-p", "--model", "sonnet",
        "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
