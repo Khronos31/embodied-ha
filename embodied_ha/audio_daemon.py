@@ -610,6 +610,13 @@ def process_segment(
     }
     if isinstance(diagnostics, dict):
         entry.update(diagnostics)
+    entry.update(classify_sensory_origin(
+        source=config.source,
+        label=config.label,
+        room=config.room,
+        note=config.note,
+        modality="auditory",
+    ))
     vad_mode = clean(entry.get("vad_mode")) or "unknown"
     should_transcribe, skip_reason = should_transcribe_segment(vad_mode, entry)
     if not should_transcribe:
