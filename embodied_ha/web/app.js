@@ -2167,7 +2167,9 @@ function updateAudioPreview() {
     if (audioEvents.length > 0) {
         const latest = audioEvents[0];
         const timeStr = new Date(latest.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const tags = audioEventTags.filter(t => t.event_id === latest.event_id);
+        const tags = audioEventTags
+            .filter(t => t.event_id === latest.event_id)
+            .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         const tagLabel = tags.length > 0 ? tags[tags.length - 1].label : '';
         previewEl.textContent = tagLabel ? `${timeStr} - ${tagLabel}` : `${timeStr} - ${latest.source || '音'}`;
     } else {
@@ -2199,7 +2201,8 @@ function renderAudioEvents() {
         const tags = audioEventTags.filter(t => t.event_id === eventId);
         tags.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        const manualTag = tags.find(t => t.type === 'manual');
+        const manualTags = tags.filter(t => t.type === 'manual');
+        const manualTag = manualTags.length > 0 ? manualTags[manualTags.length - 1] : null;
 
         const source = event.source || '不明なマイク';
         const origin = event.situational_context?.sensory_origin || 'direct';
