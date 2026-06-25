@@ -31,8 +31,8 @@ TMP_DIR = Path("/tmp/embodied-ha/audio")
 def default_audio_log_path() -> str:
     data_dir = clean(os.environ.get("EHA_DATA_DIR"))
     if data_dir:
-        return os.path.join(data_dir, "audio_log.jsonl")
-    return "/config/embodied-ha/audio_log.jsonl"
+        return os.path.join(data_dir, "log", "audio_log.jsonl")
+    return "/config/embodied-ha/log/audio_log.jsonl"
 
 
 AUDIO_LOG_FILE = clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path()

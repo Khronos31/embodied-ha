@@ -31,7 +31,7 @@ class AudioDaemonTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
             self.assertEqual(
                 self.audio_daemon.default_audio_log_path(),
-                "/config/embodied-ha/audio_log.jsonl",
+                "/config/embodied-ha/log/audio_log.jsonl",
             )
 
     def test_summarize_chunk_levels_ignores_non_finite_values(self):

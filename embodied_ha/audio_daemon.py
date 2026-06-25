@@ -42,7 +42,7 @@ FALLBACK_SEGMENT_MIN_SPEECH_RATIO = 0.12
 FALLBACK_SEGMENT_MIN_PEAK_DB = -42.0
 FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
-DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/audio_log.jsonl"
+DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/log/audio_log.jsonl"
 _LOG_LOCK = threading.Lock()
 
 
@@ -74,8 +74,8 @@ def prefs_path() -> str:
 def default_audio_log_path() -> str:
     data_dir = clean(os.environ.get("EHA_DATA_DIR"))
     if data_dir:
-        return os.path.join(data_dir, "audio_log.jsonl")
-    return "/config/embodied-ha/audio_log.jsonl"
+        return os.path.join(data_dir, "log", "audio_log.jsonl")
+    return "/config/embodied-ha/log/audio_log.jsonl"
 
 
 def audio_log_path() -> str:

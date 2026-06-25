@@ -72,7 +72,12 @@ if ! mkdir -p "$EHA_DATA_DIR" 2>/dev/null; then
     echo "[run] /config/embodied-ha が使えないため /data/embodied-ha にフォールバック"
 fi
 echo "[run] 永続データ: ${EHA_DATA_DIR}"
-export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-$EHA_DATA_DIR/audio_log.jsonl}"
+mkdir -p "$EHA_DATA_DIR/log"
+if [ -f "$EHA_DATA_DIR/audio_log.jsonl" ] && [ ! -f "$EHA_DATA_DIR/log/audio_log.jsonl" ]; then
+    mv "$EHA_DATA_DIR/audio_log.jsonl" "$EHA_DATA_DIR/log/audio_log.jsonl"
+    echo "[run] migrated audio log to $EHA_DATA_DIR/log/audio_log.jsonl"
+fi
+export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-$EHA_DATA_DIR/log/audio_log.jsonl}"
 echo "[run] audio log: ${EHA_AUDIO_LOG_FILE}"
 
 # --- Claude 設定ディレクトリ ---
