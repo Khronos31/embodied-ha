@@ -46,7 +46,7 @@ export PATH="${EHA_TOOLS_PATH}:${PATH}"
 # libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。
 # ソケットパスは HAOS バージョンで変わる可能性があるため複数パスを試す。
 if [ -z "${PULSE_SERVER:-}" ]; then
-    for _pulse_sock in "/run/pulse/native" "/var/run/pulse/native" "/run/user/0/pulse/native"; do
+    for _pulse_sock in "/run/audio/native" "/run/pulse/native" "/var/run/pulse/native" "/run/user/0/pulse/native"; do
         if [ -S "$_pulse_sock" ]; then
             export PULSE_SERVER="unix://${_pulse_sock}"
             echo "[run] PulseAudio: PULSE_SERVER=unix://${_pulse_sock}"

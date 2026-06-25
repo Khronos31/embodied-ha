@@ -25,31 +25,40 @@ DEFAULT_SOURCES = [
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
-TOOL_LISTEN = {
-    "name": "listen",
-    "description": (
-        "短時間だけ音を聴く。source は preferences.json の audio_sources に登録した "
-        "RTSP URL または alsa。省略時は最初のソース。"
-        "transcribe は必要なときだけ true にする。"
-    ),
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "source": {
-                "type": "string",
-                "description": "RTSP URL（rtsp://…）または alsa。省略時はデフォルトソース",
-            },
-            "duration": {
-                "type": "integer",
-                "description": "録音秒数。デフォルト 5、最大 30",
-            },
-            "transcribe": {
-                "type": "boolean",
-                "description": "STT を行うか。デフォルト false",
+def build_listen_spec() -> dict:
+    sources = load_audio_sources()
+    source_lines = "\n".join(
+        f'  - "{s["source"]}"（{s["label"]}）' for s in sources
+    )
+    default = sources[0]["source"] if sources else "alsa"
+    return {
+        "name": "listen",
+        "description": (
+            "短時間だけ音を聴く。\n"
+            f"利用可能なソース:\n{source_lines}\n"
+            f"source を省略すると最初のソース（{default}）を使う。"
+            "transcribe は必要なときだけ true にする。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "上記ソースのいずれか。省略時はデフォルト",
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "録音秒数。デフォルト 5、最大 30",
+                },
+                "transcribe": {
+                    "type": "boolean",
+                    "description": "STT を行うか。デフォルト false",
+                },
             },
         },
-    },
-}
+    }
+
+TOOL_LISTEN = build_listen_spec()
 
 
 def _prefs_path() -> str:
@@ -268,8 +277,16 @@ def diagnose(args: dict):
     pulse_env = {k: v for k, v in os.environ.items() if "PULSE" in k or "AUDIO" in k or "SOUND" in k}
     result["env_pulse"] = pulse_env
 
+    # preferences.json が読めているか確認
+    result["prefs_file"] = _prefs_path() or "(EHA_PREFS_FILE未設定)"
+    prefs = load_preferences()
+    result["audio_sources_loaded"] = prefs.get("audio_sources", "(未設定→DEFAULTを使用)")
+    result["stt_provider_loaded"] = prefs.get("stt_provider", "(未設定)")
+
     # ソケットを実際に探す（HAOSがどのパスに置くか確認）
     socket_candidates = [
+        "/run/audio",
+        "/run/audio/native",
         "/run/pulse/native",
         "/var/run/pulse/native",
         "/run/user/0/pulse/native",
@@ -279,6 +296,11 @@ def diagnose(args: dict):
         "/var/run/pulse",
         "/run/pulse",
     ]
+    # /run/audio 配下も全列挙
+    try:
+        result["run_audio_ls"] = sorted(os.listdir("/run/audio"))
+    except Exception as e:
+        result["run_audio_ls"] = str(e)
     result["socket_search"] = {}
     for path in socket_candidates:
         import stat as stat_mod
