@@ -373,7 +373,7 @@ if _sd:
                 "mcp__sociality__record_consent,mcp__sociality__should_interrupt,"
                 "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
-                "mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_active_listen_log,"
+                "mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                 "mcp__http__http_get,mcp__http__http_post",
                 "--mcp-config", _mcp_path]
 

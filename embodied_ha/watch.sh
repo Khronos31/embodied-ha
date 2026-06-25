@@ -500,7 +500,7 @@ if _sd:
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
-        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_active_listen_log,"
+        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                     "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
