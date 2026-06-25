@@ -1017,6 +1017,31 @@ async function loadSttLanguages(provider) {
     sel.disabled = false;
 }
 
+async function loadSttProviders(currentProvider) {
+    const sel = document.getElementById('setting-stt-provider');
+    if (!sel) return;
+    try {
+        const res = await fetch('/api/ha-entities?domain=stt');
+        const entities = await res.json();
+        const opts = ['<option value="">（未設定）</option>'];
+        for (const e of (entities || [])) {
+            const selected = e.entity_id === currentProvider ? ' selected' : '';
+            const label = e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
+            opts.push(`<option value="${e.entity_id}"${selected}>${label}</option>`);
+        }
+        sel.innerHTML = opts.join('');
+        if (currentProvider && !entities.find(e => e.entity_id === currentProvider)) {
+            const opt = document.createElement('option');
+            opt.value = currentProvider;
+            opt.textContent = currentProvider + ' (不明)';
+            opt.selected = true;
+            sel.insertBefore(opt, sel.children[1]);
+        }
+    } catch (e) {
+        sel.innerHTML = '<option value="">（取得エラー）</option>';
+    }
+}
+
 async function renderSettingsForm() {
     if (!prefsData) return;
 
@@ -1027,12 +1052,9 @@ async function renderSettingsForm() {
     if (extraContextEl) {
         extraContextEl.value = extraContextData || "";
     }
-    const sttProviderEl = document.getElementById('setting-stt-provider');
-    if (sttProviderEl) {
-        sttProviderEl.value = prefsData.stt_provider || '';
-    }
-    // まず言語一覧を読み込んでからセットする
     const sttProvider = prefsData.stt_provider || '';
+    await loadSttProviders(sttProvider);
+    // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
