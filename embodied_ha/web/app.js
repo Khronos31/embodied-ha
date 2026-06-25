@@ -1628,8 +1628,8 @@ function addAudioSourceRow(source = {}) {
                 </label>
             </div>
             <div class="form-group audio-source-retention-group" style="margin-bottom:0; display: ${sttEnabledVal ? 'block' : 'none'};">
-                <label>保持時間 (時間)</label>
-                <input type="number" class="audio-source-stt-retention form-input" min="1" step="1" value="${sttRetentionVal}">
+                <label>保持時間 (時間・0で自動STT停止)</label>
+                <input type="number" class="audio-source-stt-retention form-input" min="0" step="1" value="${sttRetentionVal}">
             </div>
             <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
                 <label class="checkbox-label" style="margin-bottom: 0;">
@@ -1660,7 +1660,8 @@ function getAudioSourcesFromUI() {
         const label = card.querySelector('.audio-source-label').value.trim();
         const note = card.querySelector('.audio-source-note').value.trim();
         const stt_enabled = card.querySelector('.audio-source-stt-enabled').checked;
-        const stt_retention_hours = parseInt(card.querySelector('.audio-source-stt-retention').value, 10) || 60;
+        const sttRetentionRaw = parseInt(card.querySelector('.audio-source-stt-retention').value, 10);
+        const stt_retention_hours = Number.isNaN(sttRetentionRaw) ? 60 : Math.max(0, sttRetentionRaw);
         const wake_word_enabled = card.querySelector('.audio-source-wake-word-enabled').checked;
         
         if (source) {
