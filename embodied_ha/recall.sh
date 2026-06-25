@@ -181,9 +181,31 @@ def audio_listened_values(d):
     return " ".join(str(part) for part in parts if part)
 
 
+def format_audio_background(d):
+    timestamp = (d.get("timestamp", "") or "")[:19]
+    source = str(d.get("source") or d.get("origin") or "不明").strip()
+    peak = d.get("peak_db")
+    speech_ratio = d.get("speech_ratio")
+    parts = [f"peak={peak}dB" if peak is not None else "", f"speech_ratio={speech_ratio}" if speech_ratio is not None else ""]
+    suffix = ", ".join(part for part in parts if part)
+    return f"[audio:background] {timestamp} {source}: 背景音あり" + (f" ({suffix})" if suffix else "")
+
+
+def audio_background_values(d):
+    parts = [
+        d.get("source", ""),
+        d.get("origin", ""),
+        d.get("awareness", ""),
+        d.get("kind", ""),
+        d.get("timestamp", ""),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
 audio_sources = [
     ("auditory_events.jsonl", format_audio_heard, audio_heard_values),
     ("active_listen_log.jsonl", format_audio_listened, audio_listened_values),
+    ("background_audio_log.jsonl", format_audio_background, audio_background_values),
 ]
 audio_hits = []
 for fname, formatter, values_for_search in audio_sources:

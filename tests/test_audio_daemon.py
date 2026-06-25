@@ -34,6 +34,13 @@ class AudioDaemonTests(unittest.TestCase):
                 "/config/embodied-ha/log/audio_log.jsonl",
             )
 
+    def test_default_background_audio_log_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_daemon.default_background_audio_log_path(),
+                "/config/embodied-ha/log/background_audio_log.jsonl",
+            )
+
     def test_default_auditory_events_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
             from auditory_context import default_auditory_events_path
@@ -88,7 +95,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
 
-    def test_load_enabled_audio_sources_skips_zero_retention(self):
+    def test_load_enabled_audio_sources_keeps_zero_retention_as_background(self):
         prefs = {
             "audio_sources": [
                 {"source": "default", "label": "Desk", "stt_enabled": True, "stt_retention_hours": 0},
@@ -96,8 +103,12 @@ class AudioDaemonTests(unittest.TestCase):
             ]
         }
         sources = self.audio_daemon.load_enabled_audio_sources(prefs)
-        self.assertEqual(len(sources), 1)
-        self.assertEqual(sources[0].label, "TV")
+        self.assertEqual(len(sources), 2)
+        self.assertEqual(sources[0].label, "Desk")
+        self.assertTrue(sources[0].background_only)
+        self.assertEqual(sources[0].retention_hours, 24)
+        self.assertEqual(sources[1].label, "TV")
+        self.assertFalse(sources[1].background_only)
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
@@ -162,6 +173,58 @@ class AudioDaemonTests(unittest.TestCase):
             },
         )
         self.assertFalse(settings.stt_enabled)
+        self.assertTrue(settings.config.background_only)
+        self.assertEqual(settings.config.retention_hours, 24)
+
+    def test_append_background_audio_log_prunes_only_matching_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "background_audio_log.jsonl"
+            log_path.write_text(
+                "\n".join([
+                    json.dumps({"timestamp": "2026-06-20T10:00:00+09:00", "source": "Desk", "kind": "background_audio"}, ensure_ascii=False),
+                    json.dumps({"timestamp": "2026-06-20T10:00:00+09:00", "source": "TV", "kind": "background_audio"}, ensure_ascii=False),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            entry = {"timestamp": "2026-06-25T10:00:00+09:00", "source": "Desk", "kind": "background_audio"}
+            with mock.patch.dict(os.environ, {"EHA_BACKGROUND_AUDIO_LOG_FILE": str(log_path)}, clear=False), \
+                 mock.patch.object(self.audio_daemon, "now", return_value=self.audio_daemon.parse_ts("2026-06-25T10:00:00+09:00")):
+                self.audio_daemon.append_background_audio_log(entry, retention_hours=24, source_label="Desk")
+
+            rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual([row["source"] for row in rows], ["TV", "Desk"])
+
+    def test_maybe_record_background_audio_rate_limits(self):
+        config = self.audio_daemon.AudioSourceConfig("rtsp://example", "TV", 24, False, background_only=True)
+        entries: list[dict] = []
+
+        def capture(entry, retention_hours=None, source_label=None):
+            entries.append(entry)
+
+        with mock.patch.object(self.audio_daemon, "append_background_audio_log", side_effect=capture), \
+             mock.patch.object(self.audio_daemon.time, "monotonic", return_value=1000.0):
+            first = self.audio_daemon.maybe_record_background_audio(
+                config,
+                b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
+                "fallback",
+                {"speech_ratio": 0.2, "peak_db": -31.0, "mean_db": -45.0},
+                0.0,
+            )
+            second = self.audio_daemon.maybe_record_background_audio(
+                config,
+                b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
+                "fallback",
+                {"speech_ratio": 0.2, "peak_db": -31.0, "mean_db": -45.0},
+                first,
+            )
+
+        self.assertEqual(first, 1000.0)
+        self.assertEqual(second, first)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["kind"], "background_audio")
+        self.assertEqual(entries[0]["awareness"], "background")
+        self.assertIsNone(entries[0]["transcript"])
+        self.assertFalse(entries[0]["stt_requested"])
 
     def test_should_trigger_wake_word_is_case_insensitive(self):
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("AkAnE, listen", ["akane"]))

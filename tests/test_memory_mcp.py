@@ -70,6 +70,16 @@ class MemoryMcpRecallAudioTests(unittest.TestCase):
         self.assertIn("[audio:heard]", recall)
         self.assertIn("[audio:listened]", recall)
 
+    def test_recall_finds_background_audio_log(self):
+        (self.log_dir / "background_audio_log.jsonl").write_text(
+            '{"timestamp":"2026-06-26T09:40:00+09:00","kind":"background_audio","source":"スタディ（レコーダー）","origin":"rtsp://localhost:8554/capture_tv","awareness":"background","peak_db":-28.5,"speech_ratio":0.4}\n',
+            encoding="utf-8",
+        )
+        recall = self._text(self.memory_mcp.recall({"keywords": ["レコーダー"]}))
+        self.assertIn("[audio:background]", recall)
+        self.assertIn("スタディ（レコーダー）", recall)
+        self.assertIn("背景音あり", recall)
+
     def test_memory_mcp_prefers_eha_data_dir_for_default_log_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha", "EHA_LOG_DIR": ""}, clear=False):
             module = load_memory_mcp_module()

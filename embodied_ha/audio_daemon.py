@@ -44,7 +44,11 @@ FALLBACK_SEGMENT_MIN_PEAK_DB = -42.0
 FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
 DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/log/audio_log.jsonl"
+DEFAULT_BACKGROUND_AUDIO_LOG_FILE = "/data/embodied-ha/log/background_audio_log.jsonl"
+BACKGROUND_LOG_MIN_INTERVAL_SECONDS = 300
+BACKGROUND_LOG_RETENTION_HOURS = 24
 _LOG_LOCK = threading.Lock()
+_BACKGROUND_LOG_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,7 @@ class AudioSourceConfig:
     label: str
     retention_hours: int
     wake_word_enabled: bool
+    background_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,28 @@ def default_audio_log_path() -> str:
 
 def audio_log_path() -> str:
     return clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path() or DEFAULT_AUDIO_LOG_FILE
+
+
+def default_background_audio_log_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "background_audio_log.jsonl")
+    return "/config/embodied-ha/log/background_audio_log.jsonl"
+
+
+def background_audio_log_path() -> str:
+    return (
+        clean(os.environ.get("EHA_BACKGROUND_AUDIO_LOG_FILE"))
+        or default_background_audio_log_path()
+        or DEFAULT_BACKGROUND_AUDIO_LOG_FILE
+    )
+
+
+def background_audio_retention_hours() -> int:
+    try:
+        return max(1, int(clean(os.environ.get("EHA_BACKGROUND_AUDIO_RETENTION_HOURS")) or BACKGROUND_LOG_RETENTION_HOURS))
+    except Exception:
+        return BACKGROUND_LOG_RETENTION_HOURS
 
 
 def canonical_source(value: str) -> str:
@@ -121,14 +148,14 @@ def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSou
             retention = int(item.get("stt_retention_hours", 60))
         except Exception:
             retention = 60
-        if retention <= 0:
-            continue
+        background_only = retention <= 0
         enabled.append(
             AudioSourceConfig(
                 source=source,
                 label=label,
-                retention_hours=max(1, retention),
+                retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
                 wake_word_enabled=bool(item.get("wake_word_enabled")),
+                background_only=background_only,
             )
         )
     return enabled
@@ -181,16 +208,15 @@ def load_runtime_settings(
                 retention = int(item.get("stt_retention_hours", base_config.retention_hours))
             except Exception:
                 retention = base_config.retention_hours
-            if retention <= 0:
-                stt_enabled = False
-                break
+            background_only = retention <= 0
             effective_config = AudioSourceConfig(
                 source=base_config.source,
                 label=base_config.label,
-                retention_hours=max(1, retention),
+                retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
                 wake_word_enabled=bool(item.get("wake_word_enabled")),
+                background_only=background_only,
             )
-            stt_enabled = item.get("stt_enabled") is True
+            stt_enabled = item.get("stt_enabled") is True and not background_only
             break
 
     return RuntimeSettings(
@@ -393,6 +419,94 @@ def append_audio_log(entry: dict, retention_hours: int, source_label: str) -> No
         os.replace(tmp_path, path)
 
 
+def append_background_audio_log(entry: dict, retention_hours: int | None = None, source_label: str | None = None) -> None:
+    path = background_audio_log_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    retention = retention_hours if retention_hours is not None else background_audio_retention_hours()
+    cutoff = now() - timedelta(hours=max(1, retention))
+    source = clean(source_label) or clean(entry.get("source"))
+
+    with _BACKGROUND_LOG_LOCK:
+        entries: list[dict] = []
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed = json.loads(line)
+                        except Exception:
+                            continue
+                        if not isinstance(parsed, dict):
+                            continue
+                        ts = parse_ts(parsed.get("timestamp"))
+                        if source and clean(parsed.get("source")) == source and ts and ts < cutoff:
+                            continue
+                        entries.append(parsed)
+            except Exception as exc:
+                log(f"failed to read background audio log for retention pruning: {exc}")
+        entries.append(entry)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for item in entries:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, path)
+
+
+def build_background_audio_event(
+    config: AudioSourceConfig,
+    duration_sec: float,
+    vad_mode: str,
+    diagnostics: dict | None = None,
+) -> dict:
+    entry = {
+        "timestamp": now().isoformat(timespec="seconds"),
+        "kind": "background_audio",
+        "modality": "auditory",
+        "awareness": "background",
+        "origin": config.source,
+        "source": config.label,
+        "duration_sec": round(duration_sec, 2),
+        "has_sound": True,
+        "stt_requested": False,
+        "transcript": None,
+        "vad_mode": vad_mode,
+    }
+    if isinstance(diagnostics, dict):
+        for key in ("speech_ratio", "peak_db", "mean_db"):
+            if key in diagnostics:
+                entry[key] = diagnostics[key]
+    return entry
+
+
+def maybe_record_background_audio(
+    config: AudioSourceConfig,
+    audio_bytes: bytes,
+    vad_mode: str,
+    diagnostics: dict | None,
+    last_logged_at: float,
+) -> float:
+    current = time.monotonic()
+    if current - last_logged_at < BACKGROUND_LOG_MIN_INTERVAL_SECONDS:
+        return last_logged_at
+    duration_sec = len(audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH)
+    if duration_sec < MIN_SEGMENT_SECONDS:
+        return last_logged_at
+    append_background_audio_log(
+        build_background_audio_event(config, duration_sec, vad_mode, diagnostics),
+        config.retention_hours,
+        config.label,
+    )
+    log(
+        "background audio noted for "
+        f"{config.label}: duration={duration_sec:.2f}s, vad={vad_mode}, "
+        f"speech_ratio={(diagnostics or {}).get('speech_ratio')}, peak_db={(diagnostics or {}).get('peak_db')}"
+    )
+    return current
+
+
 def build_auditory_event(
     config: AudioSourceConfig,
     transcript: str,
@@ -554,7 +668,8 @@ def audio_worker(
     while True:
         proc: subprocess.Popen | None = None
         detector, vad_mode = new_vad()
-        last_settings_signature: tuple[str | None, str, tuple[str, ...], bool] | None = None
+        last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
+        last_background_log_at = 0.0
         prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
         segment_chunks: list[bytes] = []
         segment_levels: list[float] = []
@@ -597,6 +712,7 @@ def audio_worker(
                             settings.language,
                             tuple(settings.wake_words),
                             settings.config.wake_word_enabled,
+                            settings.config.background_only,
                         )
                         if signature != last_settings_signature:
                             last_settings_signature = signature
@@ -605,9 +721,23 @@ def audio_worker(
                                 f"{config.label}: provider={settings.provider or 'unset'}, "
                                 f"language={settings.language}, "
                                 f"wake_words={len(settings.wake_words)}, "
-                                f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}"
+                                f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}, mode={'background' if settings.config.background_only else 'stt'}"
                             )
+                        diagnostics = {
+                            "vad_mode": vad_mode,
+                            "speech_ratio": speech_ratio,
+                            "peak_db": peak_db,
+                            "mean_db": mean_db,
+                        }
                         if not settings.stt_enabled:
+                            if settings.config.background_only:
+                                last_background_log_at = maybe_record_background_audio(
+                                    settings.config,
+                                    b"".join(segment_chunks),
+                                    vad_mode,
+                                    diagnostics,
+                                    last_background_log_at,
+                                )
                             segment_chunks = []
                             segment_levels = []
                             segment_speech_chunks = 0
@@ -627,12 +757,7 @@ def audio_worker(
                             settings.language,
                             token,
                             settings.wake_words,
-                            diagnostics={
-                                "vad_mode": vad_mode,
-                                "speech_ratio": speech_ratio,
-                                "peak_db": peak_db,
-                                "mean_db": mean_db,
-                            },
+                            diagnostics=diagnostics,
                         )
                         segment_chunks = []
                         segment_levels = []
@@ -666,6 +791,7 @@ def audio_worker(
                     settings.language,
                     tuple(settings.wake_words),
                     settings.config.wake_word_enabled,
+                    settings.config.background_only,
                 )
                 if signature != last_settings_signature:
                     last_settings_signature = signature
@@ -674,8 +800,14 @@ def audio_worker(
                         f"{config.label}: provider={settings.provider or 'unset'}, "
                         f"language={settings.language}, "
                         f"wake_words={len(settings.wake_words)}, "
-                        f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}"
+                        f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}, mode={'background' if settings.config.background_only else 'stt'}"
                     )
+                diagnostics = {
+                    "vad_mode": vad_mode,
+                    "speech_ratio": speech_ratio,
+                    "peak_db": peak_db,
+                    "mean_db": mean_db,
+                }
                 if settings.stt_enabled:
                     process_segment(
                         settings.config,
@@ -684,12 +816,15 @@ def audio_worker(
                         settings.language,
                         token,
                         settings.wake_words,
-                        diagnostics={
-                            "vad_mode": vad_mode,
-                            "speech_ratio": speech_ratio,
-                            "peak_db": peak_db,
-                            "mean_db": mean_db,
-                        },
+                        diagnostics=diagnostics,
+                    )
+                elif settings.config.background_only:
+                    last_background_log_at = maybe_record_background_audio(
+                        settings.config,
+                        b"".join(segment_chunks),
+                        vad_mode,
+                        diagnostics,
+                        last_background_log_at,
                     )
 
             rc = proc.wait(timeout=2)
@@ -713,7 +848,7 @@ def main() -> int:
     preferences = load_preferences()
     sources = load_enabled_audio_sources(preferences)
     if not sources:
-        log("no STT-enabled audio sources; exiting")
+        log("no STT/background audio sources; exiting")
         return 0
 
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
