@@ -121,12 +121,12 @@ case "$MODE" in
 - get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
 - ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
 - camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
-- listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false。文字で知りたいときだけ true。
+- listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
 - read_active_listen_log … 自分から listen で聞きに行った最近のログを読む。
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
 記録（JSONには書かない）:
 - remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
-- record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。
+- record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。音は意味がある出来事だけ記録し、必要なときだけ audio_context を evidence に含める。
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
 - loops_add … 後で気にかけたいことを追加（text に一言、source="explore"）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。

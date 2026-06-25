@@ -17,7 +17,7 @@
   consolidate_memory  … 重複 episode を統合し report を保存
 
 recall / loops は既存の recall.sh / loops.sh をサブプロセスで呼ぶ。
-env: EHA_LOG_DIR, EHA_TOOLS_PATH
+env: EHA_LOG_DIR, EHA_DATA_DIR, EHA_TOOLS_PATH
 """
 from __future__ import annotations
 
@@ -35,7 +35,16 @@ import scene_state as scenes
 import sociality_state as ss
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
+
+
+def _default_log_dir() -> str:
+    data_dir = " ".join(str(os.environ.get("EHA_DATA_DIR") or "").split()).strip()
+    if data_dir:
+        return os.path.join(data_dir, "log")
+    return os.path.join(_DIR, "log")
+
+
+LOG_DIR = os.environ.get("EHA_LOG_DIR") or _default_log_dir()
 RECALL = os.path.join(_DIR, "recall.sh")
 LOOPS = os.path.join(_DIR, "loops.sh")
 MEMORY_FILE = "memory.md"

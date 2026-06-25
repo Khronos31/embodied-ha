@@ -12,7 +12,13 @@ set -uo pipefail
 # symlink(/config/.tools/bin/recall 等)経由でも実体ディレクトリ基準で log を引く。
 # 実行時は run.sh / config.sh が EHA_LOG_DIR を設定するのでそちらが優先される。
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-LOG_DIR="${EHA_LOG_DIR:-$SCRIPT_DIR/log}"
+if [ -n "${EHA_LOG_DIR:-}" ]; then
+  LOG_DIR="$EHA_LOG_DIR"
+elif [ -n "${EHA_DATA_DIR:-}" ]; then
+  LOG_DIR="$EHA_DATA_DIR/log"
+else
+  LOG_DIR="$SCRIPT_DIR/log"
+fi
 
 if [ "$#" -eq 0 ]; then
   echo "使い方: recall <キーワード> [キーワード...]"
@@ -127,6 +133,79 @@ for fname, label, extract in jsonl_sources:
 raw_hits.sort(key=lambda h: h[0] or "")
 raw_hits.reverse()
 for ts, line in raw_hits:
+    add_hit(bucket_hits, 3, ts, line)
+
+
+def format_audio_heard(d):
+    timestamp = (d.get("timestamp", "") or "")[:19]
+    source = str(d.get("source") or d.get("origin") or "不明").strip()
+    transcript = str(d.get("transcript") or "").strip()
+    speaker_hint = str(d.get("speaker_hint") or "").strip()
+    prefix = f"[audio:heard] {timestamp}"
+    if source:
+        prefix += f" {source}"
+    if speaker_hint and speaker_hint != "unknown":
+        prefix += f" ({speaker_hint})"
+    return f"{prefix}: {transcript}".rstrip()
+
+
+def audio_heard_values(d):
+    parts = [
+        d.get("transcript", ""),
+        d.get("source", ""),
+        d.get("origin", ""),
+        d.get("speaker_hint", ""),
+        d.get("timestamp", ""),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def format_audio_listened(d):
+    timestamp = (d.get("timestamp", "") or "")[:19]
+    actor = str(d.get("actor") or "unknown").strip()
+    source_label = str(d.get("source_label") or d.get("source") or "不明").strip()
+    transcript = str(d.get("transcript") or d.get("error") or "").strip()
+    prefix = f"[audio:listened] {timestamp} {actor} / {source_label}"
+    return f"{prefix}: {transcript}".rstrip()
+
+
+def audio_listened_values(d):
+    parts = [
+        d.get("transcript", ""),
+        d.get("source_label", ""),
+        d.get("source", ""),
+        d.get("actor", ""),
+        d.get("timestamp", ""),
+        d.get("error", ""),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+audio_sources = [
+    ("auditory_events.jsonl", format_audio_heard, audio_heard_values),
+    ("active_listen_log.jsonl", format_audio_listened, audio_listened_values),
+]
+audio_hits = []
+for fname, formatter, values_for_search in audio_sources:
+    path = os.path.join(log_dir, fname)
+    if not os.path.exists(path):
+        continue
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if match(values_for_search(d)):
+            ts = (d.get("timestamp", "") or "")[:16]
+            audio_hits.append((ts, formatter(d)))
+audio_hits.sort(key=lambda h: h[0] or "")
+audio_hits.reverse()
+for ts, line in audio_hits:
     add_hit(bucket_hits, 3, ts, line)
 
 # --- memory.md（行単位）---

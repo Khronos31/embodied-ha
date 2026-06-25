@@ -139,10 +139,23 @@ class AudioMcpTests(unittest.TestCase):
                 payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5, "transcribe": True}))
 
             self.assertEqual(payload["transcript"], "聞こえました")
+            self.assertIn("audio_context", payload)
+            self.assertEqual(payload["audio_context"]["type"], "active_listen")
+            self.assertEqual(payload["audio_context"]["actor"], "explore")
+            self.assertEqual(payload["audio_context"]["source"], "rtsp://localhost:8554/capture_tv")
+            self.assertEqual(payload["audio_context"]["source_label"], "TV・レコーダー")
+            self.assertEqual(payload["audio_context"]["duration_sec"], 5)
+            self.assertTrue(payload["audio_context"]["has_sound"])
+            self.assertEqual(payload["audio_context"]["transcript"], "聞こえました")
+            self.assertEqual(payload["audio_context"]["log_ref"]["file"], "active_listen_log.jsonl")
+            self.assertEqual(payload["audio_context"]["log_ref"]["timestamp"], payload["timestamp"])
             entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(entries), 1)
             self.assertEqual(entries[0]["kind"], "active_listen")
+            self.assertEqual(entries[0]["type"], "active_listen")
             self.assertEqual(entries[0]["actor"], "explore")
+            self.assertEqual(entries[0]["source_label"], "TV・レコーダー")
+            self.assertEqual(entries[0]["duration_sec"], 5)
             self.assertTrue(entries[0]["transcribe_requested"])
             self.assertEqual(entries[0]["transcript"], "聞こえました")
 

@@ -1624,12 +1624,13 @@ function addAudioSourceRow(source = {}) {
             <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
                 <label class="checkbox-label" style="margin-bottom: 0;">
                     <input type="checkbox" class="audio-source-stt-enabled" ${sttEnabledVal ? 'checked' : ''} onchange="toggleAudioSttRetention(this)">
-                    STT記録
+                    STTを許可
                 </label>
             </div>
             <div class="form-group audio-source-retention-group" style="margin-bottom:0; display: ${sttEnabledVal ? 'block' : 'none'};">
-                <label>保持時間 (時間・0で自動STT停止)</label>
+                <label>常時監視ログの保存期間 (時間・0で常時監視停止)</label>
                 <input type="number" class="audio-source-stt-retention form-input" min="0" step="1" value="${sttRetentionVal}">
+                <small class="form-hint">0にすると常時STTは行いません。AIが必要に応じてこの音声ソースを聞くことはできます。</small>
             </div>
             <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
                 <label class="checkbox-label" style="margin-bottom: 0;">

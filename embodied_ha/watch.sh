@@ -436,10 +436,10 @@ phase2_prompt = context + f"""
 - ha_get … センサー欄に無い個別エンティティの現在値・履歴を読む（気になったときだけ）
 - get_sensors … 主要センサーをまとめて取り直す
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
-- listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false。声や音楽を文字で知りたいときだけ true にする。結果は active_listen_log に残る。
+- listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false で、文字が必要なときだけ true にする。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。結果は active_listen_log に残る。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
-- record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。
+- record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。音も意味があるときだけ audio_context を添える。音は毎回記録しない。
 - get_working_memory … 直前に活性化した episode を確認する。
 - ingest_scene … カメラ観察で見えた objects/people/changes を保存する。
 - compare_recent_scenes … 同じカメラの直近 scene と比べ、いつもと違う点を確認する。

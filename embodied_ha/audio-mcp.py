@@ -53,6 +53,10 @@ ACTIVE_LISTEN_LOG_FILE = (
 )
 
 
+def active_listen_log_name() -> str:
+    return os.path.basename(ACTIVE_LISTEN_LOG_FILE) or "active_listen_log.jsonl"
+
+
 def _prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
@@ -413,6 +417,28 @@ def record_active_listen(entry: dict, source: str) -> None:
         pass
 
 
+def build_audio_context(entry: dict) -> dict:
+    return {
+        "type": "active_listen",
+        "timestamp": entry.get("timestamp"),
+        "actor": entry.get("actor"),
+        "source": entry.get("source"),
+        "source_label": entry.get("source_label"),
+        "duration_sec": entry.get("duration_sec"),
+        "has_sound": entry.get("has_sound"),
+        "peak_db": entry.get("peak_db"),
+        "mean_db": entry.get("mean_db"),
+        "transcribe_requested": entry.get("transcribe_requested"),
+        "transcript": entry.get("transcript"),
+        "stt_provider": entry.get("stt_provider"),
+        "stt_language": entry.get("stt_language"),
+        "log_ref": {
+            "file": active_listen_log_name(),
+            "timestamp": entry.get("timestamp"),
+        },
+    }
+
+
 def read_active_listen_log(args: dict):
     try:
         limit = int(args.get("limit", 20) or 20)
@@ -469,10 +495,12 @@ def listen(args: dict):
         return {
             "timestamp": timestamp,
             "kind": "active_listen",
+            "type": "active_listen",
             "actor": actor,
             "source": source,
             "source_label": source_label,
             "duration": duration,
+            "duration_sec": duration,
             "transcribe_requested": transcribe,
         }
 
@@ -509,12 +537,15 @@ def listen(args: dict):
             "peak_db": peak_db,
             "mean_db": mean_db,
             "transcript": None,
+            "stt_provider": None,
+            "stt_language": None,
         }
         if transcribe:
             payload["stt_provider"] = load_stt_provider()
             payload["stt_language"] = load_stt_language()
             payload["transcript"] = transcribe_audio(tmp_path)
         record_active_listen(payload, source)
+        payload["audio_context"] = build_audio_context(payload)
         return [text(json.dumps(payload, ensure_ascii=False))]
     finally:
         if tmp_path:
