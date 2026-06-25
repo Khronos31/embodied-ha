@@ -11,8 +11,7 @@ boot: manual
 # /config を読み書きマウント（/config/.tools の認証・CLIを再利用し、スクリプト群も参照）
 map:
   - config:rw
-devices:
-  - /dev/snd
+audio: true
 # MQTTブローカー情報を Supervisor から注入してもらう
 services:
   - mqtt:need
