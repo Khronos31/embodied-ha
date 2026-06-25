@@ -534,6 +534,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(entities)
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/stt-info":
+            qs = parse_qs(parsed.query)
+            provider = qs.get("provider", [""])[0].strip()
+            if not provider:
+                self.send_json({"languages": []})
+            else:
+                status, raw = ha_api_raw_request(f"/stt/{provider}")
+                if status == 200:
+                    self.send_json(json.loads(raw))
+                else:
+                    self.send_json({"languages": [], "error": f"HTTP {status}"})
         elif path == "/api/extra-context":
             filepath = EXTRA_CONTEXT_FILE
             if not os.path.exists(filepath):

@@ -55,6 +55,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Verify backend connection and swap to live data mode if available
     checkBackendMode();
+
+    document.getElementById('setting-stt-provider')?.addEventListener('change', function() {
+        loadSttLanguages(this.value.trim());
+    });
 });
 
 // --- Update Side Panel Previews ---
@@ -935,7 +939,7 @@ async function fetchSettings() {
                 device_tracker: [],
                 person: []
             };
-            renderSettingsForm();
+            await renderSettingsForm();
             if (statusMsg) statusMsg.textContent = '';
             return;
         }
@@ -970,7 +974,7 @@ async function fetchSettings() {
             entityList[dom].push(ent);
         });
 
-        renderSettingsForm();
+        await renderSettingsForm();
         if (statusMsg) statusMsg.textContent = '';
     } catch (err) {
         console.error("[Settings] Fetch failed:", err);
@@ -981,7 +985,39 @@ async function fetchSettings() {
     }
 }
 
-function renderSettingsForm() {
+async function loadSttLanguages(provider) {
+    const sel = document.getElementById('setting-stt-language');
+    if (!sel) return;
+    const current = sel.value || 'ja-JP';
+    sel.innerHTML = '<option value="">（読み込み中…）</option>';
+    sel.disabled = true;
+    if (!provider) {
+        sel.innerHTML = '<option value="">（プロバイダー未設定）</option>';
+        sel.disabled = false;
+        return;
+    }
+    try {
+        const res = await fetch(`/api/stt-info?provider=${encodeURIComponent(provider)}`);
+        const data = await res.json();
+        const langs = data.languages || [];
+        if (langs.length === 0) {
+            sel.innerHTML = '<option value="">（言語一覧を取得できませんでした）</option>';
+        } else {
+            sel.innerHTML = langs.map(l =>
+                `<option value="${l}"${l === current ? ' selected' : ''}>${l}</option>`
+            ).join('');
+            // current が一覧にない場合は先頭を選択
+            if (!langs.includes(current) && langs.length > 0) {
+                sel.value = langs[0];
+            }
+        }
+    } catch (e) {
+        sel.innerHTML = '<option value="">（取得エラー）</option>';
+    }
+    sel.disabled = false;
+}
+
+async function renderSettingsForm() {
     if (!prefsData) return;
 
     const nameEl = document.getElementById('setting-character-name');
@@ -995,9 +1031,12 @@ function renderSettingsForm() {
     if (sttProviderEl) {
         sttProviderEl.value = prefsData.stt_provider || '';
     }
-    const sttLanguageEl = document.getElementById('setting-stt-language');
-    if (sttLanguageEl) {
-        sttLanguageEl.value = prefsData.stt_language || 'ja-JP';
+    // まず言語一覧を読み込んでからセットする
+    const sttProvider = prefsData.stt_provider || '';
+    await loadSttLanguages(sttProvider);
+    const sttLangSel = document.getElementById('setting-stt-language');
+    if (sttLangSel) {
+        sttLangSel.value = prefsData.stt_language || 'ja-JP';
     }
     const wakeWordsEl = document.getElementById('setting-wake-words');
     if (wakeWordsEl) {
@@ -1065,7 +1104,7 @@ function renderSettingsForm() {
 let activeSettingsTab = 'general';
 let jsonEditor = null;
 
-function switchSettingsTab(tabName) {
+async function switchSettingsTab(tabName) {
     if (activeSettingsTab === tabName) return;
 
     // JSON編集タブから他のタブへ切り替える場合は構文チェック
@@ -1078,7 +1117,7 @@ function switchSettingsTab(tabName) {
             }
             prefsData = parsed;
             updateCharacterName(prefsData);
-            renderSettingsForm();
+            await renderSettingsForm();
         } catch (err) {
             alert("JSONの構文にエラーがあります。修正するか、元に戻してください。\nエラー: " + err.message);
             return; // 切り替えをキャンセル
@@ -1110,10 +1149,12 @@ function switchSettingsTab(tabName) {
 
     // コンテンツ表示切り替え
     const tabGeneral = document.getElementById('settings-tab-general');
+    const tabIo = document.getElementById('settings-tab-io');
     const tabDevices = document.getElementById('settings-tab-devices');
     const tabAdvanced = document.getElementById('settings-tab-advanced');
 
     if (tabGeneral) tabGeneral.style.display = tabName === 'general' ? 'block' : 'none';
+    if (tabIo) tabIo.style.display = tabName === 'io' ? 'block' : 'none';
     if (tabDevices) tabDevices.style.display = tabName === 'devices' ? 'block' : 'none';
     if (tabAdvanced) tabAdvanced.style.display = tabName === 'advanced' ? 'block' : 'none';
 }

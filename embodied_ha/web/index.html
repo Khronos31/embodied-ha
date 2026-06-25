@@ -122,9 +122,10 @@
                     </div>
                     <!-- Sub Tabs Navigation -->
                     <div class="settings-tabs">
-                        <button type="button" class="settings-tab-btn active" onclick="switchSettingsTab('general')">基本設定 (General)</button>
-                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">デバイス・センサー (Devices)</button>
-                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('advanced')">高度な設定 (JSON)</button>
+                        <button type="button" class="settings-tab-btn active" onclick="switchSettingsTab('general')">基本設定</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('io')">入出力</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">家電・その他デバイス</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('advanced')">高度な設定</button>
                     </div>
                 </header>
                 
@@ -171,31 +172,6 @@
                             </div>
                         </section>
 
-                        <!-- Section: STT -->
-                        <section class="settings-section card">
-                            <h3>音声認識 (STT)</h3>
-                            <p class="section-desc">
-                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
-                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
-                                空欄の場合は音量検出のみ行います（文字起こしなし）。
-                            </p>
-                            <div class="form-group">
-                                <label class="form-label">STTプロバイダー (stt_provider)</label>
-                                <input type="text" id="setting-stt-provider" class="form-input" placeholder="例: stt.google_ai_stt" style="max-width:320px;">
-                                <p class="form-hint">HA統合で利用可能なSTTプロバイダーのID。未設定の場合は音量のみ検出します。</p>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">STT言語 (stt_language)</label>
-                                <input type="text" id="setting-stt-language" class="form-input" placeholder="ja-JP" value="ja-JP" style="max-width:320px;">
-                                <p class="form-hint">音声認識時の言語コード。</p>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">ウェイクワード (wake_words)</label>
-                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
-                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
-                            </div>
-                        </section>
-
                         <!-- Section: Policies -->
                         <section class="settings-section card">
                             <div class="section-header">
@@ -209,20 +185,8 @@
                         </section>
                     </div>
 
-                    <!-- Tab 2: Devices & Sensors -->
-                    <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
-                        <!-- Section: Speakers -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>発話先スピーカー (speakers)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
-                            </div>
-                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるかを選択できます。</p>
-                            <div id="speakers-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-
+                    <!-- Tab 2: Input / Output -->
+                    <div class="settings-tab-content" id="settings-tab-io" style="display:none;">
                         <!-- Section: Cameras -->
                         <section class="settings-section card">
                             <div class="section-header">
@@ -251,6 +215,48 @@
                             </div>
                         </section>
 
+                        <!-- Section: STT -->
+                        <section class="settings-section card">
+                            <h3>音声認識 (STT)</h3>
+                            <p class="section-desc">
+                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
+                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
+                                空欄の場合は音量検出のみ行います（文字起こしなし）。
+                            </p>
+                            <div class="form-group">
+                                <label class="form-label">STTプロバイダー (stt_provider)</label>
+                                <input type="text" id="setting-stt-provider" class="form-input" placeholder="例: stt.google_ai_stt" style="max-width:320px;">
+                                <p class="form-hint">HA統合で利用可能なSTTプロバイダーのID。未設定の場合は音量のみ検出します。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">STT言語 (stt_language)</label>
+                                <select id="setting-stt-language" class="form-input" style="max-width:320px;">
+                                    <option value="">（読み込み中…）</option>
+                                </select>
+                                <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">ウェイクワード (wake_words)</label>
+                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
+                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
+                            </div>
+                        </section>
+
+                        <!-- Section: Speakers -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>発話先スピーカー (speakers)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
+                            </div>
+                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるかを選択できます。</p>
+                            <div id="speakers-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 3: Devices & Sensors -->
+                    <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
                         <!-- Section: Entities (操作できる家電) -->
                         <section class="settings-section card">
                             <div class="section-header">
@@ -276,7 +282,7 @@
                         </section>
                     </div>
 
-                    <!-- Tab 3: Advanced JSON Settings -->
+                    <!-- Tab 4: Advanced JSON Settings -->
                     <div class="settings-tab-content" id="settings-tab-advanced" style="display:none;">
                         <section class="settings-section card">
                             <h3>preferences.json の直接編集</h3>
