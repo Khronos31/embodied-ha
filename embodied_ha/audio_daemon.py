@@ -37,7 +37,10 @@ SILENCE_SECONDS = 0.8
 MIN_SEGMENT_SECONDS = 0.5
 MAX_SEGMENT_SECONDS = 30.0
 VAD_THRESHOLD = 0.5
-FALLBACK_DB_THRESHOLD = -50.0
+FALLBACK_DB_THRESHOLD = -47.0
+FALLBACK_SEGMENT_MIN_SPEECH_RATIO = 0.12
+FALLBACK_SEGMENT_MIN_PEAK_DB = -42.0
+FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
 DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/audio_log.jsonl"
 _LOG_LOCK = threading.Lock()
@@ -227,6 +230,34 @@ def summarize_chunk_levels(levels: list[float]) -> tuple[float | None, float | N
     return round(peak_db, 1), round(mean_db, 1)
 
 
+def should_transcribe_segment(vad_mode: str, diagnostics: dict | None) -> tuple[bool, str | None]:
+    if vad_mode != "fallback":
+        return True, None
+    if not isinstance(diagnostics, dict):
+        return True, None
+
+    speech_ratio = diagnostics.get("speech_ratio")
+    peak_db = diagnostics.get("peak_db")
+    try:
+        speech_ratio_value = float(speech_ratio)
+    except Exception:
+        speech_ratio_value = None
+    try:
+        peak_db_value = float(peak_db)
+    except Exception:
+        peak_db_value = None
+
+    if peak_db_value is not None and peak_db_value >= FALLBACK_SEGMENT_HARD_PEAK_DB:
+        return True, None
+    if speech_ratio_value is None or peak_db_value is None:
+        return False, "fallback_gate_missing_metrics"
+    if speech_ratio_value < FALLBACK_SEGMENT_MIN_SPEECH_RATIO:
+        return False, "fallback_gate_low_speech_ratio"
+    if peak_db_value < FALLBACK_SEGMENT_MIN_PEAK_DB:
+        return False, "fallback_gate_low_peak_db"
+    return True, None
+
+
 def write_wav(path: str, audio_bytes: bytes) -> None:
     with wave.open(path, "wb") as wav_file:
         wav_file.setnchannels(CHANNELS)
@@ -346,6 +377,20 @@ def process_segment(
     }
     if isinstance(diagnostics, dict):
         entry.update(diagnostics)
+    vad_mode = clean(entry.get("vad_mode")) or "unknown"
+    should_transcribe, skip_reason = should_transcribe_segment(vad_mode, entry)
+    if not should_transcribe:
+        entry["skipped"] = True
+        entry["skip_reason"] = skip_reason
+        append_audio_log(entry, config.retention_hours, config.label)
+        log(
+            "segment skipped for "
+            f"{config.label}: {skip_reason} "
+            f"(duration={entry.get('duration_sec')}s, vad={vad_mode}, "
+            f"speech_ratio={entry.get('speech_ratio')}, peak_db={entry.get('peak_db')}, "
+            f"mean_db={entry.get('mean_db')})"
+        )
+        return
     tmp_path: str | None = None
     try:
         if not provider:
@@ -380,12 +425,20 @@ def process_segment(
 
 def new_vad():
     if SileroVoiceActivityDetector is None:
-        log("pysilero_vad unavailable; using -50dB fallback VAD")
+        log(
+            "pysilero_vad unavailable; using "
+            f"{FALLBACK_DB_THRESHOLD:.0f}dB fallback VAD "
+            f"(speech_ratio>={FALLBACK_SEGMENT_MIN_SPEECH_RATIO}, peak>={FALLBACK_SEGMENT_MIN_PEAK_DB}dB)"
+        )
         return None, "fallback"
     try:
         return SileroVoiceActivityDetector(), "silero"
     except Exception as exc:
-        log(f"failed to initialize pysilero_vad; using fallback VAD: {exc}")
+        log(
+            "failed to initialize pysilero_vad; using fallback VAD: "
+            f"{exc} (threshold={FALLBACK_DB_THRESHOLD:.0f}dB, "
+            f"speech_ratio>={FALLBACK_SEGMENT_MIN_SPEECH_RATIO}, peak>={FALLBACK_SEGMENT_MIN_PEAK_DB}dB)"
+        )
         return None, "fallback"
 
 

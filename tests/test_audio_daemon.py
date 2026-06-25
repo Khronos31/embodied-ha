@@ -41,6 +41,30 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(peak_db, -12.1)
         self.assertEqual(mean_db, -22.6)
 
+    def test_should_transcribe_segment_allows_non_fallback(self):
+        allowed, reason = self.audio_daemon.should_transcribe_segment(
+            "silero",
+            {"speech_ratio": 0.01, "peak_db": -80.0},
+        )
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_should_transcribe_segment_rejects_fallback_noise(self):
+        allowed, reason = self.audio_daemon.should_transcribe_segment(
+            "fallback",
+            {"speech_ratio": 0.07, "peak_db": -48.9},
+        )
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "fallback_gate_low_speech_ratio")
+
+    def test_should_transcribe_segment_allows_strong_fallback_segment(self):
+        allowed, reason = self.audio_daemon.should_transcribe_segment(
+            "fallback",
+            {"speech_ratio": 0.22, "peak_db": -39.5},
+        )
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
     def test_load_enabled_audio_sources_filters_and_normalizes(self):
         prefs = {
             "audio_sources": [
@@ -110,6 +134,36 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(entry["speech_ratio"], 0.625)
         self.assertEqual(entry["peak_db"], -17.4)
         self.assertEqual(entry["mean_db"], -34.8)
+
+    def test_process_segment_skips_fallback_noise_before_stt(self):
+        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        logged_entries: list[dict] = []
+
+        def capture_entry(entry, retention_hours, source_label):
+            logged_entries.append(entry)
+
+        with mock.patch.object(self.audio_daemon, "transcribe_wav") as transcribe_mock, \
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry):
+            self.audio_daemon.process_segment(
+                config,
+                b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
+                "stt.google_ai_stt",
+                "ja-JP",
+                "token",
+                [],
+                diagnostics={
+                    "vad_mode": "fallback",
+                    "speech_ratio": 0.05,
+                    "peak_db": -48.8,
+                    "mean_db": -53.0,
+                },
+            )
+
+        transcribe_mock.assert_not_called()
+        self.assertEqual(len(logged_entries), 1)
+        entry = logged_entries[0]
+        self.assertTrue(entry["skipped"])
+        self.assertEqual(entry["skip_reason"], "fallback_gate_low_speech_ratio")
 
 
 if __name__ == "__main__":
