@@ -41,6 +41,14 @@ export CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 export EHA_TOOLS_PATH="${EHA_TOOLS_PATH:-/usr/local/bin}"
 export PATH="${EHA_TOOLS_PATH}:${PATH}"
 
+# --- PulseAudio（audio: true で注入されるソケット）---
+# HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。
+# libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。
+if [ -z "${PULSE_SERVER:-}" ] && [ -S "/run/pulse/native" ]; then
+    export PULSE_SERVER="unix:/run/pulse/native"
+    echo "[run] PulseAudio: PULSE_SERVER=unix:/run/pulse/native"
+fi
+
 # --- 永続データの置き場（/config/embodied-ha/）---
 # HA設定ディレクトリ配下に置くことで、Studio Code Server / Samba / File Editor
 # から記憶・ログ・設定を直接閲覧・編集でき、HAバックアップにも含まれる。
