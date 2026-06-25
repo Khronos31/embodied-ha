@@ -20,7 +20,7 @@ DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
     {"source": "rtsp://localhost:8556/mic_only",   "label": "PC"},
     {"source": "rtsp://localhost:8558/mic_only",   "label": "Google TV"},
-    {"source": "alsa",                             "label": "スタディマイク"},
+    {"source": "default",                          "label": "スタディマイク"},
 ]
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
@@ -71,7 +71,7 @@ def build_listen_spec() -> dict:
     source_lines = "\n".join(
         f'  - "{s["source"]}"（{s["label"]}）' for s in sources
     )
-    default = sources[0]["source"] if sources else "alsa"
+    default = sources[0]["source"] if sources else "default"
     return {
         "name": "listen",
         "description": (
@@ -123,10 +123,11 @@ def find_ffmpeg() -> str | None:
 
 
 def build_record_command(source: str, duration: int) -> list[str]:
-    if source == "alsa":
+    if source == "default":
+        # HAOS の audio:true は PulseAudio を注入する（raw ALSA は無音になる）
         return [
             "ffmpeg",
-            "-f", "alsa",
+            "-f", "pulse",
             "-i", "default",
             "-ar", "16000",
             "-ac", "1",
@@ -219,8 +220,8 @@ def transcribe_audio(path: str) -> str | None:
 
 def listen(args: dict):
     source = clean(args.get("source")) or DEFAULT_SOURCE
-    # 未登録でも rtsp:// または alsa なら直接使用する
-    if source not in _source_map() and not (source.startswith("rtsp://") or source == "alsa"):
+    # 未登録でも rtsp:// または default なら直接使用する
+    if source not in _source_map() and not (source.startswith("rtsp://") or source == "default"):
         return [text(json.dumps({"error": f"unknown source: {source}"}, ensure_ascii=False))], True
 
     ffmpeg = find_ffmpeg()
