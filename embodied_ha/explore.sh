@@ -128,7 +128,7 @@ case "$MODE" in
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
 - loops_add … 後で気にかけたいことを追加（text に一言、source="explore"）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
-- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。"
+- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
 2. センサーだけでは分からないことは camera_get で確認してもよい（必要なときだけ）

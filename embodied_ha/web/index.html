@@ -181,8 +181,18 @@
                             </p>
                             <div class="form-group">
                                 <label class="form-label">STTプロバイダー (stt_provider)</label>
-                                <input type="text" id="setting-stt-provider" class="form-input" placeholder="wyoming（空欄で無効）" style="max-width:320px;">
+                                <input type="text" id="setting-stt-provider" class="form-input" placeholder="例: stt.google_ai_stt" style="max-width:320px;">
                                 <p class="form-hint">HA統合で利用可能なSTTプロバイダーのID。未設定の場合は音量のみ検出します。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">STT言語 (stt_language)</label>
+                                <input type="text" id="setting-stt-language" class="form-input" placeholder="ja-JP" value="ja-JP" style="max-width:320px;">
+                                <p class="form-hint">音声認識時の言語コード。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">ウェイクワード (wake_words)</label>
+                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
+                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
                             </div>
                         </section>
 

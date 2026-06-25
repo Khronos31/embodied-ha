@@ -21,6 +21,7 @@ TMP_DIR="/tmp/embodied-ha"
 mkdir -p "$LOG_DIR" "$TMP_DIR"
 TIMESTAMP=$(date -Iseconds)
 USER_MSG="${CHAT_MESSAGE:-}"
+CHAT_SOURCE_VALUE="${CHAT_SOURCE:-chat}"
 
 if [ -z "$USER_MSG" ]; then
   echo "[chat] CHAT_MESSAGE が空。終了。"
@@ -29,7 +30,7 @@ fi
 
 # --- Web UI ステータス通知 ---
 _web_idle() { curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content-Type: application/json" -d '{"status":"idle","source":null}' >/dev/null 2>&1 || true; }
-curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content-Type: application/json" -d '{"status":"thinking","source":"chat"}' >/dev/null 2>&1 || true
+curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content-Type: application/json" -d "{\"status\":\"thinking\",\"source\":\"${CHAT_SOURCE_VALUE}\"}" >/dev/null 2>&1 || true
 trap '_web_idle' EXIT
 
 # --- 文脈: 最近の自分の活動（観察＋探索を時系列マージ）＋今の気分 ---
@@ -572,7 +573,7 @@ d = json.load(open('$PARSED_FILE', encoding='utf-8'))
 reply = d.get('reply','') or os.environ.get('REPLY','')
 private = d.get('private','') or ''
 user_msg = os.environ.get('USER_MSG','')
-rec = {'timestamp':'$TIMESTAMP','source':'chat','user':user_msg,'claude':reply}
+rec = {'timestamp':'$TIMESTAMP','source':'${CHAT_SOURCE:-chat}','user':user_msg,'claude':reply}
 if private:
     rec['private'] = private
 with open('$CHAT_LOG', 'a', encoding='utf-8') as f:

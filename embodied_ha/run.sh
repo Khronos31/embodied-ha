@@ -59,6 +59,9 @@ if [ -z "${PULSE_SERVER:-}" ]; then
     echo "[run] PulseAudio: ソケット見つからず（/run ls: $(find /run -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)）"
 fi
 
+mkdir -p /data/embodied-ha
+export EHA_AUDIO_LOG_FILE="${EHA_AUDIO_LOG_FILE:-/data/embodied-ha/audio_log.jsonl}"
+
 # --- 永続データの置き場（/config/embodied-ha/）---
 # HA設定ディレクトリ配下に置くことで、Studio Code Server / Samba / File Editor
 # から記憶・ログ・設定を直接閲覧・編集でき、HAバックアップにも含まれる。

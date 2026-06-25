@@ -18,6 +18,7 @@ def load_audio_mcp_module():
     spec = importlib.util.spec_from_file_location("audio_mcp_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -87,6 +88,21 @@ class AudioMcpTests(unittest.TestCase):
         first_cmd = run_mock.call_args_list[0].args[0]
         self.assertEqual(first_cmd[:5], ["/usr/bin/ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertFalse(payload["has_sound"])
+
+    def test_read_audio_log_filters_recent_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "audio_log.jsonl"
+            log_path.write_text(
+                "\n".join([
+                    json.dumps({"timestamp": "2026-06-25T10:00:00+09:00", "source": "A", "text": "old"}, ensure_ascii=False),
+                    json.dumps({"timestamp": "2026-06-25T10:55:00+09:00", "source": "A", "text": "recent"}, ensure_ascii=False),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(self.audio_mcp, "AUDIO_LOG_FILE", str(log_path)), \
+                 mock.patch.object(self.audio_mcp, "now", return_value=self.audio_mcp.parse_ts("2026-06-25T11:00:00+09:00")):
+                payload = self._json(self.audio_mcp.read_audio_log({"limit": 5, "since_minutes": 10}))
+        self.assertEqual([entry["text"] for entry in payload], ["recent"])
 
     def test_transcribe_routes_to_ha_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:

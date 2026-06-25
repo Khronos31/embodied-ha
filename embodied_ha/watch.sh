@@ -445,7 +445,7 @@ phase2_prompt = context + f"""
 - compare_recent_scenes … 同じカメラの直近 scene と比べ、いつもと違う点を確認する。
 - loops_add … 「後で気にかけておきたい」こと（消し忘れ・植物の世話・{resident}さんの作業の続き等）があれば text に一言、source="watch" で追加。既に【気にかけていること】にある内容は繰り返さない
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。自発発話を出す前に必要なら見る。
-- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。
+- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。
 無理に使う必要はない。観察は手早く。{_action_note}
 
 最後に以下のJSON形式のみで返答してください。マークダウンや余分な説明は不要です。

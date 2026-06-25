@@ -266,14 +266,14 @@ def get_soliloquy_messages(limit: int = 300) -> list:
 
 
 # --- メッセージ送信 ---
-def send_chat(message: str):
+def send_chat(message: str, source: str = "chat"):
     """MQTT 優先、なければ input_text REST 経由で chat.sh を起動する。"""
     import subprocess
     if MQTT_HOST:
         subprocess.run(
             ["mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT,
              "-u", MQTT_USER, "-P", MQTT_PASS,
-             "-t", "embodied_ha/chat/set", "-m", message],
+             "-t", "embodied_ha/chat/set", "-m", json.dumps({"message": message, "source": source}, ensure_ascii=False)],
             capture_output=True, timeout=5
         )
     else:
@@ -644,7 +644,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not message:
                     self.send_json({"error": "empty"}, 400)
                     return
-                threading.Thread(target=send_chat, args=(message,), daemon=True).start()
+                source = body.get("source", "chat")
+                threading.Thread(target=send_chat, args=(message, source), daemon=True).start()
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

@@ -9,12 +9,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import timedelta
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from mcp_lib import serve, text
-from state_utils import clean, now
+from state_utils import clean, now, parse_ts
 
 DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
@@ -25,6 +26,9 @@ DEFAULT_SOURCES = [
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
+AUDIO_LOG_FILE = os.environ.get("EHA_AUDIO_LOG_FILE", "/data/embodied-ha/audio_log.jsonl")
+
+
 def _prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
@@ -50,6 +54,8 @@ def load_audio_sources() -> list[dict]:
         if not isinstance(item, dict):
             continue
         source = clean(item.get("source"))
+        if source == "alsa":
+            source = "default"
         if not source:
             continue
         normalized.append(
@@ -64,6 +70,11 @@ def load_audio_sources() -> list[dict]:
 def load_stt_provider() -> str | None:
     provider = clean(load_preferences().get("stt_provider"))
     return provider or None
+
+
+def load_stt_language() -> str:
+    lang = clean(load_preferences().get("stt_language"))
+    return lang or "ja-JP"
 
 
 def build_listen_spec() -> dict:
@@ -102,6 +113,25 @@ def build_listen_spec() -> dict:
 TOOL_LISTEN = build_listen_spec()
 
 
+TOOL_READ_AUDIO_LOG = {
+    "name": "read_audio_log",
+    "description": "最近の音声認識ログを読む。STTデーモンが記録した発話テキストの一覧。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "返す件数。デフォルト20",
+            },
+            "since_minutes": {
+                "type": "integer",
+                "description": "指定した分以内のログだけ返す",
+            },
+        },
+    },
+}
+
+
 def _source_map() -> dict[str, dict]:
     return {clean(item.get("source")): item for item in load_audio_sources()}
 
@@ -123,7 +153,7 @@ def find_ffmpeg() -> str | None:
 
 
 def build_record_command(source: str, duration: int) -> list[str]:
-    if source == "default":
+    if source in {"default", "alsa"}:
         return [
             "ffmpeg",
             "-f", "alsa",
@@ -172,6 +202,7 @@ def transcribe_via_ha(path: str, provider: str) -> str | None:
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
     if not token:
         return None
+    lang = load_stt_language()
     with open(path, "rb") as f:
         body = f.read()
     req = urllib.request.Request(
@@ -181,6 +212,9 @@ def transcribe_via_ha(path: str, provider: str) -> str | None:
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "audio/wav",
+            "X-Speech-Content": (
+                f"format=wav; codec=pcm; sample_rate=16000; bit_rate=16; channel=1; language={lang}"
+            ),
         },
     )
     try:
@@ -217,8 +251,50 @@ def transcribe_audio(path: str) -> str | None:
     return transcribe_via_local(path)
 
 
+def read_audio_log(args: dict):
+    try:
+        limit = int(args.get("limit", 20) or 20)
+    except Exception:
+        limit = 20
+    limit = max(1, min(limit, 200))
+
+    since_minutes = args.get("since_minutes")
+    cutoff = None
+    if since_minutes is not None:
+        try:
+            minutes = int(since_minutes)
+            if minutes > 0:
+                cutoff = now() - timedelta(minutes=minutes)
+        except Exception:
+            cutoff = None
+
+    entries = []
+    try:
+        with open(AUDIO_LOG_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if cutoff is not None:
+                    ts = parse_ts(entry.get("timestamp"))
+                    if ts is None or ts < cutoff:
+                        continue
+                entries.append(entry)
+    except FileNotFoundError:
+        entries = []
+    return [text(json.dumps(entries[-limit:], ensure_ascii=False))]
+
+
 def listen(args: dict):
     source = clean(args.get("source")) or DEFAULT_SOURCE
+    if source == "alsa":
+        source = "default"
     # 未登録でも rtsp:// または default なら直接使用する
     if source not in _source_map() and not (source.startswith("rtsp://") or source == "default"):
         return [text(json.dumps({"error": f"unknown source: {source}"}, ensure_ascii=False))], True
@@ -266,4 +342,5 @@ def listen(args: dict):
 if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
+        "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
     })

@@ -24,6 +24,7 @@ _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
 WATCH_SH = os.path.join(_SCRIPT_DIR, "watch.sh")
 CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")
 EXPLORE_SH = os.path.join(_SCRIPT_DIR, "explore.sh")
+AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")
 HA_URL = os.environ["HA_URL"]
 SCHEDULE_INTERVAL = 1200  # 観察ループ(watch.sh)の定期実行間隔（秒）= 20分
 EXPLORE_INTERVAL = 1800   # 自律探索(explore.sh)の定期実行間隔（秒）= 30分
@@ -53,6 +54,22 @@ _body_lock = threading.Lock()
 _last_sensor_watch = 0.0  # センサートリガーの最終実行時刻
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 _ANOMALY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "anomaly_state.json")
+
+
+def load_enabled_audio_sources() -> list[dict]:
+    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+    if not prefs_file:
+        return []
+    try:
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception as e:
+        print(f"[daemon] failed to load preferences for audio daemon: {e}", flush=True)
+        return []
+    sources = prefs.get("audio_sources")
+    if not isinstance(sources, list):
+        return []
+    return [item for item in sources if isinstance(item, dict) and item.get("stt_enabled") is True]
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -268,7 +285,7 @@ def on_observe_trigger(payload):
     run_watch(reason, is_sensor=False)
 
 
-def run_chat(message):
+def run_chat(message, source="chat"):
     # MQTT text エンティティの state_topic に echo して HA の表示を同期
     mqtt_pub("embodied_ha/chat/state", message)
     if not _chat_lock.acquire(blocking=False):
@@ -277,13 +294,20 @@ def run_chat(message):
     start = time.perf_counter()
     success = False
     try:
-        print(f"[daemon] chat start: {message[:30]}", flush=True)
+        source = str(source or "chat").strip() or "chat"
+        print(f"[daemon] chat start [{source}]: {message[:30]}", flush=True)
         try:
             body_state_snapshot = tick_body_state("chat", f"会話:{message[:40]}")
         except Exception as e:
             print(f"[daemon] body state tick error (chat): {e}", flush=True)
             body_state_snapshot = _load_body_state()
-        env = {**os.environ, "CHAT_MESSAGE": message, "PATH": ENV_PATH, "EHA_BODY_STATE": _body_state_json(body_state_snapshot)}
+        env = {
+            **os.environ,
+            "CHAT_MESSAGE": message,
+            "CHAT_SOURCE": source,
+            "PATH": ENV_PATH,
+            "EHA_BODY_STATE": _body_state_json(body_state_snapshot),
+        }
         try:
             proc = subprocess.run(["bash", CHAT_SH], env=env, timeout=CHAT_TIMEOUT)
             success = proc.returncode == 0
@@ -309,6 +333,24 @@ def mqtt_pub(topic, payload):
         )
     except Exception as e:
         print(f"[daemon] mqtt_pub error: {e}", flush=True)
+
+
+def on_chat_trigger(payload):
+    message = (payload or "").strip()
+    source = "chat"
+    if not message:
+        return
+    try:
+        parsed = json.loads(message)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        message = str(parsed.get("message", "")).strip()
+        source = str(parsed.get("source", "chat")).strip() or "chat"
+    if not message:
+        print("[daemon] chat trigger missing message, skip", flush=True)
+        return
+    run_chat(message, source=source)
 
 
 def mqtt_listen(topic, handler, label):
@@ -470,6 +512,30 @@ def explore_scheduler():
             print(f"[daemon] explore_scheduler error: {e}", flush=True)
         time.sleep(schedule.get("explore_interval", EXPLORE_INTERVAL))
 
+def audio_daemon_watchdog():
+    env = {**os.environ, "PATH": ENV_PATH}
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(["python3", AUDIO_DAEMON], env=env)
+            print("[daemon] audio daemon started", flush=True)
+            rc = proc.wait()
+            print(f"[daemon] audio daemon exited with code {rc}; restarting in 60s", flush=True)
+        except Exception as e:
+            print(f"[daemon] audio daemon watchdog error: {e}", flush=True)
+        finally:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        time.sleep(60)
+
+
 # --- 多重起動ガード（flock）---
 # threading.Lock は全部プロセスローカルなので、daemon.py が複数走ると
 # 同じエンティティを各々ポーリングして二重観察・二重トリガーになる（2026-06-22に4重起動を踏んだ）。
@@ -487,7 +553,7 @@ except OSError:
 if MQTT_HOST:
     threading.Thread(
         target=mqtt_listen,
-        args=("embodied_ha/chat/set", run_chat, "mqtt-chat"),
+        args=("embodied_ha/chat/set", on_chat_trigger, "mqtt-chat"),
         daemon=True,
     ).start()
     threading.Thread(
@@ -501,6 +567,9 @@ else:
           "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
 threading.Thread(target=scheduler, daemon=True).start()
 threading.Thread(target=explore_scheduler, daemon=True).start()
+if load_enabled_audio_sources():
+    threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
+    print("[daemon] audio daemon watchdog enabled", flush=True)
 print("[daemon] started (I/O + watch-sched + explore-sched)", flush=True)
 
 # メインスレッドを生かし続ける

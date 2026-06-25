@@ -1,0 +1,131 @@
+{
+  "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
+
+  "character_name": "Claude",
+  "wake_words": ["あかね", "ねえあかね"],
+  "stt_provider": null,
+  "stt_language": "ja-JP",
+
+  "cameras": [
+    {
+      "source": "capture_tv",
+      "label": "テレビ",
+      "room": "living",
+      "preset": "tv",
+      "direction": "front",
+      "note": "HDDレコーダー出力。今何が放送されているか確認できる"
+    },
+    {
+      "source": "camera.living_room_entity_id",
+      "label": "リビング",
+      "room": "living",
+      "preset": "wide",
+      "direction": "front",
+      "note": "リビングの広角カメラ"
+    }
+  ],
+
+  "audio_sources": [
+    {
+      "source": "rtsp://localhost:8554/capture_tv",
+      "label": "TV・レコーダー",
+      "note": "go2rtc経由のTV/レコーダー音声",
+      "stt_enabled": false,
+      "stt_retention_hours": 60,
+      "wake_word_enabled": false
+    },
+    {
+      "source": "rtsp://localhost:8556/mic_only",
+      "label": "PC",
+      "note": "PCマイク",
+      "stt_enabled": false,
+      "stt_retention_hours": 60,
+      "wake_word_enabled": false
+    },
+    {
+      "source": "rtsp://localhost:8558/mic_only",
+      "label": "Google TV",
+      "note": "Google TV Streamerマイク",
+      "stt_enabled": false,
+      "stt_retention_hours": 60,
+      "wake_word_enabled": false
+    },
+    {
+      "source": "default",
+      "label": "スタディマイク",
+      "note": "USBマイク直接録音（/dev/snd 必要）",
+      "stt_enabled": false,
+      "stt_retention_hours": 60,
+      "wake_word_enabled": false
+    }
+  ],
+
+  "speakers": {
+    "study": {
+      "type": "tts",
+      "tts_entity": "tts.home_assistant_cloud",
+      "media_player": "media_player.your_tts_media_player"
+    },
+    "living": {
+      "type": "notify",
+      "entity": "notify.living_alexa_speak"
+    },
+    "bedroom": {
+      "type": "notify",
+      "entity": "notify.bedroom_alexa_speak"
+    },
+    "away": {
+      "type": "notify",
+      "entity": "notify.mobile_app_your_phone",
+      "title": "Embodied HA"
+    }
+  },
+
+  "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
+  "entities": [
+    { "name": "リビングのライト", "entity_id": "light.living_room", "note": "" }
+  ],
+
+  "presence": {
+    "entity": "input_boolean.resident_home"
+  },
+
+  "policies": [
+    "深夜1〜6時は発話しない（watch/explore に組み込み済み）"
+  ],
+
+  "_sensors_doc": "観察ループ(watch)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
+  "sensors": {
+    "groups": [
+      {
+        "title": "人感センサー",
+        "contexts": ["watch"],
+        "items": [
+          { "label": "リビング", "entity": "binary_sensor.living_motion" },
+          { "label": "廊下1", "entity": "binary_sensor.hall_motion_1", "note": "リビング誤反応あり" }
+        ]
+      },
+      {
+        "title": "温湿度",
+        "contexts": ["watch"],
+        "items": [
+          { "label": "リビング", "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%" }
+        ]
+      },
+      {
+        "title": "テレビ",
+        "contexts": ["watch"],
+        "items": [
+          { "label": "最前面アプリ", "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}", "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入" }
+        ]
+      },
+      {
+        "contexts": ["chat"],
+        "items": [
+          { "label": "在宅", "entity": "input_boolean.resident_home" },
+          { "template": "人感→ リビング:{{ states('binary_sensor.living_motion') }}" }
+        ]
+      }
+    ]
+  }
+}

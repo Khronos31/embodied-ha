@@ -187,6 +187,7 @@ function renderMessages() {
             sender: m.sender === 'あなた' ? 'あなた' : characterName,
             text: m.text,
             type: m.type, // 'chat', 'watch', 'explore', 'user'
+            source: m.source || 'chat',
             isUser: m.sender === 'あなた',
             isRead: m.isRead !== false,
             badgeText: getBadgeText(m.type),
@@ -229,7 +230,11 @@ function renderMessages() {
         
         const sender = document.createElement('span');
         sender.className = 'message-sender';
-        sender.textContent = m.sender;
+        if (m.isUser && m.source === 'voice') {
+            sender.textContent = m.sender + ' 🎤';
+        } else {
+            sender.textContent = m.sender;
+        }
         infoBar.appendChild(sender);
 
         if (m.badgeText && !m.isUser) {
@@ -392,6 +397,7 @@ async function handleSendMessage(event) {
     const userMessage = {
         timestamp: new Date().toISOString(),
         type: 'user',
+        source: 'chat',
         sender: 'あなた',
         text: text,
         isRead: false
@@ -547,6 +553,7 @@ async function fetchMessages(room) {
                     mapped.push({
                         timestamp: ts,
                         type: 'user',
+                        source: m.source || 'chat',
                         sender: 'あなた',
                         text: m.user,
                         isRead: true // Already processed on backend
@@ -988,6 +995,14 @@ function renderSettingsForm() {
     if (sttProviderEl) {
         sttProviderEl.value = prefsData.stt_provider || '';
     }
+    const sttLanguageEl = document.getElementById('setting-stt-language');
+    if (sttLanguageEl) {
+        sttLanguageEl.value = prefsData.stt_language || 'ja-JP';
+    }
+    const wakeWordsEl = document.getElementById('setting-wake-words');
+    if (wakeWordsEl) {
+        wakeWordsEl.value = (prefsData.wake_words || []).join(", ");
+    }
 
     const speakersList = document.getElementById('speakers-list');
     speakersList.innerHTML = '';
@@ -1227,12 +1242,17 @@ function serializeFormToPrefs() {
 
     const audio_sources = getAudioSourcesFromUI();
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
+    const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
+    const wakeWordsRaw = document.getElementById('setting-wake-words')?.value || '';
+    const wake_words = wakeWordsRaw.split(",").map(s => s.trim()).filter(Boolean);
 
     return {
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
         audio_sources,
         stt_provider,
+        stt_language,
+        wake_words,
         speakers,
         entities,
         presence,
@@ -1461,11 +1481,18 @@ function renderAudioSourceList(sources) {
     }
 }
 
-function addAudioSourceRow(source = { source: '', label: '', note: '' }) {
+function addAudioSourceRow(source = {}) {
     const listEl = document.getElementById('audio-sources-list');
     if (!listEl) return;
     const card = document.createElement('div');
     card.className = 'setting-item-card audio-source-item';
+
+    const sourceVal = source.source || '';
+    const labelVal = source.label || '';
+    const noteVal = source.note || '';
+    const sttEnabledVal = !!source.stt_enabled;
+    const sttRetentionVal = source.stt_retention_hours !== undefined ? source.stt_retention_hours : 60;
+    const wakeWordEnabledVal = !!source.wake_word_enabled;
 
     card.innerHTML = `
         <div class="setting-item-header">
@@ -1478,20 +1505,48 @@ function addAudioSourceRow(source = { source: '', label: '', note: '' }) {
         <div class="config-grid-3">
             <div class="form-group" style="margin-bottom:0;">
                 <label>ソース (source)</label>
-                <input type="text" class="audio-source-path form-input" placeholder="rtsp://localhost:8554/stream または alsa" value="${esc(source.source)}">
+                <input type="text" class="audio-source-path form-input" placeholder="rtsp://localhost:8554/stream または alsa" value="${esc(sourceVal)}">
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>ラベル名 (label)</label>
-                <input type="text" class="audio-source-label form-input" placeholder="例：TV・レコーダー" value="${esc(source.label)}">
+                <input type="text" class="audio-source-label form-input" placeholder="例：TV・レコーダー" value="${esc(labelVal)}">
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>メモ (note)</label>
-                <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(source.note)}">
+                <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(noteVal)}">
+            </div>
+        </div>
+
+        <div class="config-grid-3" style="margin-top:12px;">
+            <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
+                <label class="checkbox-label" style="margin-bottom: 0;">
+                    <input type="checkbox" class="audio-source-stt-enabled" ${sttEnabledVal ? 'checked' : ''} onchange="toggleAudioSttRetention(this)">
+                    STT記録
+                </label>
+            </div>
+            <div class="form-group audio-source-retention-group" style="margin-bottom:0; display: ${sttEnabledVal ? 'block' : 'none'};">
+                <label>保持時間 (時間)</label>
+                <input type="number" class="audio-source-stt-retention form-input" min="1" step="1" value="${sttRetentionVal}">
+            </div>
+            <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
+                <label class="checkbox-label" style="margin-bottom: 0;">
+                    <input type="checkbox" class="audio-source-wake-word-enabled" ${wakeWordEnabledVal ? 'checked' : ''}>
+                    ウェイクワード有効
+                </label>
             </div>
         </div>
     `;
 
     listEl.appendChild(card);
+}
+
+function toggleAudioSttRetention(checkbox) {
+    const card = checkbox.closest('.audio-source-item');
+    if (!card) return;
+    const retentionGroup = card.querySelector('.audio-source-retention-group');
+    if (retentionGroup) {
+        retentionGroup.style.display = checkbox.checked ? 'block' : 'none';
+    }
 }
 
 function getAudioSourcesFromUI() {
@@ -1501,11 +1556,17 @@ function getAudioSourcesFromUI() {
         const source = card.querySelector('.audio-source-path').value.trim();
         const label = card.querySelector('.audio-source-label').value.trim();
         const note = card.querySelector('.audio-source-note').value.trim();
+        const stt_enabled = card.querySelector('.audio-source-stt-enabled').checked;
+        const stt_retention_hours = parseInt(card.querySelector('.audio-source-stt-retention').value, 10) || 60;
+        const wake_word_enabled = card.querySelector('.audio-source-wake-word-enabled').checked;
         
         if (source) {
             const srcObj = { source };
             if (label) srcObj.label = label;
             if (note) srcObj.note = note;
+            srcObj.stt_enabled = stt_enabled;
+            srcObj.stt_retention_hours = stt_retention_hours;
+            srcObj.wake_word_enabled = wake_word_enabled;
             sources.push(srcObj);
         }
     });
