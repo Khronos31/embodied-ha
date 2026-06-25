@@ -875,6 +875,11 @@ async function fetchSettings() {
                     { source: "capture_tv", label: "テレビ", note: "HDDレコーダー出力。" },
                     { source: "camera.living_room", label: "リビング", note: "リビング広角カメラ" }
                 ],
+                audio_sources: [
+                    { source: "rtsp://localhost:8554/capture_tv", label: "TV・レコーダー", note: "go2rtc経由のTV/レコーダー音声" },
+                    { source: "alsa", label: "スタディマイク", note: "USBマイク直接録音（/dev/snd 必要）" }
+                ],
+                stt_provider: "wyoming",
                 speakers: {
                     study: { type: "tts", tts_entity: "tts.home_assistant_cloud", media_player: "media_player.study_speaker" },
                     living: { type: "notify", entity: "notify.living_alexa_speak" }
@@ -979,6 +984,10 @@ function renderSettingsForm() {
     if (extraContextEl) {
         extraContextEl.value = extraContextData || "";
     }
+    const sttProviderEl = document.getElementById('setting-stt-provider');
+    if (sttProviderEl) {
+        sttProviderEl.value = prefsData.stt_provider || '';
+    }
 
     const speakersList = document.getElementById('speakers-list');
     speakersList.innerHTML = '';
@@ -995,6 +1004,8 @@ function renderSettingsForm() {
             createCameraCard(cam);
         });
     }
+
+    renderAudioSourceList(prefsData.audio_sources || []);
 
     const entitiesList = document.getElementById('entities-list');
     if (entitiesList) {
@@ -1214,9 +1225,14 @@ function serializeFormToPrefs() {
         }
     });
 
+    const audio_sources = getAudioSourcesFromUI();
+    const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
+
     return {
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
+        audio_sources,
+        stt_provider,
         speakers,
         entities,
         presence,
@@ -1431,6 +1447,69 @@ function handleCameraSourceChange(select) {
 
 function addCameraRow() {
     createCameraCard();
+}
+
+function renderAudioSourceList(sources) {
+    const listEl = document.getElementById('audio-sources-list');
+    if (listEl) {
+        listEl.innerHTML = '';
+        if (sources && Array.isArray(sources)) {
+            sources.forEach(src => {
+                addAudioSourceRow(src);
+            });
+        }
+    }
+}
+
+function addAudioSourceRow(source = { source: '', label: '', note: '' }) {
+    const listEl = document.getElementById('audio-sources-list');
+    if (!listEl) return;
+    const card = document.createElement('div');
+    card.className = 'setting-item-card audio-source-item';
+
+    card.innerHTML = `
+        <div class="setting-item-header">
+            <span class="setting-item-title">音声ソース設定</span>
+            <button type="button" class="btn-remove" onclick="this.closest('.audio-source-item').remove()">
+                ✕ 削除
+            </button>
+        </div>
+        
+        <div class="config-grid-3">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>ソース (source)</label>
+                <input type="text" class="audio-source-path form-input" placeholder="rtsp://localhost:8554/stream または alsa" value="${esc(source.source)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>ラベル名 (label)</label>
+                <input type="text" class="audio-source-label form-input" placeholder="例：TV・レコーダー" value="${esc(source.label)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>メモ (note)</label>
+                <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(source.note)}">
+            </div>
+        </div>
+    `;
+
+    listEl.appendChild(card);
+}
+
+function getAudioSourcesFromUI() {
+    const sources = [];
+    const items = document.querySelectorAll('.audio-source-item');
+    items.forEach(card => {
+        const source = card.querySelector('.audio-source-path').value.trim();
+        const label = card.querySelector('.audio-source-label').value.trim();
+        const note = card.querySelector('.audio-source-note').value.trim();
+        
+        if (source) {
+            const srcObj = { source };
+            if (label) srcObj.label = label;
+            if (note) srcObj.note = note;
+            sources.push(srcObj);
+        }
+    });
+    return sources;
 }
 
 const ENTITY_CONTROLLABLE_DOMAINS = 'light,switch,climate,media_player,cover,fan,script';

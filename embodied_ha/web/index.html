@@ -171,6 +171,21 @@
                             </div>
                         </section>
 
+                        <!-- Section: STT -->
+                        <section class="settings-section card">
+                            <h3>音声認識 (STT)</h3>
+                            <p class="section-desc">
+                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
+                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
+                                空欄の場合は音量検出のみ行います（文字起こしなし）。
+                            </p>
+                            <div class="form-group">
+                                <label class="form-label">STTプロバイダー (stt_provider)</label>
+                                <input type="text" id="setting-stt-provider" class="form-input" placeholder="wyoming（空欄で無効）" style="max-width:320px;">
+                                <p class="form-hint">HA統合で利用可能なSTTプロバイダーのID。未設定の場合は音量のみ検出します。</p>
+                            </div>
+                        </section>
+
                         <!-- Section: Policies -->
                         <section class="settings-section card">
                             <div class="section-header">
@@ -206,6 +221,22 @@
                             </div>
                             <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
                             <div id="cameras-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Audio Sources -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>音声ソース (audio_sources)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addAudioSourceRow()">ソースを追加</button>
+                            </div>
+                            <p class="section-desc">
+                                あかねが「聴く」ことができる音声ソースを定義します。
+                                RTSPストリームURL（go2rtc経由）またはUSBマイク直接録音（<code>alsa</code>）を指定します。
+                                デフォルトソース（最初の行）は省略時に使用されます。
+                            </p>
+                            <div id="audio-sources-list" class="settings-list">
                                 <!-- Dynamically generated -->
                             </div>
                         </section>
