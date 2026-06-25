@@ -79,6 +79,51 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
 
+    def test_load_runtime_settings_uses_latest_global_and_source_values(self):
+        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        settings = self.audio_daemon.load_runtime_settings(
+            base_config,
+            {
+                "stt_provider": "stt.home_assistant_cloud",
+                "stt_language": "ja-JP",
+                "wake_words": ["あかねちゃん"],
+                "audio_sources": [
+                    {
+                        "source": "default",
+                        "label": "Desk",
+                        "stt_enabled": True,
+                        "stt_retention_hours": 10,
+                        "wake_word_enabled": True,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(settings.provider, "stt.home_assistant_cloud")
+        self.assertEqual(settings.language, "ja-JP")
+        self.assertEqual(settings.wake_words, ["あかねちゃん"])
+        self.assertTrue(settings.stt_enabled)
+        self.assertEqual(settings.config.retention_hours, 10)
+        self.assertTrue(settings.config.wake_word_enabled)
+
+    def test_load_runtime_settings_detects_disabled_source(self):
+        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        settings = self.audio_daemon.load_runtime_settings(
+            base_config,
+            {
+                "stt_provider": "stt.home_assistant_cloud",
+                "audio_sources": [
+                    {
+                        "source": "default",
+                        "label": "Desk",
+                        "stt_enabled": False,
+                        "wake_word_enabled": False,
+                    }
+                ],
+            },
+        )
+        self.assertFalse(settings.stt_enabled)
+        self.assertFalse(settings.config.wake_word_enabled)
+
     def test_should_trigger_wake_word_is_case_insensitive(self):
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("AkAnE, listen", ["akane"]))
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))

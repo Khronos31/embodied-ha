@@ -54,6 +54,15 @@ class AudioSourceConfig:
     wake_word_enabled: bool
 
 
+@dataclass(frozen=True)
+class RuntimeSettings:
+    config: AudioSourceConfig
+    provider: str | None
+    language: str
+    wake_words: list[str]
+    stt_enabled: bool
+
+
 def log(message: str) -> None:
     print(f"[audio-daemon] {message}", file=sys.stderr, flush=True)
 
@@ -141,6 +150,50 @@ def load_wake_words(preferences: dict | None = None) -> list[str]:
         return []
     normalized = [clean(word).lower() for word in words if clean(word)]
     return normalized
+
+
+def load_runtime_settings(
+    base_config: AudioSourceConfig,
+    preferences: dict | None = None,
+) -> RuntimeSettings:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    provider = load_stt_provider(prefs)
+    language = load_stt_language(prefs)
+    wake_words = load_wake_words(prefs)
+    effective_config = base_config
+    stt_enabled = True
+
+    raw_sources = prefs.get("audio_sources")
+    if isinstance(raw_sources, list):
+        for item in raw_sources:
+            if not isinstance(item, dict):
+                continue
+            source = canonical_source(item.get("source"))
+            if source != base_config.source:
+                continue
+            label = clean(item.get("label")) or source
+            if label != base_config.label:
+                continue
+            try:
+                retention = int(item.get("stt_retention_hours", base_config.retention_hours))
+            except Exception:
+                retention = base_config.retention_hours
+            effective_config = AudioSourceConfig(
+                source=base_config.source,
+                label=base_config.label,
+                retention_hours=max(1, retention),
+                wake_word_enabled=bool(item.get("wake_word_enabled")),
+            )
+            stt_enabled = item.get("stt_enabled") is True
+            break
+
+    return RuntimeSettings(
+        config=effective_config,
+        provider=provider,
+        language=language,
+        wake_words=wake_words,
+        stt_enabled=stt_enabled,
+    )
 
 
 def build_ffmpeg_command(source: str) -> list[str]:
@@ -444,10 +497,7 @@ def new_vad():
 
 def audio_worker(
     config: AudioSourceConfig,
-    provider: str | None,
-    language: str,
     token: str,
-    wake_words: list[str],
 ) -> None:
     prebuffer_chunks = max(1, math.ceil(PREBUFFER_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
     max_silence_chunks = max(1, math.ceil(SILENCE_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
@@ -456,6 +506,7 @@ def audio_worker(
     while True:
         proc: subprocess.Popen | None = None
         detector, vad_mode = new_vad()
+        last_settings_signature: tuple[str | None, str, tuple[str, ...], bool] | None = None
         prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
         segment_chunks: list[bytes] = []
         segment_levels: list[float] = []
@@ -492,13 +543,42 @@ def audio_worker(
                     if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
                         peak_db, mean_db = summarize_chunk_levels(segment_levels)
                         speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
+                        settings = load_runtime_settings(config)
+                        signature = (
+                            settings.provider,
+                            settings.language,
+                            tuple(settings.wake_words),
+                            settings.config.wake_word_enabled,
+                        )
+                        if signature != last_settings_signature:
+                            last_settings_signature = signature
+                            log(
+                                "runtime settings updated for "
+                                f"{config.label}: provider={settings.provider or 'unset'}, "
+                                f"language={settings.language}, "
+                                f"wake_words={len(settings.wake_words)}, "
+                                f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}"
+                            )
+                        if not settings.stt_enabled:
+                            segment_chunks = []
+                            segment_levels = []
+                            segment_speech_chunks = 0
+                            silence_chunks = 0
+                            active = False
+                            prebuffer.clear()
+                            if detector is not None:
+                                try:
+                                    detector.reset()
+                                except Exception:
+                                    pass
+                            continue
                         process_segment(
-                            config,
+                            settings.config,
                             b"".join(segment_chunks),
-                            provider,
-                            language,
+                            settings.provider,
+                            settings.language,
                             token,
-                            wake_words,
+                            settings.wake_words,
                             diagnostics={
                                 "vad_mode": vad_mode,
                                 "speech_ratio": speech_ratio,
@@ -532,20 +612,37 @@ def audio_worker(
             if active and segment_chunks:
                 peak_db, mean_db = summarize_chunk_levels(segment_levels)
                 speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
-                process_segment(
-                    config,
-                    b"".join(segment_chunks),
-                    provider,
-                    language,
-                    token,
-                    wake_words,
-                    diagnostics={
-                        "vad_mode": vad_mode,
-                        "speech_ratio": speech_ratio,
-                        "peak_db": peak_db,
-                        "mean_db": mean_db,
-                    },
+                settings = load_runtime_settings(config)
+                signature = (
+                    settings.provider,
+                    settings.language,
+                    tuple(settings.wake_words),
+                    settings.config.wake_word_enabled,
                 )
+                if signature != last_settings_signature:
+                    last_settings_signature = signature
+                    log(
+                        "runtime settings updated for "
+                        f"{config.label}: provider={settings.provider or 'unset'}, "
+                        f"language={settings.language}, "
+                        f"wake_words={len(settings.wake_words)}, "
+                        f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}"
+                    )
+                if settings.stt_enabled:
+                    process_segment(
+                        settings.config,
+                        b"".join(segment_chunks),
+                        settings.provider,
+                        settings.language,
+                        token,
+                        settings.wake_words,
+                        diagnostics={
+                            "vad_mode": vad_mode,
+                            "speech_ratio": speech_ratio,
+                            "peak_db": peak_db,
+                            "mean_db": mean_db,
+                        },
+                    )
 
             rc = proc.wait(timeout=2)
             log(f"ffmpeg exited for {config.label} with code {rc}; retrying in 10s")
@@ -571,16 +668,13 @@ def main() -> int:
         log("no STT-enabled audio sources; exiting")
         return 0
 
-    provider = load_stt_provider(preferences)
-    language = load_stt_language(preferences)
-    wake_words = load_wake_words(preferences)
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
 
     threads = []
     for config in sources:
         thread = threading.Thread(
             target=audio_worker,
-            args=(config, provider, language, token, wake_words),
+            args=(config, token),
             daemon=False,
             name=f"audio:{config.label}",
         )
