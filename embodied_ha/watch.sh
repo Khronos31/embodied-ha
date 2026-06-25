@@ -495,7 +495,7 @@ if _sd:
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
         _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,"
-                    "mcp__memory__remember,mcp__memory__loops_add,"
+                    "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                     "mcp__sociality__record_boundary,mcp__sociality__record_consent,"
@@ -660,6 +660,9 @@ PYEOF
 _speak_boundary_json=$(SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "${EHA_BODY_STATE:-{}}"     --sociality-log-dir "$LOG_DIR"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_speak_allowed" != "True" ]; then
+  if [ -n "$SPEAK" ]; then
+    BOUNDARY_JSON="$_speak_boundary_json" SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" MODE="watch" HOUR="$HOUR" SPEAK_ROOM="$SPEAK_ROOM" SPEAK="$SPEAK" python3 -c "import json, os, sys; sys.path.insert(0, os.environ['SCRIPT_DIR']); import counterfactual_state as cs; b=json.loads(os.environ.get('BOUNDARY_JSON') or '{}'); cs.record_counterfactual(os.environ.get('MODE','watch'),'speak','声をかけようとした','boundary_denied',[f\"hour={os.environ.get('HOUR','')}\", f\"room={os.environ.get('SPEAK_ROOM','')}\", os.environ.get('SPEAK','')],0.7,boundary_reason=b.get('reason',''),log_dir=os.environ.get('LOG_DIR'))" 2>/dev/null || true
+  fi
   SPEAK=""
 fi
 

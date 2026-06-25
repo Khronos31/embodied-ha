@@ -342,7 +342,7 @@ if _sd:
     if os.path.exists(_mcp_path):
         cmd += ["--allowedTools",
                 "mcp__memory__recall,mcp__memory__remember,"
-                "mcp__memory__record_episode,mcp__memory__record_causal_chain,"
+                "mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,"
                 "mcp__memory__get_episode,mcp__memory__list_episodes,mcp__memory__get_causal_chain,"
                 "mcp__memory__loops_add,mcp__memory__loops_close,"
                 "mcp__sociality__get_relationship,mcp__sociality__update_relationship,"

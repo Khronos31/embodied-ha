@@ -29,6 +29,7 @@ from typing import Any, Mapping
 
 from mcp_lib import log, serve, text
 import memory_state as ms
+import counterfactual_state as cs
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
@@ -175,6 +176,26 @@ def record_episode(args: dict[str, Any]):
     episode = ms.save_episode(LOG_DIR, payload)
     log(f"[memory-mcp] episode: {episode.get('id', '')} {episode.get('summary', '')[:40]}")
     return _json_text(episode)
+
+
+def record_counterfactual(args: dict[str, Any]):
+    evidence = args.get("evidence")
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    elif not isinstance(evidence, list):
+        evidence = []
+    row = cs.record_counterfactual(
+        _clean(args.get("loop")),
+        _clean(args.get("intent")),
+        _clean(args.get("summary")),
+        _clean(args.get("rejected_because")),
+        evidence,
+        args.get("confidence", 0.5),
+        boundary_reason=_clean(args.get("boundary_reason")),
+        log_dir=LOG_DIR,
+    )
+    log(f"[memory-mcp] counterfactual: {row.get('loop', '')} {row.get('summary', '')[:40]}")
+    return _json_text(row)
 
 
 def get_episode(args: dict[str, Any]):
@@ -428,6 +449,28 @@ def main() -> None:
                 },
             },
             "handler": record_episode,
+        },
+        "record_counterfactual": {
+            "spec": {
+                "name": "record_counterfactual",
+                "description": (
+                    "声をかける・操作する・提案するつもりだったが、境界や確信不足でやめたことを記録する。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "loop": {"type": "string", "description": "watch/explore/chat"},
+                        "intent": {"type": "string", "description": "speak/act/propose"},
+                        "summary": {"type": "string", "description": "しようとしたことの短い説明"},
+                        "rejected_because": {"type": "string", "description": "quiet_window/low_confidence/turn_taking など"},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                        "confidence": {"type": "number"},
+                        "boundary_reason": {"type": "string"},
+                    },
+                    "required": ["loop", "intent", "summary", "rejected_because", "evidence", "confidence"],
+                },
+            },
+            "handler": record_counterfactual,
         },
         "get_episode": {
             "spec": {

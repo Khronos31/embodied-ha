@@ -17,6 +17,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 import memory_state as ms  # noqa: E402
+import counterfactual_state as cs  # noqa: E402
 
 
 def _clean(value: Any) -> str:
@@ -326,13 +327,19 @@ def _save_episodes(log_dir: str, day: str, draft: dict[str, Any], entries: list[
 
 def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, Any], entries: list[dict[str, Any]]) -> None:
     episode_ids = _save_episodes(log_dir, day, draft, entries)
+    counterfactual_line = cs.counterfactual_sentence(cs.best_recent_counterfactual(log_dir, hours=24))
+    summary = draft["summary"]
+    highlights = list(draft["highlights"])
+    if counterfactual_line and counterfactual_line not in summary:
+        summary = f"{summary} / {counterfactual_line}" if summary else counterfactual_line
+        highlights.append({"summary": counterfactual_line, "importance": 0.55, "tags": ["counterfactual"]})
     daybook = ms.build_daybook(
         log_dir,
         day,
         episode_ids=episode_ids,
-        summary=draft["summary"],
+        summary=summary,
         themes=draft["themes"],
-        highlights=draft["highlights"],
+        highlights=highlights,
         open_questions=draft["open_questions"],
         raw_entry_count=len(entries),
         source="watch",

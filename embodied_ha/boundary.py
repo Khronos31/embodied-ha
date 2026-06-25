@@ -15,6 +15,7 @@ import sys
 from typing import Any
 
 import sociality_state as ss
+import counterfactual_state as cs
 
 
 QUIET_HOURS = range(1, 7)
@@ -317,6 +318,31 @@ def main(argv: list[str] | None = None) -> int:
         body_state=body_state,
         sociality_log_dir=args.sociality_log_dir,
     )
+    if not result.get("allowed"):
+        intent = _compact(args.intent)
+        reason = str(result.get("reason") or "boundary_denied")
+        evidence = [f"hour={args.hour}"]
+        if args.metadata_json:
+            evidence.append(f"metadata={args.metadata_json}")
+        if args.body_state_json:
+            evidence.append("body_state=present")
+        try:
+            hour = int(args.hour)
+        except Exception:
+            hour = 12
+        try:
+            cs.record_counterfactual(
+                args.mode,
+                "act" if intent == "action" else intent,
+                "発話しようとした" if intent == "speak" else "家電操作しようとした",
+                "quiet_window" if hour in QUIET_HOURS else "boundary_denied",
+                evidence,
+                0.7,
+                boundary_reason=reason,
+                log_dir=args.sociality_log_dir or None,
+            )
+        except Exception:
+            pass
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
     else:
