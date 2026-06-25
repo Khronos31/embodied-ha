@@ -22,6 +22,15 @@
     }
   ],
 
+  "stt_provider": null,
+
+  "audio_sources": [
+    { "source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー", "note": "go2rtc経由のTV/レコーダー音声" },
+    { "source": "rtsp://localhost:8556/mic_only",   "label": "PC",             "note": "PCマイク" },
+    { "source": "rtsp://localhost:8558/mic_only",   "label": "Google TV",      "note": "Google TV Streamerマイク" },
+    { "source": "alsa",                             "label": "スタディマイク", "note": "USBマイク直接録音（/dev/snd 必要）" }
+  ],
+
   "speakers": {
     "study": {
       "type": "tts",
