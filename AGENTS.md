@@ -66,6 +66,23 @@ ha addons restart ff8b9363_embodied_ha
 **⚠️ config.yaml permission changes require a version bump** — Supervisor does not re-evaluate
 permissions on rebuild, only on version update + `ha addons update`.
 
+## Commit convention
+
+すべてのコミットメッセージの末尾に、作業したエージェントの `Co-Authored-By` トレーラーを付けること。
+
+| エージェント | トレーラー |
+|---|---|
+| Codex | `Co-Authored-By: Codex <noreply@openai.com>` |
+| Antigravity | `Co-Authored-By: Antigravity <noreply@google.com>` |
+| Claude | `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` |
+
+例:
+```
+feat: add counterfactual state logging
+
+Co-Authored-By: Codex <noreply@openai.com>
+```
+
 ## Key constraints
 
 - **Python style**: follow `ruff.toml` (E401/E701 disabled; focus on bug detection)
