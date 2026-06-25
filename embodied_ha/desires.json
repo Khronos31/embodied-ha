@@ -19,6 +19,14 @@
     "growth_rate": 0.08,
     "prompt": "一緒に住む人の今の様子が気になってきた。何をしているか、調子はどうか。"
   },
+  "curious_about_sounds": {
+    "growth_rate": 0.04,
+    "prompt": "聞こえている音の中に、見落としている変化があるかもしれない。少し耳を澄ませたい。"
+  },
+  "want_to_check_audio_memory": {
+    "growth_rate": 0.02,
+    "prompt": "最近聞こえた音や、自分から聞きに行った音の記録を少し振り返りたい。"
+  },
   "want_to_reflect": {
     "growth_rate": 0.025,
     "prompt": "最近の観察記録が積み重なってきた気がする。少し振り返りたい。"
