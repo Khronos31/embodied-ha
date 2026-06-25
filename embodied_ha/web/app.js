@@ -5,7 +5,8 @@ let activeRoom = 'chat'; // 'chat' or 'soliloquy'
 let chatMessages = [];
 let unreadCounts = {
     chat: 0,
-    soliloquy: 0
+    soliloquy: 0,
+    audio: 0
 };
 let isTyping = false;
 let typingType = 'chat'; // 'chat', 'watch', 'explore', 'private'
@@ -110,6 +111,7 @@ function switchRoom(room) {
                 document.getElementById('room-settings').classList.add('active');
                 document.getElementById('room-chat').classList.remove('active');
                 document.getElementById('room-soliloquy').classList.remove('active');
+                document.getElementById('room-audio').classList.remove('active');
                 return;
             }
         }
@@ -122,19 +124,33 @@ function switchRoom(room) {
     document.getElementById('room-chat').classList.toggle('active', room === 'chat');
     document.getElementById('room-soliloquy').classList.toggle('active', room === 'soliloquy');
     document.getElementById('room-settings').classList.toggle('active', room === 'settings');
+    document.getElementById('room-audio').classList.toggle('active', room === 'audio');
 
     const chatAreaEl = document.querySelector('.chat-area');
     const settingsViewEl = document.getElementById('settings-view');
+    const audioViewEl = document.getElementById('audio-view');
 
     if (room === 'settings') {
         if (chatAreaEl) chatAreaEl.style.display = 'none';
         if (settingsViewEl) settingsViewEl.style.display = 'flex';
+        if (audioViewEl) audioViewEl.style.display = 'none';
         fetchSettings();
+        return;
+    }
+
+    if (room === 'audio') {
+        if (chatAreaEl) chatAreaEl.style.display = 'none';
+        if (settingsViewEl) settingsViewEl.style.display = 'none';
+        if (audioViewEl) audioViewEl.style.display = 'flex';
+        unreadCounts[room] = 0;
+        updateUnreadBadges();
+        fetchAudioEvents();
         return;
     }
 
     if (chatAreaEl) chatAreaEl.style.display = 'flex';
     if (settingsViewEl) settingsViewEl.style.display = 'none';
+    if (audioViewEl) audioViewEl.style.display = 'none';
 
     // Update Header Text, Subtitle and Toggle buttons
     const titleEl = document.getElementById('active-room-title');
@@ -365,6 +381,7 @@ function getBadgeClass(type) {
 function updateUnreadBadges() {
     const chatBadge = document.getElementById('chat-unread');
     const soliloquyBadge = document.getElementById('soliloquy-unread');
+    const audioBadge = document.getElementById('audio-unread');
 
     if (unreadCounts.chat > 0) {
         chatBadge.textContent = unreadCounts.chat;
@@ -378,6 +395,15 @@ function updateUnreadBadges() {
         soliloquyBadge.style.display = 'flex';
     } else {
         soliloquyBadge.style.display = 'none';
+    }
+
+    if (audioBadge) {
+        if (unreadCounts.audio > 0) {
+            audioBadge.textContent = unreadCounts.audio;
+            audioBadge.style.display = 'flex';
+        } else {
+            audioBadge.style.display = 'none';
+        }
     }
 }
 
@@ -539,6 +565,7 @@ async function checkBackendMode() {
             // Initial sync
             await fetchMessages('chat');
             await fetchMessages('soliloquy');
+            await fetchAudioEvents();
 
             // Connect to Live update stream (SSE)
             connectSSE();
@@ -616,6 +643,7 @@ function connectSSE() {
     source.onopen = () => {
         fetchMessages('chat');
         fetchMessages('soliloquy');
+        fetchAudioEvents();
     };
 
     // File update notification
@@ -623,12 +651,21 @@ function connectSSE() {
         try {
             const data = JSON.parse(e.data);
             console.log(`[SSE] update event:`, data);
-            fetchMessages(data.room);
-
-            // Increment sidebar unread count if in the other room
-            if (data.room !== activeRoom) {
-                unreadCounts[data.room] += 1;
-                updateUnreadBadges();
+            if (data.room === 'audio') {
+                if (activeRoom === 'audio') {
+                    fetchAudioEvents();
+                } else {
+                    unreadCounts.audio = (unreadCounts.audio || 0) + 1;
+                    updateUnreadBadges();
+                }
+            } else {
+                fetchMessages(data.room);
+                if (data.room !== activeRoom) {
+                    if (unreadCounts[data.room] !== undefined) {
+                        unreadCounts[data.room] += 1;
+                        updateUnreadBadges();
+                    }
+                }
             }
         } catch (err) {
             console.error("[SSE] Failed to process update event", err);
@@ -719,7 +756,7 @@ function runMockSimulations() {
 function enterSetupMode() {
     setupMode = true;
     chatMessages = [];
-    unreadCounts = { chat: 0, soliloquy: 0 };
+    unreadCounts = { chat: 0, soliloquy: 0, audio: 0 };
     updateUnreadBadges();
 
     const soliloquyBtn = document.getElementById('room-soliloquy');
@@ -2097,5 +2134,272 @@ async function handleSpeakTest(btn) {
             statusEl.style.color = "#b91c1c";
             setTimeout(() => { statusEl.textContent = ""; }, 6000);
         }
+    }
+}
+
+// --- Heard Sounds (Auditory Log) Features ---
+let audioEvents = [];
+let audioEventTags = [];
+
+async function fetchAudioEvents() {
+    try {
+        const eventsRes = await fetch(`${base}/api/audio-events?limit=50`);
+        const tagsRes = await fetch(`${base}/api/audio-event-tags?limit=300`);
+
+        if (eventsRes.ok) {
+            audioEvents = await eventsRes.json();
+            audioEvents.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        }
+        if (tagsRes.ok) {
+            audioEventTags = await tagsRes.json();
+        }
+
+        updateAudioPreview();
+        renderAudioEvents();
+    } catch (err) {
+        console.error('[Audio] Failed to fetch audio events or tags:', err);
+    }
+}
+
+function updateAudioPreview() {
+    const previewEl = document.getElementById('audio-preview');
+    if (!previewEl) return;
+    if (audioEvents.length > 0) {
+        const latest = audioEvents[0];
+        const timeStr = new Date(latest.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const tags = audioEventTags.filter(t => t.event_id === latest.event_id);
+        const tagLabel = tags.length > 0 ? tags[tags.length - 1].label : '';
+        previewEl.textContent = tagLabel ? `${timeStr} - ${tagLabel}` : `${timeStr} - ${latest.source || '音'}`;
+    } else {
+        previewEl.textContent = '最近の非音声イベント';
+    }
+}
+
+function renderAudioEvents() {
+    const listEl = document.getElementById('audio-events-list');
+    if (!listEl) return;
+
+    if (audioEvents.length === 0) {
+        listEl.innerHTML = `
+            <div class="audio-empty-state">
+                <svg class="audio-empty-icon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="var(--claude-text-sub)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 19v4M8 23h8"/>
+                </svg>
+                <div style="font-weight: 600; font-size: 15px; color: var(--claude-text-main);">記録された音がありません</div>
+                <div style="font-size: 13px; max-width: 320px; line-height: 1.4;">音声認識(STT)されなかった特徴的な環境音やノイズが検知されると、ここに一覧表示されます。</div>
+            </div>
+        `;
+        return;
+    }
+
+    listEl.innerHTML = audioEvents.map(event => {
+        const eventId = event.event_id;
+        const timeStr = new Date(event.timestamp).toLocaleString();
+        const tags = audioEventTags.filter(t => t.event_id === eventId);
+        tags.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+        const manualTag = tags.find(t => t.type === 'manual');
+
+        const source = event.source || '不明なマイク';
+        const origin = event.situational_context?.sensory_origin || 'direct';
+        const bodyRoom = event.situational_context?.body_room || '';
+        const sourceRoom = event.situational_context?.source_room || '';
+
+        let roomInfo = '';
+        if (bodyRoom && sourceRoom) {
+            if (bodyRoom === sourceRoom) {
+                roomInfo = `部屋: ${bodyRoom}`;
+            } else {
+                roomInfo = `あかね: ${bodyRoom} / 音源: ${sourceRoom}`;
+            }
+        } else if (bodyRoom) {
+            roomInfo = `部屋: ${bodyRoom}`;
+        }
+
+        let badgeClass = 'audio-badge-direct';
+        let badgeText = '直接音';
+        if (origin === 'remote') {
+            badgeClass = 'audio-badge-remote';
+            badgeText = '遠隔音';
+        } else if (origin === 'home_assistant') {
+            badgeClass = 'audio-badge-ha';
+            badgeText = 'HA経由';
+        }
+
+        const features = event.acoustic_features || {};
+        const peakDb = features.peak_db !== undefined ? `${features.peak_db.toFixed(1)} dB` : '--';
+        const meanDb = features.mean_db !== undefined ? `${features.mean_db.toFixed(1)} dB` : '--';
+        const duration = event.duration_sec !== undefined ? `${event.duration_sec.toFixed(2)}秒` : '--';
+        const band = features.dominant_band || '不明';
+        const centroid = features.spectral_centroid_hz !== undefined ? `${Math.round(features.spectral_centroid_hz)} Hz` : '--';
+        const isTransient = features.transient ? '瞬発的 (Transient)' : '';
+        const isPeriodic = features.periodic ? '周期性 (Periodic)' : '';
+
+        let tagHistoryHtml = '';
+        if (tags.length > 0) {
+            tagHistoryHtml = `
+                <div class="audio-tag-history">
+                    <div class="audio-tag-history-title">履歴・推論候補</div>
+                    ${tags.map(t => {
+                        const confStr = t.confidence !== undefined ? `${(t.confidence * 100).toFixed(0)}%` : '';
+                        const actorStr = t.actor ? `by ${t.actor}` : '';
+                        const dateStr = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        return `
+                            <div class="tag-history-item">
+                                <div>
+                                    <span class="tag-history-label">${escapeHtml(t.label)}</span>
+                                    ${confStr ? `<span class="tag-history-confidence">(${confStr})</span>` : ''}
+                                    ${t.note ? `<div class="tag-history-meta">${escapeHtml(t.note)}</div>` : ''}
+                                </div>
+                                <div style="text-align: right;">
+                                    <span class="tag-history-badge tag-history-badge-${t.type}">${t.type}</span>
+                                    <div class="tag-history-meta">${dateStr} ${actorStr}</div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        const currentLabel = manualTag ? manualTag.label : '';
+        const currentNote = manualTag ? (manualTag.note || '') : '';
+
+        return `
+            <div class="audio-event-card" id="audio-card-${eventId}">
+                <div class="audio-card-header">
+                    <div class="audio-card-meta">
+                        <div class="audio-card-time">${timeStr}</div>
+                        <div class="audio-card-source">
+                            <strong>${escapeHtml(source)}</strong>
+                            <span class="audio-badge ${badgeClass}">${badgeText}</span>
+                            ${roomInfo ? `<span style="opacity: 0.8;">| ${escapeHtml(roomInfo)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="audio-card-features">
+                        <span class="feature-tag">長さ: <strong>${duration}</strong></span>
+                        <span class="feature-tag">ピーク: <strong>${peakDb}</strong></span>
+                        <span class="feature-tag">平均: <strong>${meanDb}</strong></span>
+                        <span class="feature-tag">帯域: <strong>${band}</strong></span>
+                        <span class="feature-tag">重心: <strong>${centroid}</strong></span>
+                        ${isTransient ? `<span class="feature-tag" style="background-color: rgba(204,90,55,0.05); color: var(--claude-accent);">★ ${isTransient}</span>` : ''}
+                        ${isPeriodic ? `<span class="feature-tag" style="background-color: rgba(3,105,161,0.05); color: #0369a1;">⟳ ${isPeriodic}</span>` : ''}
+                    </div>
+                </div>
+
+                <div class="audio-playback-container">
+                    <span style="font-size: 12px; font-weight: 600; color: var(--claude-text-sub);">録音再生:</span>
+                    <audio controls src="${base}/api/audio-events/${eventId}/wav" preload="none"></audio>
+                </div>
+
+                <div class="audio-card-body">
+                    <div class="audio-tag-section">
+                        <form class="audio-label-form" onsubmit="saveAudioTag(event, '${eventId}')">
+                            <div class="form-group" style="margin-bottom: 8px;">
+                                <label class="form-label" style="margin-bottom: 4px;">音のラベル (手動登録)</label>
+                                <input type="text" class="form-input" name="label" placeholder="例: キーボード音、咳払い、犬の鳴き声..." value="${escapeHtml(currentLabel)}" required>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 12px;">
+                                <label class="form-label" style="margin-bottom: 4px;">メモ (任意)</label>
+                                <input type="text" class="form-input" name="note" placeholder="例: 実際に聞いて確認、かなり近かった" value="${escapeHtml(currentNote)}">
+                            </div>
+                            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickIgnore(this, '${eventId}')">無視 (Ignore)</button>
+                                <button type="submit" class="btn btn-primary btn-sm">ラベルを保存</button>
+                            </div>
+                        </form>
+                    </div>
+                    <div>
+                        ${tagHistoryHtml || '<div style="font-size: 12px; color: var(--claude-text-sub); text-align: center; padding-top: 24px;">推論候補や登録履歴はまだありません</div>'}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#039;");
+}
+
+async function saveAudioTag(e, eventId) {
+    if (e) e.preventDefault();
+
+    let form;
+    let label = '';
+    let note = '';
+
+    if (e) {
+        form = e.target;
+        label = form.elements.label.value.trim();
+        note = form.elements.note.value.trim();
+    } else {
+        return;
+    }
+
+    const saveBtn = form.querySelector('button[type="submit"]');
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+        const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                type: 'manual',
+                label: label,
+                confidence: 0.95,
+                note: note,
+                actor: 'user'
+            })
+        });
+
+        if (response.ok) {
+            await fetchAudioEvents();
+        } else {
+            alert('保存に失敗しました');
+        }
+    } catch (err) {
+        console.error('[Audio] Failed to save tag:', err);
+        alert(`エラーが発生しました: ${err.message}`);
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function quickIgnore(btn, eventId) {
+    btn.disabled = true;
+    try {
+        const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                type: 'manual',
+                label: '無視 (Ignore)',
+                confidence: 0.95,
+                note: 'UIからの一括無視',
+                actor: 'user'
+            })
+        });
+
+        if (response.ok) {
+            await fetchAudioEvents();
+        } else {
+            alert('保存に失敗しました');
+        }
+    } catch (err) {
+        console.error('[Audio] Failed to ignore tag:', err);
+        alert(`エラー: ${err.message}`);
+    } finally {
+        btn.disabled = false;
     }
 }

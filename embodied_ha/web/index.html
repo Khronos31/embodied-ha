@@ -58,6 +58,22 @@
                         </div>
                     </div>
                 </div>
+                <div class="room-item" id="room-audio" onclick="switchRoom('audio')">
+                    <div class="room-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v1a3 3 0 0 0 3 3h1a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1H5v-1a7 7 0 0 1 14 0v1h-2a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h1a3 3 0 0 0 3-3v-1a9 9 0 0 0-9-9z"/>
+                        </svg>
+                    </div>
+                    <div class="room-info">
+                        <div class="room-name-row">
+                            <span class="room-name">耳にした音 (Heard Sounds)</span>
+                        </div>
+                        <div class="room-preview-row">
+                            <span class="room-preview" id="audio-preview">最近の非音声イベント</span>
+                            <span class="unread-badge" id="audio-unread" style="display: none;">1</span>
+                        </div>
+                    </div>
+                </div>
                 <div class="room-item" id="room-settings" onclick="switchRoom('settings')">
                     <div class="room-icon">
                         <svg viewBox="0 0 24 24" width="24" height="24">
@@ -324,6 +340,31 @@
                     <button type="submit" class="btn btn-success btn-large">設定を保存</button>
                 </div>
             </form>
+        </main>
+
+        <!-- Audio Log View -->
+        <main class="audio-view" id="audio-view" style="display:none;">
+            <header class="settings-header">
+                <div class="settings-header-top" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <div>
+                        <h2 class="settings-title">耳にした音 (Heard Sounds)</h2>
+                        <p class="settings-subtitle">音声認識されなかった特徴的な環境音やノイズのログをタグ付けできます</p>
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-secondary" onclick="fetchAudioEvents()" style="padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                            </svg>
+                            更新 (Reload)
+                        </button>
+                    </div>
+                </div>
+            </header>
+            <div class="settings-container">
+                <div id="audio-events-list" class="audio-events-list">
+                    <!-- Audio events will be dynamically populated -->
+                </div>
+            </div>
         </main>
     </div>
     <script defer src="app.js"></script>

@@ -1305,3 +1305,248 @@ select.stt-loading {
     flex-shrink: 0;
 }
 
+/* --- Auditory Log (Heard Sounds) Style --- */
+.audio-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: var(--claude-bg);
+}
+
+.audio-events-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.audio-event-card {
+    background-color: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.audio-event-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.audio-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+    padding-bottom: 10px;
+}
+
+.audio-card-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.audio-card-time {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--claude-text-main);
+}
+
+.audio-card-source {
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.audio-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.audio-badge-direct {
+    background-color: var(--badge-watch-bg);
+    color: var(--badge-watch-text);
+}
+
+.audio-badge-remote {
+    background-color: var(--badge-explore-bg);
+    color: var(--badge-explore-text);
+}
+
+.audio-badge-ha {
+    background-color: var(--badge-chat-bg);
+    color: var(--badge-chat-text);
+}
+
+.audio-card-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+}
+
+.feature-tag {
+    background-color: rgba(0, 0, 0, 0.03);
+    border: 1px solid var(--claude-border);
+    color: var(--claude-text-sub);
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.feature-tag strong {
+    color: var(--claude-text-main);
+}
+
+.audio-playback-container {
+    background-color: rgba(0, 0, 0, 0.015);
+    border: 1px solid var(--claude-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.audio-playback-container audio {
+    flex: 1;
+    height: 36px;
+    outline: none;
+}
+
+.audio-card-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+@media (max-width: 768px) {
+    .audio-card-body {
+        grid-template-columns: 1fr;
+    }
+}
+
+.audio-tag-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
+    padding-right: 16px;
+}
+
+@media (max-width: 768px) {
+    .audio-tag-section {
+        border-right: none;
+        padding-right: 0;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        padding-bottom: 16px;
+    }
+}
+
+.audio-label-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.audio-tag-history {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.audio-tag-history-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--claude-text-sub);
+    margin-bottom: 2px;
+}
+
+.tag-history-item {
+    background-color: var(--claude-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.tag-history-label {
+    font-weight: 600;
+    color: var(--claude-text-main);
+}
+
+.tag-history-confidence {
+    font-size: 11px;
+    color: var(--claude-text-sub);
+}
+
+.tag-history-meta {
+    font-size: 10px;
+    color: var(--claude-text-sub);
+    margin-top: 2px;
+}
+
+.tag-history-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.tag-history-badge-manual {
+    background-color: rgba(22, 163, 74, 0.1);
+    color: #15803d;
+}
+
+.tag-history-badge-gemini {
+    background-color: rgba(3, 105, 161, 0.1);
+    color: #0369a1;
+}
+
+.tag-history-badge-claude_audio {
+    background-color: rgba(107, 33, 168, 0.1);
+    color: #6b21a8;
+}
+
+.tag-history-badge-rule {
+    background-color: rgba(180, 83, 9, 0.1);
+    color: #b45309;
+}
+
+.tag-history-badge-other {
+    background-color: rgba(107, 99, 89, 0.1);
+    color: #6b6359;
+}
+
+.audio-empty-state {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--claude-text-sub);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
+.audio-empty-icon {
+    opacity: 0.3;
+}

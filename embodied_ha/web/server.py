@@ -22,6 +22,13 @@ AUDIO_EVENT_TAGS_LOG = os.environ.get(
     "EHA_AUDIO_EVENT_TAGS_FILE",
     os.path.join(LOG_DIR, "audio_event_tags.jsonl"),
 )
+WAV_DIR = os.environ.get("EHA_AUDIO_WAV_DIR")
+if not WAV_DIR:
+    eha_data_dir = os.environ.get("EHA_DATA_DIR")
+    if eha_data_dir:
+        WAV_DIR = os.path.join(eha_data_dir, "wav")
+    else:
+        WAV_DIR = "/config/embodied-ha/wav"
 
 PREFS_FILE = os.environ.get("EHA_PREFS_FILE", os.path.join(SCRIPT_DIR, "preferences.json"))
 PREFS_EXAMPLE_FILE = os.path.join(SCRIPT_DIR, "preferences.json.example")
@@ -519,6 +526,37 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int(qs.get("limit", ["300"])[0])
             self.send_json(read_jsonl(AUDIO_EVENT_TAGS_LOG, limit))
+        elif path.startswith("/api/audio-events/") and path.endswith("/wav"):
+            event_id = path[len("/api/audio-events/"):-len("/wav")].strip("/")
+            if not event_id or not all(c.isalnum() or c in "-_" for c in event_id):
+                self.send_error(400, "Invalid event ID")
+                return
+            events = read_jsonl(NON_SPEECH_AUDIO_EVENTS_LOG, 1000)
+            wav_path = None
+            for ev in reversed(events):
+                if ev.get("event_id") == event_id:
+                    wav_path = ev.get("wav_ref")
+                    break
+            if not wav_path:
+                wav_path = os.path.join(WAV_DIR, f"{event_id}.wav")
+            wav_path = os.path.normpath(wav_path)
+            expected_prefix = os.path.normpath(WAV_DIR)
+            if not wav_path.startswith(expected_prefix + os.sep) and wav_path != expected_prefix:
+                self.send_error(403, "Forbidden")
+                return
+            if not os.path.exists(wav_path):
+                self.send_error(404, "Not Found")
+                return
+            try:
+                with open(wav_path, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", len(data))
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_error(500, str(e))
         elif path == "/api/setup/status":
             self.send_json({"authenticated": is_authenticated()})
         elif path == "/api/setup/login":
