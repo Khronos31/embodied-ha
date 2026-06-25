@@ -264,13 +264,43 @@ TOOL_DIAGNOSE = {
 def diagnose(args: dict):
     result: dict = {}
 
-    # H2: PULSE_SERVER / PULSE_RUNTIME_PATH の確認
-    result["env"] = {
-        "PULSE_SERVER": os.environ.get("PULSE_SERVER", ""),
-        "PULSE_RUNTIME_PATH": os.environ.get("PULSE_RUNTIME_PATH", ""),
-        "PULSE_SINK": os.environ.get("PULSE_SINK", ""),
-        "PULSE_SOURCE": os.environ.get("PULSE_SOURCE", ""),
-    }
+    # H2: PulseAudio関連環境変数（HAOS が何を注入しているか全部見る）
+    pulse_env = {k: v for k, v in os.environ.items() if "PULSE" in k or "AUDIO" in k or "SOUND" in k}
+    result["env_pulse"] = pulse_env
+
+    # ソケットを実際に探す（HAOSがどのパスに置くか確認）
+    socket_candidates = [
+        "/run/pulse/native",
+        "/var/run/pulse/native",
+        "/run/user/0/pulse/native",
+        "/run/user/1000/pulse/native",
+        "/tmp/pulse",
+        "/root/.pulse/native",
+        "/var/run/pulse",
+        "/run/pulse",
+    ]
+    result["socket_search"] = {}
+    for path in socket_candidates:
+        import stat as stat_mod
+        try:
+            st = os.stat(path)
+            is_sock = stat_mod.S_ISSOCK(st.st_mode)
+            is_dir = stat_mod.S_ISDIR(st.st_mode)
+            result["socket_search"][path] = "socket" if is_sock else ("dir" if is_dir else "file")
+        except FileNotFoundError:
+            result["socket_search"][path] = "not found"
+
+    # /run 直下を列挙（HAOS が何を注入しているか）
+    try:
+        result["run_ls"] = sorted(os.listdir("/run"))
+    except Exception as e:
+        result["run_ls"] = str(e)
+
+    # /dev/snd があるか（raw ALSA）
+    try:
+        result["dev_snd_ls"] = sorted(os.listdir("/dev/snd"))
+    except Exception:
+        result["dev_snd_ls"] = "not found"
 
     # H4: find_ffmpeg() がどのバイナリを返すか
     ffmpeg = find_ffmpeg()
@@ -279,7 +309,6 @@ def diagnose(args: dict):
         r = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, timeout=10)
         first = (r.stdout or r.stderr or "").splitlines()
         result["ffmpeg_version"] = first[0] if first else ""
-        # pulseaudio対応確認
         r2 = subprocess.run([ffmpeg, "-f", "pulse", "-i", "dummy", "-t", "0", "-f", "null", "-"],
                             capture_output=True, text=True, timeout=5)
         result["ffmpeg_pulse_support"] = "pulse" in (r2.stderr or "").lower() and \
@@ -290,9 +319,7 @@ def diagnose(args: dict):
     result["pactl_path"] = pactl or "not found"
     if pactl:
         r = subprocess.run([pactl, "info"], capture_output=True, text=True, timeout=5)
-        for line in (r.stdout or "").splitlines():
-            if "default source" in line.lower() or "server name" in line.lower():
-                result.setdefault("pactl_info", []).append(line.strip())
+        result["pactl_info"] = (r.stdout or r.stderr or "").strip()
         r2 = subprocess.run([pactl, "list", "sources", "short"],
                             capture_output=True, text=True, timeout=5)
         result["pactl_sources"] = (r2.stdout or r2.stderr or "").strip()
@@ -301,8 +328,8 @@ def diagnose(args: dict):
     r = subprocess.run(["cat", "/proc/asound/cards"], capture_output=True, text=True, timeout=5)
     result["alsa_cards"] = (r.stdout or "not available").strip()
 
-    # H1追加: ffmpegでpulse default録音テスト（音量確認）
-    if ffmpeg and result.get("ffmpeg_pulse_support"):
+    # H1追加: ffmpegでpulse default録音テスト（PULSE_SERVER設定済みのとき）
+    if ffmpeg and result.get("ffmpeg_pulse_support") and os.environ.get("PULSE_SERVER"):
         TMP_DIR.mkdir(parents=True, exist_ok=True)
         try:
             with tempfile.NamedTemporaryFile(dir=TMP_DIR, suffix=".wav", delete=False) as tmp:

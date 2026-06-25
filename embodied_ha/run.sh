@@ -44,9 +44,19 @@ export PATH="${EHA_TOOLS_PATH}:${PATH}"
 # --- PulseAudio（audio: true で注入されるソケット）---
 # HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。
 # libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。
-if [ -z "${PULSE_SERVER:-}" ] && [ -S "/run/pulse/native" ]; then
-    export PULSE_SERVER="unix:/run/pulse/native"
-    echo "[run] PulseAudio: PULSE_SERVER=unix:/run/pulse/native"
+# ソケットパスは HAOS バージョンで変わる可能性があるため複数パスを試す。
+if [ -z "${PULSE_SERVER:-}" ]; then
+    for _pulse_sock in "/run/pulse/native" "/var/run/pulse/native" "/run/user/0/pulse/native"; do
+        if [ -S "$_pulse_sock" ]; then
+            export PULSE_SERVER="unix://${_pulse_sock}"
+            echo "[run] PulseAudio: PULSE_SERVER=unix://${_pulse_sock}"
+            break
+        fi
+    done
+    unset _pulse_sock
+fi
+if [ -z "${PULSE_SERVER:-}" ]; then
+    echo "[run] PulseAudio: ソケット見つからず（/run ls: $(ls /run 2>/dev/null | tr '\n' ' ')）"
 fi
 
 # --- 永続データの置き場（/config/embodied-ha/）---
