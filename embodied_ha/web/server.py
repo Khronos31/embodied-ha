@@ -14,6 +14,14 @@ PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 CHAT_LOG = os.path.join(LOG_DIR, "chat_log.jsonl")
 OBS_LOG  = os.path.join(LOG_DIR, "observations.jsonl")
 EXP_LOG  = os.path.join(LOG_DIR, "explore.jsonl")
+NON_SPEECH_AUDIO_EVENTS_LOG = os.environ.get(
+    "EHA_NON_SPEECH_AUDIO_EVENTS_FILE",
+    os.path.join(LOG_DIR, "non_speech_audio_events.jsonl"),
+)
+AUDIO_EVENT_TAGS_LOG = os.environ.get(
+    "EHA_AUDIO_EVENT_TAGS_FILE",
+    os.path.join(LOG_DIR, "audio_event_tags.jsonl"),
+)
 
 PREFS_FILE = os.environ.get("EHA_PREFS_FILE", os.path.join(SCRIPT_DIR, "preferences.json"))
 PREFS_EXAMPLE_FILE = os.path.join(SCRIPT_DIR, "preferences.json.example")
@@ -233,6 +241,14 @@ def read_jsonl(path: str, limit: int = 300) -> list:
     return lines[-limit:]
 
 
+def append_jsonl(path: str, row: dict) -> None:
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def get_chat_messages(limit: int = 300) -> list:
     """chat_log.jsonl を返す（{timestamp, source, claude, user}）。"""
     return read_jsonl(CHAT_LOG, limit)
@@ -294,7 +310,8 @@ def send_chat(message: str, source: str = "chat"):
 def file_watcher():
     # chat_log は会話ルームと独り言ルーム（chat の private）の両方に使われるので両方へ通知する。
     watched = [(CHAT_LOG, ["chat", "soliloquy"]),
-               (OBS_LOG, ["soliloquy"]), (EXP_LOG, ["soliloquy"])]
+               (OBS_LOG, ["soliloquy"]), (EXP_LOG, ["soliloquy"]),
+               (NON_SPEECH_AUDIO_EVENTS_LOG, ["audio"]), (AUDIO_EVENT_TAGS_LOG, ["audio"])]
     mtimes: dict = {}
     while True:
         for path, rooms in watched:
@@ -494,6 +511,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(dict(_agent_status))
         elif path == "/api/events":
             self._serve_sse()
+        elif path == "/api/audio-events":
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["300"])[0])
+            self.send_json(read_jsonl(NON_SPEECH_AUDIO_EVENTS_LOG, limit))
+        elif path == "/api/audio-event-tags":
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["300"])[0])
+            self.send_json(read_jsonl(AUDIO_EVENT_TAGS_LOG, limit))
         elif path == "/api/setup/status":
             self.send_json({"authenticated": is_authenticated()})
         elif path == "/api/setup/login":
@@ -663,6 +688,47 @@ class Handler(BaseHTTPRequestHandler):
                 source = body.get("source", "chat")
                 threading.Thread(target=send_chat, args=(message, source), daemon=True).start()
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/audio-event-tags" or (path.startswith("/api/audio-events/") and path.endswith("/tags")):
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    self.send_json({"error": "invalid body"}, 400)
+                    return
+                route_event_id = ""
+                if path.startswith("/api/audio-events/"):
+                    route_event_id = path[len("/api/audio-events/"):-len("/tags")].strip("/")
+                event_id = (body.get("event_id") or route_event_id or "").strip()
+                tag_type = (body.get("type") or "manual").strip().lower()
+                if not event_id:
+                    self.send_json({"error": "event_id is required"}, 400)
+                    return
+                if tag_type not in {"manual", "gemini", "claude_audio", "rule", "other"}:
+                    self.send_json({"error": "invalid type"}, 400)
+                    return
+                label = (body.get("label") or body.get("sound") or "").strip()
+                candidates = body.get("candidates")
+                if not label and not isinstance(candidates, list):
+                    self.send_json({"error": "label or candidates is required"}, 400)
+                    return
+                confidence = body.get("confidence")
+                if confidence is None and tag_type == "manual":
+                    confidence = 0.95
+                row = {
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "event_id": event_id,
+                    "type": tag_type,
+                    "label": label or None,
+                    "confidence": confidence,
+                    "candidates": candidates if isinstance(candidates, list) else None,
+                    "note": body.get("note"),
+                    "actor": body.get("actor") or ("user" if tag_type == "manual" else tag_type),
+                }
+                append_jsonl(AUDIO_EVENT_TAGS_LOG, {k: v for k, v in row.items() if v is not None})
+                notify_sse("update", {"room": "audio"})
+                self.send_json({"ok": True, "tag": row})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/character/reset":

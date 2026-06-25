@@ -54,6 +54,20 @@ def default_auditory_events_path() -> str:
     return "/config/embodied-ha/log/auditory_events.jsonl"
 
 
+def default_non_speech_audio_events_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "non_speech_audio_events.jsonl")
+    return "/config/embodied-ha/log/non_speech_audio_events.jsonl"
+
+
+def default_audio_event_tags_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "audio_event_tags.jsonl")
+    return "/config/embodied-ha/log/audio_event_tags.jsonl"
+
+
 AUDIO_LOG_FILE = clean(os.environ.get("EHA_AUDIO_LOG_FILE")) or default_audio_log_path()
 ACTIVE_LISTEN_LOG_FILE = (
     clean(os.environ.get("EHA_ACTIVE_LISTEN_LOG_FILE"))
@@ -65,6 +79,8 @@ AUDITORY_EVENTS_FILE = (
     or default_auditory_events_path()
     or DEFAULT_AUDITORY_EVENTS_FILE
 )
+NON_SPEECH_AUDIO_EVENTS_FILE = clean(os.environ.get("EHA_NON_SPEECH_AUDIO_EVENTS_FILE")) or default_non_speech_audio_events_path()
+AUDIO_EVENT_TAGS_FILE = clean(os.environ.get("EHA_AUDIO_EVENT_TAGS_FILE")) or default_audio_event_tags_path()
 
 
 def active_listen_log_name() -> str:
@@ -207,6 +223,44 @@ TOOL_READ_HEARD_AUDIO_LOG = {
 TOOL_READ_ACTIVE_LISTEN_LOG = {
     "name": "read_active_listen_log",
     "description": "最近、自分から listen で聞きに行った音声ログを読む。常時STTログとは別。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "返す件数。デフォルト20",
+            },
+            "since_minutes": {
+                "type": "integer",
+                "description": "指定した分以内のログだけ返す",
+            },
+        },
+    },
+}
+
+
+TOOL_READ_NON_SPEECH_AUDIO_EVENTS = {
+    "name": "read_non_speech_audio_events",
+    "description": "最近の非音声聴覚イベントを読む。STT対象外・STT失敗だが特徴的な音のDSP特徴量とwav_refを含む。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "返す件数。デフォルト20",
+            },
+            "since_minutes": {
+                "type": "integer",
+                "description": "指定した分以内のログだけ返す",
+            },
+        },
+    },
+}
+
+
+TOOL_READ_AUDIO_EVENT_TAGS = {
+    "name": "read_audio_event_tags",
+    "description": "非音声聴覚イベントに付いた manual/gemini 等のタグ履歴を読む。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -503,6 +557,14 @@ def read_active_listen_log(args: dict):
     return read_jsonl_log(ACTIVE_LISTEN_LOG_FILE, args)
 
 
+def read_non_speech_audio_events(args: dict):
+    return read_jsonl_log(NON_SPEECH_AUDIO_EVENTS_FILE, args)
+
+
+def read_audio_event_tags(args: dict):
+    return read_jsonl_log(AUDIO_EVENT_TAGS_FILE, args)
+
+
 def listen(args: dict):
     source = clean(args.get("source")) or default_listen_source()
     if source == "alsa":
@@ -587,4 +649,6 @@ if __name__ == "__main__":
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
         "read_heard_audio_log": {"spec": TOOL_READ_HEARD_AUDIO_LOG, "handler": read_heard_audio_log},
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
+        "read_non_speech_audio_events": {"spec": TOOL_READ_NON_SPEECH_AUDIO_EVENTS, "handler": read_non_speech_audio_events},
+        "read_audio_event_tags": {"spec": TOOL_READ_AUDIO_EVENT_TAGS, "handler": read_audio_event_tags},
     })

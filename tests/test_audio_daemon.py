@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -41,6 +42,20 @@ class AudioDaemonTests(unittest.TestCase):
                 "/config/embodied-ha/log/background_audio_log.jsonl",
             )
 
+    def test_default_non_speech_audio_events_path_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_daemon.default_non_speech_audio_events_path(),
+                "/config/embodied-ha/log/non_speech_audio_events.jsonl",
+            )
+
+    def test_default_audio_wav_dir_prefers_eha_data_dir(self):
+        with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
+            self.assertEqual(
+                self.audio_daemon.default_audio_wav_dir(),
+                "/config/embodied-ha/wav",
+            )
+
     def test_default_auditory_events_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
             from auditory_context import default_auditory_events_path
@@ -50,12 +65,33 @@ class AudioDaemonTests(unittest.TestCase):
                 "/config/embodied-ha/log/auditory_events.jsonl",
             )
 
+    def _pcm_sine(self, freq_hz: float = 440.0, seconds: float = 1.0, amplitude: float = 0.5) -> bytes:
+        samples = int(self.audio_daemon.SAMPLE_RATE * seconds)
+        values = bytearray()
+        for idx in range(samples):
+            value = int(32767 * amplitude * math.sin(2 * math.pi * freq_hz * idx / self.audio_daemon.SAMPLE_RATE))
+            values.extend(value.to_bytes(2, byteorder="little", signed=True))
+        return bytes(values)
+
     def test_summarize_chunk_levels_ignores_non_finite_values(self):
         peak_db, mean_db = self.audio_daemon.summarize_chunk_levels(
             [float("-inf"), -33.24, -12.05]
         )
         self.assertEqual(peak_db, -12.1)
         self.assertEqual(mean_db, -22.6)
+
+    def test_build_acoustic_features_estimates_sine_frequency(self):
+        features = self.audio_daemon.build_acoustic_features(
+            self._pcm_sine(440.0),
+            {"peak_db": -12.0, "mean_db": -24.0, "speech_ratio": 0.0},
+        )
+        self.assertEqual(features["duration_sec"], 1.0)
+        self.assertEqual(features["peak_db"], -12.0)
+        self.assertEqual(features["dominant_band"], "low")
+        self.assertGreater(features["zero_crossing_rate_hz"], 800.0)
+        self.assertLess(features["zero_crossing_rate_hz"], 960.0)
+        self.assertGreater(features["spectral_centroid_hz"], 400.0)
+        self.assertLess(features["spectral_centroid_hz"], 480.0)
 
     def test_should_transcribe_segment_allows_non_fallback(self):
         allowed, reason = self.audio_daemon.should_transcribe_segment(
@@ -302,7 +338,8 @@ class AudioDaemonTests(unittest.TestCase):
 
         with mock.patch.object(self.audio_daemon, "write_wav"), \
              mock.patch.object(self.audio_daemon, "transcribe_wav", side_effect=RuntimeError("empty transcription")), \
-             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry):
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_entry), \
+             mock.patch.object(self.audio_daemon, "record_non_speech_audio_event") as non_speech_mock:
             self.audio_daemon.process_segment(
                 config,
                 b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE),
@@ -325,6 +362,8 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(entry["speech_ratio"], 0.625)
         self.assertEqual(entry["peak_db"], -17.4)
         self.assertEqual(entry["mean_db"], -34.8)
+        non_speech_mock.assert_called_once()
+        self.assertEqual(non_speech_mock.call_args.args[3], "empty_transcription")
 
     def test_process_segment_writes_auditory_event_on_success(self):
         config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
@@ -412,6 +451,70 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(entry["skipped"])
         self.assertEqual(entry["skip_reason"], "fallback_gate_low_speech_ratio")
         self.assertEqual(auditory_events, [])
+
+    def test_process_segment_records_non_speech_for_skipped_strong_audio(self):
+        config = self.audio_daemon.AudioSourceConfig("rtsp://example", "TV", 24, False)
+        with mock.patch.object(self.audio_daemon, "transcribe_wav") as transcribe_mock, \
+             mock.patch.object(self.audio_daemon, "append_audio_log"), \
+             mock.patch.object(self.audio_daemon, "record_non_speech_audio_event") as non_speech_mock:
+            self.audio_daemon.process_segment(
+                config,
+                self._pcm_sine(1200.0),
+                "stt.home_assistant_cloud",
+                "ja-JP",
+                "token",
+                [],
+                diagnostics={
+                    "vad_mode": "fallback",
+                    "speech_ratio": 0.05,
+                    "peak_db": -37.0,
+                    "mean_db": -50.0,
+                },
+            )
+
+        transcribe_mock.assert_not_called()
+        non_speech_mock.assert_called_once()
+        self.assertEqual(non_speech_mock.call_args.args[3], "fallback_gate_low_speech_ratio")
+
+    def test_record_non_speech_audio_event_writes_event_and_wav_ref(self):
+        config = self.audio_daemon.AudioSourceConfig(
+            "rtsp://localhost:8554/capture_tv",
+            "TV・レコーダー",
+            24,
+            False,
+            room="study",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "log" / "non_speech_audio_events.jsonl"
+            wav_dir = Path(tmpdir) / "wav"
+            fixed_now = self.audio_daemon.parse_ts("2026-06-26T10:00:00+09:00")
+            with mock.patch.dict(os.environ, {
+                "EHA_NON_SPEECH_AUDIO_EVENTS_FILE": str(events_path),
+                "EHA_AUDIO_WAV_DIR": str(wav_dir),
+            }, clear=False), \
+                 mock.patch.object(self.audio_daemon, "now", return_value=fixed_now):
+                entry = self.audio_daemon.record_non_speech_audio_event(
+                    config,
+                    self._pcm_sine(1200.0),
+                    "2026-06-26T10:00:00+09:00",
+                    "empty_transcription",
+                    diagnostics={"peak_db": -20.0, "mean_db": -42.0, "speech_ratio": 0.05, "vad_mode": "fallback"},
+                    error="empty transcription",
+                )
+
+            self.assertIsNotNone(entry)
+            rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row["kind"], "non_speech_audio_event")
+            self.assertEqual(row["source"], "TV・レコーダー")
+            self.assertEqual(row["reason"], "empty_transcription")
+            self.assertEqual(row["stt_error"], "empty transcription")
+            self.assertIsNone(row["transcript"])
+            self.assertTrue(row["wav_ref"].endswith(".wav"))
+            self.assertTrue(Path(row["wav_ref"]).exists())
+            self.assertEqual(row["acoustic_features"]["dominant_band"], "mid")
+            self.assertEqual(row["situational_context"]["source_room"], "study")
 
     def test_format_recent_auditory_prompt_is_voice_specific(self):
         with tempfile.TemporaryDirectory() as tmpdir:

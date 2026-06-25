@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -46,10 +47,14 @@ FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
 DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/log/audio_log.jsonl"
 DEFAULT_BACKGROUND_AUDIO_LOG_FILE = "/data/embodied-ha/log/background_audio_log.jsonl"
+DEFAULT_NON_SPEECH_AUDIO_EVENTS_FILE = "/data/embodied-ha/log/non_speech_audio_events.jsonl"
 BACKGROUND_LOG_MIN_INTERVAL_SECONDS = 300
+NON_SPEECH_AUDIO_RETENTION_HOURS = 24
+NON_SPEECH_MAX_CLIP_SECONDS = 8.0
 BACKGROUND_LOG_RETENTION_HOURS = 24
 _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
+_NON_SPEECH_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,39 @@ def background_audio_retention_hours() -> int:
         return max(1, int(clean(os.environ.get("EHA_BACKGROUND_AUDIO_RETENTION_HOURS")) or BACKGROUND_LOG_RETENTION_HOURS))
     except Exception:
         return BACKGROUND_LOG_RETENTION_HOURS
+
+
+def default_non_speech_audio_events_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "log", "non_speech_audio_events.jsonl")
+    return "/config/embodied-ha/log/non_speech_audio_events.jsonl"
+
+
+def non_speech_audio_events_path() -> str:
+    return (
+        clean(os.environ.get("EHA_NON_SPEECH_AUDIO_EVENTS_FILE"))
+        or default_non_speech_audio_events_path()
+        or DEFAULT_NON_SPEECH_AUDIO_EVENTS_FILE
+    )
+
+
+def default_audio_wav_dir() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "wav")
+    return "/config/embodied-ha/wav"
+
+
+def audio_wav_dir() -> str:
+    return clean(os.environ.get("EHA_AUDIO_WAV_DIR")) or default_audio_wav_dir()
+
+
+def non_speech_audio_retention_hours() -> int:
+    try:
+        return max(1, int(clean(os.environ.get("EHA_NON_SPEECH_AUDIO_RETENTION_HOURS")) or NON_SPEECH_AUDIO_RETENTION_HOURS))
+    except Exception:
+        return NON_SPEECH_AUDIO_RETENTION_HOURS
 
 
 def canonical_source(value: str) -> str:
@@ -364,6 +402,284 @@ def write_wav(path: str, audio_bytes: bytes) -> None:
         wav_file.setsampwidth(SAMPLE_WIDTH)
         wav_file.setframerate(SAMPLE_RATE)
         wav_file.writeframes(audio_bytes)
+
+
+def _iter_samples(audio_bytes: bytes):
+    if not audio_bytes:
+        return
+    usable = len(audio_bytes) - (len(audio_bytes) % SAMPLE_WIDTH)
+    if usable <= 0:
+        return
+    samples = memoryview(audio_bytes[:usable]).cast("h")
+    for sample in samples:
+        yield int(sample)
+
+
+def _analysis_samples(audio_bytes: bytes, max_samples: int = SAMPLE_RATE) -> list[int]:
+    samples = list(_iter_samples(audio_bytes) or [])
+    if len(samples) <= max_samples:
+        return samples
+    step = max(1, len(samples) // max_samples)
+    return samples[::step][:max_samples]
+
+
+def _goertzel_power(samples: list[int], freq_hz: float) -> float:
+    if not samples or freq_hz <= 0:
+        return 0.0
+    normalized = freq_hz / SAMPLE_RATE
+    coeff = 2.0 * math.cos(2.0 * math.pi * normalized)
+    q0 = q1 = q2 = 0.0
+    for sample in samples:
+        q0 = coeff * q1 - q2 + (sample / 32768.0)
+        q2 = q1
+        q1 = q0
+    return max(0.0, q1 * q1 + q2 * q2 - coeff * q1 * q2) / max(1, len(samples))
+
+
+def _band_energy(samples: list[int]) -> dict[str, float]:
+    bands = {
+        "low": [125.0, 250.0, 500.0],
+        "mid": [1000.0, 2000.0],
+        "high": [4000.0, 6000.0],
+    }
+    raw = {name: sum(_goertzel_power(samples, freq) for freq in freqs) for name, freqs in bands.items()}
+    total = sum(raw.values())
+    if total <= 0:
+        return {"low_energy": 0.0, "mid_energy": 0.0, "high_energy": 0.0}
+    return {
+        "low_energy": round(raw["low"] / total, 3),
+        "mid_energy": round(raw["mid"] / total, 3),
+        "high_energy": round(raw["high"] / total, 3),
+    }
+
+
+def zero_crossing_rate_hz(samples: list[int]) -> float | None:
+    if len(samples) < 2:
+        return None
+    crossings = 0
+    previous = samples[0]
+    for sample in samples[1:]:
+        if (previous < 0 <= sample) or (previous >= 0 > sample):
+            crossings += 1
+        previous = sample
+    duration = len(samples) / float(SAMPLE_RATE)
+    if duration <= 0:
+        return None
+    return round(crossings / duration, 1)
+
+
+def build_acoustic_features(audio_bytes: bytes, diagnostics: dict | None = None) -> dict:
+    duration_sec = len(audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH)
+    samples = _analysis_samples(audio_bytes)
+    band = _band_energy(samples)
+    zcr = zero_crossing_rate_hz(samples)
+    centroid_hint = round(zcr / 2.0, 1) if zcr is not None else None
+    if centroid_hint is not None:
+        if centroid_hint < 700.0:
+            dominant_band = "low"
+            band = {"low_energy": 1.0, "mid_energy": 0.0, "high_energy": 0.0}
+        elif centroid_hint < 3000.0:
+            dominant_band = "mid"
+            band = {"low_energy": 0.0, "mid_energy": 1.0, "high_energy": 0.0}
+        else:
+            dominant_band = "high"
+            band = {"low_energy": 0.0, "mid_energy": 0.0, "high_energy": 1.0}
+    else:
+        dominant_band = max(
+            (("low", band["low_energy"]), ("mid", band["mid_energy"]), ("high", band["high_energy"])),
+            key=lambda item: item[1],
+        )[0]
+    peak_db = (diagnostics or {}).get("peak_db")
+    mean_db = (diagnostics or {}).get("mean_db")
+    speech_ratio = (diagnostics or {}).get("speech_ratio")
+    transient = False
+    if peak_db is not None and mean_db is not None:
+        try:
+            transient = float(peak_db) - float(mean_db) >= 12.0
+        except Exception:
+            transient = False
+    periodic = False
+    if zcr is not None:
+        # Stable tones and buzzes tend to produce a steady crossing rate. This is
+        # only a cheap hint; external taggers and human labels decide semantics.
+        periodic = 60.0 <= zcr <= 6000.0 and duration_sec >= 0.3 and not transient
+    return {
+        "duration_sec": round(duration_sec, 2),
+        "peak_db": peak_db,
+        "mean_db": mean_db,
+        "speech_ratio": speech_ratio,
+        **band,
+        "dominant_band": dominant_band,
+        "zero_crossing_rate_hz": zcr,
+        "spectral_centroid_hz": centroid_hint,
+        "transient": transient,
+        "periodic": periodic,
+    }
+
+
+def should_record_non_speech_event(reason: str, features: dict) -> bool:
+    try:
+        peak_db = float(features.get("peak_db"))
+    except Exception:
+        peak_db = None
+    try:
+        duration_sec = float(features.get("duration_sec") or 0)
+    except Exception:
+        duration_sec = 0.0
+    high_energy = float(features.get("high_energy") or 0.0)
+    mid_energy = float(features.get("mid_energy") or 0.0)
+    transient = features.get("transient") is True
+
+    if duration_sec < MIN_SEGMENT_SECONDS or peak_db is None:
+        return False
+    if reason == "empty_transcription" and peak_db >= -43.0:
+        return True
+    if peak_db >= -36.0:
+        return True
+    if transient and peak_db >= -42.0:
+        return True
+    if duration_sec <= 1.5 and peak_db >= -43.0 and (high_energy >= 0.45 or mid_energy >= 0.45):
+        return True
+    return False
+
+
+def non_speech_event_id(timestamp: str, config: AudioSourceConfig, audio_bytes: bytes) -> str:
+    digest = hashlib.sha1(audio_bytes[:65536] + config.source.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    safe_ts = "".join(ch for ch in timestamp if ch.isdigit())[:14]
+    return f"audio_{safe_ts}_{digest}"
+
+
+def save_non_speech_audio_clip(event_id: str, audio_bytes: bytes) -> str:
+    max_bytes = int(NON_SPEECH_MAX_CLIP_SECONDS * SAMPLE_RATE * SAMPLE_WIDTH)
+    clipped = audio_bytes[:max_bytes]
+    directory = audio_wav_dir()
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f"{event_id}.wav")
+    write_wav(path, clipped)
+    return path
+
+
+def _time_of_day(timestamp: str) -> str:
+    parsed = parse_ts(timestamp) or now()
+    hour = parsed.hour
+    if 5 <= hour < 11:
+        return "morning"
+    if 11 <= hour < 17:
+        return "daytime"
+    if 17 <= hour < 22:
+        return "evening"
+    return "late_night"
+
+
+def append_non_speech_audio_event(entry: dict, retention_hours: int, source_label: str) -> None:
+    path = non_speech_audio_events_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    cutoff = now() - timedelta(hours=max(1, retention_hours))
+    source = clean(source_label) or clean(entry.get("source"))
+    old_wavs: list[str] = []
+
+    with _NON_SPEECH_LOCK:
+        entries: list[dict] = []
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed = json.loads(line)
+                        except Exception:
+                            continue
+                        if not isinstance(parsed, dict):
+                            continue
+                        ts = parse_ts(parsed.get("timestamp"))
+                        if source and clean(parsed.get("source")) == source and ts and ts < cutoff:
+                            wav_ref = clean(parsed.get("wav_ref"))
+                            if wav_ref:
+                                old_wavs.append(wav_ref)
+                            continue
+                        entries.append(parsed)
+            except Exception as exc:
+                log(f"failed to read non-speech audio events for retention pruning: {exc}")
+        entries.append(entry)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for item in entries:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        os.replace(tmp_path, path)
+
+    wav_root = os.path.abspath(audio_wav_dir())
+    for wav_ref in old_wavs:
+        try:
+            abs_ref = os.path.abspath(wav_ref)
+            if abs_ref.startswith(wav_root + os.sep):
+                os.unlink(abs_ref)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+
+def record_non_speech_audio_event(
+    config: AudioSourceConfig,
+    audio_bytes: bytes,
+    timestamp: str,
+    reason: str,
+    diagnostics: dict | None = None,
+    error: str | None = None,
+) -> dict | None:
+    features = build_acoustic_features(audio_bytes, diagnostics)
+    if not should_record_non_speech_event(reason, features):
+        return None
+    sensory = classify_sensory_origin(
+        source=config.source,
+        label=config.label,
+        room=config.room,
+        note=config.note,
+        modality="auditory",
+    )
+    event_id = non_speech_event_id(timestamp, config, audio_bytes)
+    try:
+        wav_ref = save_non_speech_audio_clip(event_id, audio_bytes)
+    except Exception as exc:
+        log(f"failed to save non-speech audio clip for {config.label}: {exc}")
+        wav_ref = None
+    entry = {
+        "event_id": event_id,
+        "timestamp": timestamp,
+        "kind": "non_speech_audio_event",
+        "modality": "auditory",
+        "origin": config.source,
+        "source": config.label,
+        "duration_sec": features.get("duration_sec"),
+        "has_sound": True,
+        "reason": reason,
+        "stt_error": error,
+        "transcript": None,
+        "wav_ref": wav_ref,
+        "acoustic_features": features,
+        "situational_context": {
+            "body_room": sensory.get("body_room"),
+            "source_room": sensory.get("source_room"),
+            "sensory_origin": sensory.get("sensory_origin"),
+            "move_cost": sensory.get("move_cost"),
+            "time_of_day": _time_of_day(timestamp),
+        },
+        **sensory,
+    }
+    if isinstance(diagnostics, dict):
+        for key in ("vad_mode", "speech_ratio", "peak_db", "mean_db", "skip_reason"):
+            if key in diagnostics:
+                entry[key] = diagnostics[key]
+    retention_hours = min(max(1, config.retention_hours), non_speech_audio_retention_hours())
+    append_non_speech_audio_event(entry, retention_hours, config.label)
+    log(
+        "non-speech audio event recorded for "
+        f"{config.label}: reason={reason}, event_id={event_id}, "
+        f"peak_db={features.get('peak_db')}, dominant_band={features.get('dominant_band')}"
+    )
+    return entry
 
 
 def transcribe_wav(path: str, provider: str, language: str, token: str) -> str:
@@ -623,6 +939,13 @@ def process_segment(
         entry["skipped"] = True
         entry["skip_reason"] = skip_reason
         append_audio_log(entry, config.retention_hours, config.label)
+        record_non_speech_audio_event(
+            config,
+            audio_bytes,
+            timestamp,
+            clean(skip_reason) or "stt_skipped",
+            diagnostics={**entry, "skip_reason": skip_reason},
+        )
         log(
             "segment skipped for "
             f"{config.label}: {skip_reason} "
@@ -659,8 +982,18 @@ def process_segment(
         if config.wake_word_enabled and should_trigger_wake_word(text_value, wake_words):
             post_wake_message(text_value)
     except Exception as exc:
-        entry["error"] = str(exc)
+        error_text = str(exc)
+        entry["error"] = error_text
         append_audio_log(entry, config.retention_hours, config.label)
+        if "empty transcription" in error_text.lower():
+            record_non_speech_audio_event(
+                config,
+                audio_bytes,
+                timestamp,
+                "empty_transcription",
+                diagnostics=entry,
+                error=error_text,
+            )
         log(
             "segment processing failed for "
             f"{config.label}: {exc} "
