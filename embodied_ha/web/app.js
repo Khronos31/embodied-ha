@@ -36,6 +36,10 @@ function formatTime(isoString) {
     }
 }
 
+function normalizeMessageType(type) {
+    return type === 'voice' ? 'chat' : type;
+}
+
 // --- Initialize App ---
 document.addEventListener('DOMContentLoaded', () => {
     // Load and initialize Soliloquy Read Toggle setting
@@ -487,7 +491,7 @@ function simulateClaudeResponse(userText) {
 // --- Typing Indicator Controls ---
 function showTypingIndicator(type) {
     isTyping = true;
-    typingType = type;
+    typingType = normalizeMessageType(type);
     
     // Once Claude starts processing (typing), all user messages are marked read
     chatMessages.forEach(m => {
@@ -572,9 +576,10 @@ async function fetchMessages(room) {
                 if (m.claude) {
                     mapped.push({
                         timestamp: ts,
-                        type: m.source || 'chat',
+                        type: normalizeMessageType(m.source || 'chat'),
                         sender: characterName,
-                        text: m.claude
+                        text: m.claude,
+                        source: m.source || 'chat'
                     });
                 }
             });
