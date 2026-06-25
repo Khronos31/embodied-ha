@@ -254,5 +254,78 @@ def listen(args: dict):
                 pass
 
 
+TOOL_DIAGNOSE = {
+    "name": "diagnose",
+    "description": "オーディオ環境の診断情報を返す。音量ゼロ・デバイス不明時のデバッグ用。",
+    "inputSchema": {"type": "object", "properties": {}},
+}
+
+
+def diagnose(args: dict):
+    result: dict = {}
+
+    # H2: PULSE_SERVER / PULSE_RUNTIME_PATH の確認
+    result["env"] = {
+        "PULSE_SERVER": os.environ.get("PULSE_SERVER", ""),
+        "PULSE_RUNTIME_PATH": os.environ.get("PULSE_RUNTIME_PATH", ""),
+        "PULSE_SINK": os.environ.get("PULSE_SINK", ""),
+        "PULSE_SOURCE": os.environ.get("PULSE_SOURCE", ""),
+    }
+
+    # H4: find_ffmpeg() がどのバイナリを返すか
+    ffmpeg = find_ffmpeg()
+    result["ffmpeg_path"] = ffmpeg or "not found"
+    if ffmpeg:
+        r = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, timeout=10)
+        first = (r.stdout or r.stderr or "").splitlines()
+        result["ffmpeg_version"] = first[0] if first else ""
+        # pulseaudio対応確認
+        r2 = subprocess.run([ffmpeg, "-f", "pulse", "-i", "dummy", "-t", "0", "-f", "null", "-"],
+                            capture_output=True, text=True, timeout=5)
+        result["ffmpeg_pulse_support"] = "pulse" in (r2.stderr or "").lower() and \
+            "unknown input format" not in (r2.stderr or "").lower()
+
+    # H1: pactl でPulseAudioソース一覧
+    pactl = shutil.which("pactl")
+    result["pactl_path"] = pactl or "not found"
+    if pactl:
+        r = subprocess.run([pactl, "info"], capture_output=True, text=True, timeout=5)
+        for line in (r.stdout or "").splitlines():
+            if "default source" in line.lower() or "server name" in line.lower():
+                result.setdefault("pactl_info", []).append(line.strip())
+        r2 = subprocess.run([pactl, "list", "sources", "short"],
+                            capture_output=True, text=True, timeout=5)
+        result["pactl_sources"] = (r2.stdout or r2.stderr or "").strip()
+
+    # H3: ALSA cards
+    r = subprocess.run(["cat", "/proc/asound/cards"], capture_output=True, text=True, timeout=5)
+    result["alsa_cards"] = (r.stdout or "not available").strip()
+
+    # H1追加: ffmpegでpulse default録音テスト（音量確認）
+    if ffmpeg and result.get("ffmpeg_pulse_support"):
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.NamedTemporaryFile(dir=TMP_DIR, suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+            subprocess.run(
+                [ffmpeg, "-f", "pulse", "-i", "default", "-ar", "16000", "-ac", "1", "-t", "2", "-y", tmp_path],
+                capture_output=True, text=True, timeout=15,
+            )
+            peak, mean = analyze_volume(tmp_path)
+            result["pulse_direct_test"] = {"peak_db": peak, "mean_db": mean, "has_sound": has_sound_from_peak(peak)}
+        except Exception as e:
+            result["pulse_direct_test"] = {"error": str(e)}
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    return [text(json.dumps(result, indent=2, ensure_ascii=False))]
+
+
 if __name__ == "__main__":
-    serve("audio-mcp", "1.0", {"listen": {"spec": TOOL_LISTEN, "handler": listen}})
+    serve("audio-mcp", "1.0", {
+        "listen":   {"spec": TOOL_LISTEN,   "handler": listen},
+        "diagnose": {"spec": TOOL_DIAGNOSE, "handler": diagnose},
+    })
