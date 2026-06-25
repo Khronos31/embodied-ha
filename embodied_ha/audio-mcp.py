@@ -25,42 +25,6 @@ DEFAULT_SOURCES = [
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
-def build_listen_spec() -> dict:
-    sources = load_audio_sources()
-    source_lines = "\n".join(
-        f'  - "{s["source"]}"（{s["label"]}）' for s in sources
-    )
-    default = sources[0]["source"] if sources else "alsa"
-    return {
-        "name": "listen",
-        "description": (
-            "短時間だけ音を聴く。\n"
-            f"利用可能なソース:\n{source_lines}\n"
-            f"source を省略すると最初のソース（{default}）を使う。"
-            "transcribe は必要なときだけ true にする。"
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string",
-                    "description": "上記ソースのいずれか。省略時はデフォルト",
-                },
-                "duration": {
-                    "type": "integer",
-                    "description": "録音秒数。デフォルト 5、最大 30",
-                },
-                "transcribe": {
-                    "type": "boolean",
-                    "description": "STT を行うか。デフォルト false",
-                },
-            },
-        },
-    }
-
-TOOL_LISTEN = build_listen_spec()
-
-
 def _prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
@@ -100,6 +64,42 @@ def load_audio_sources() -> list[dict]:
 def load_stt_provider() -> str | None:
     provider = clean(load_preferences().get("stt_provider"))
     return provider or None
+
+
+def build_listen_spec() -> dict:
+    sources = load_audio_sources()
+    source_lines = "\n".join(
+        f'  - "{s["source"]}"（{s["label"]}）' for s in sources
+    )
+    default = sources[0]["source"] if sources else "alsa"
+    return {
+        "name": "listen",
+        "description": (
+            "短時間だけ音を聴く。\n"
+            f"利用可能なソース:\n{source_lines}\n"
+            f"source を省略すると最初のソース（{default}）を使う。"
+            "transcribe は必要なときだけ true にする。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "上記ソースのいずれか。省略時はデフォルト",
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "録音秒数。デフォルト 5、最大 30",
+                },
+                "transcribe": {
+                    "type": "boolean",
+                    "description": "STT を行うか。デフォルト false",
+                },
+            },
+        },
+    }
+
+TOOL_LISTEN = build_listen_spec()
 
 
 def _source_map() -> dict[str, dict]:
