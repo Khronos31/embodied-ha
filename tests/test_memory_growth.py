@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -196,6 +197,31 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertLess(out.index("## 日次サマリー"), out.index("## コア記憶"))
         self.assertIn("日次要約", out)
         self.assertIn("重要な出来事", out)
+
+    def test_episode_is_indexed_to_fts_and_recall_uses_it(self):
+        episode = memory_state.save_episode(
+            self.tmpdir.name,
+            {
+                "timestamp": "2026-06-23T10:00:00+09:00",
+                "day": "2026-06-23",
+                "source": "watch",
+                "kind": "observation",
+                "summary": "青いマグがテーブル右にある",
+                "detail": "朝のカメラ確認",
+            },
+        )
+        hits = memory_state.search_fts(self.tmpdir.name, ["青いマグ"], limit=5)
+        self.assertEqual(hits[0]["episode_id"], episode["id"])
+        env = {**os.environ, "EHA_LOG_DIR": self.tmpdir.name}
+        result = subprocess.run(
+            ["bash", str(ROOT / "embodied_ha" / "recall.sh"), "青いマグ"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        self.assertIn("source=fts5", result.stdout)
+        self.assertIn(episode["id"], result.stdout)
 
     def test_remember_and_recall_still_work(self):
         self.memory_mcp.remember({"note": "猫のフードを買う"})

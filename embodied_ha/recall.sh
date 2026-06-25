@@ -61,7 +61,21 @@ def add_hit(bucket_hits, bucket, ts, line):
     bucket_hits[bucket].append((ts or "", line))
 
 
-bucket_hits = {0: [], 1: [], 2: [], 3: [], 4: []}
+bucket_hits = {-1: [], 0: [], 1: [], 2: [], 3: [], 4: []}
+
+# --- SQLite FTS5 index (fast semantic-ish full-text pass) ---
+for hit in ms.search_fts(log_dir, keywords, limit=5):
+    episode_id = hit.get("episode_id", "")
+    brief = ""
+    if episode_id.startswith("ep_"):
+        episode = ms.load_episode(log_dir, episode_id)
+        brief = ms.episode_brief(episode) if episode.get("id") else ""
+    if not brief:
+        text_value = hit.get("text", "")
+        brief = f"- {(hit.get('timestamp') or '')[:16]} | 【FTS:{hit.get('kind') or 'memory'}】{text_value[:120]}"
+    matched = " / ".join(hit.get("matched_terms") or [])
+    suffix = f" | episode_id={episode_id} | score={hit.get('score', 0)} | matched_terms={matched} | source=fts5"
+    add_hit(bucket_hits, -1, (hit.get("timestamp") or "")[:16], brief + suffix)
 
 # --- structured memory: daybooks / causal chains / episodes ---
 for daybook in ms.list_daybooks(log_dir, reverse=True):
@@ -136,8 +150,15 @@ for ts, line in memory_hits:
     add_hit(bucket_hits, 4, ts, line)
 
 hits = []
+seen_lines = set()
 for bucket in sorted(bucket_hits):
-    hits.extend(bucket_hits[bucket])
+    for item in bucket_hits[bucket]:
+        line = item[1]
+        dedupe_key = line.split(" | score=", 1)[0]
+        if dedupe_key in seen_lines:
+            continue
+        seen_lines.add(dedupe_key)
+        hits.append(item)
 
 if not hits:
     print(f"（「{' / '.join(keywords)}」に一致する記憶は見つかりませんでした）")

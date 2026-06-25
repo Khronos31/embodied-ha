@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from typing import Any, Iterable, Mapping
 
 from state_utils import clamp as _clamp
@@ -136,6 +137,10 @@ def working_memory_path(log_dir: str | None = None) -> str:
 
 def episode_path(log_dir: str | None, episode_id: str) -> str:
     return _path(log_dir, _EPISODES_DIR, f"{_clean(episode_id)}.json")
+
+
+def fts_index_path(log_dir: str | None = None) -> str:
+    return _path(log_dir, "fts_index.db")
 
 
 def daybook_path(log_dir: str | None, date: str) -> str:
@@ -335,7 +340,130 @@ def save_episode(log_dir: str | None, episode: Mapping[str, Any]) -> dict[str, A
     if not normalized["id"]:
         normalized["id"] = _make_episode_id(normalized)
     _write_json(episode_path(log_dir, normalized["id"]), normalized)
+    index_episode_to_fts(log_dir, normalized)
     return normalized
+
+
+
+
+def _flatten_for_search(value: Any) -> str:
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif node is not None:
+            text = _clean(node)
+            if text:
+                parts.append(text)
+
+    walk(value)
+    return " ".join(parts)
+
+
+def _connect_fts(log_dir: str | None) -> sqlite3.Connection | None:
+    path = fts_index_path(log_dir)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS episodes USING fts5("
+            "episode_id UNINDEXED, text, timestamp UNINDEXED, kind UNINDEXED, tokenize='trigram')"
+        )
+        return conn
+    except Exception:
+        try:
+            conn.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        return None
+
+
+def index_episode_to_fts(log_dir: str | None, episode: Mapping[str, Any]) -> None:
+    episode_id = _clean(episode.get("id") or episode.get("episode_id"))
+    if not episode_id:
+        return
+    conn = _connect_fts(log_dir)
+    if conn is None:
+        return
+    try:
+        text_value = _flatten_for_search(episode)
+        conn.execute("DELETE FROM episodes WHERE episode_id = ?", (episode_id,))
+        conn.execute(
+            "INSERT INTO episodes(episode_id, text, timestamp, kind) VALUES (?, ?, ?, ?)",
+            (episode_id, text_value, _clean(episode.get("timestamp") or episode.get("day")), _clean(episode.get("kind"))),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def _fts_query(raw: Any) -> tuple[str, list[str]]:
+    if isinstance(raw, list):
+        terms = [_clean(item) for item in raw if _clean(item)]
+    else:
+        terms = [_clean(item) for item in re.split(r"\s+", _clean(raw)) if _clean(item)]
+    terms = [term.replace('"', ' ') for term in terms if term.replace('"', ' ').strip()]
+    return " OR ".join(f'"{term}"' for term in terms), terms
+
+
+def search_fts(log_dir: str | None, query: Any, *, limit: int = 5) -> list[dict[str, Any]]:
+    match_query, terms = _fts_query(query)
+    if not match_query:
+        return []
+    conn = _connect_fts(log_dir)
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT episode_id, text, timestamp, kind, bm25(episodes) AS rank "
+            "FROM episodes WHERE episodes MATCH ? ORDER BY rank LIMIT ?",
+            (match_query, max(1, int(limit))),
+        ).fetchall()
+    except Exception:
+        rows = []
+    finally:
+        conn.close()
+    out: list[dict[str, Any]] = []
+    for episode_id, text_value, timestamp, kind, rank in rows:
+        blob = str(text_value or "").lower()
+        matched = [term for term in terms if term.lower() in blob]
+        try:
+            score = round(1.0 / (1.0 + abs(float(rank))), 3)
+        except Exception:
+            score = 0.5
+        out.append({
+            "episode_id": _clean(episode_id),
+            "text": _clean(text_value),
+            "timestamp": _clean(timestamp),
+            "kind": _clean(kind),
+            "score": score,
+            "matched_terms": matched,
+            "source": "fts5",
+        })
+    return out
+
+
+def rebuild_fts_index(log_dir: str | None) -> int:
+    conn = _connect_fts(log_dir)
+    if conn is None:
+        return 0
+    try:
+        conn.execute("DELETE FROM episodes")
+        conn.commit()
+    finally:
+        conn.close()
+    count = 0
+    for episode in list_episodes(log_dir, reverse=False):
+        index_episode_to_fts(log_dir, episode)
+        count += 1
+    return count
 
 
 def load_episode(log_dir: str | None, episode_id: str) -> dict[str, Any]:
