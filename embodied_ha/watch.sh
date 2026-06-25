@@ -457,7 +457,7 @@ phase2_prompt = context + f"""
   "speak_room": "発話先の部屋。speak が null なら null。speak が null でなければ **必ずこの中から1つ選ぶ**（null 禁止）。利用可能な部屋: {_speaker_rooms}。{resident}さんが今いる部屋（人感センサー履歴・在室から判断）を選ぶ。外出中で away があれば away。居場所が不明なら先頭の部屋を選ぶ。",
   "schedule": "スケジュールを変更したい場合のみオブジェクトで。変更不要なら null。変更可能フィールド: watch_interval(秒,300-3600), explore_interval(秒,600-7200), day_probability(%,10-100), late_probability(%,0-50), night_probability(%,0-30)。例: {{\"watch_interval\": 600}}",
   "feature_presented": "speak でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。",
-  "scene_objects": [{"id":"obj_...", "label":"見えた物", "location":"場所", "confidence":0.0}]
+  "scene_objects": [{{"id":"obj_...", "label":"見えた物", "location":"場所", "confidence":0.0}}]
 }}"""
 
 content = []
