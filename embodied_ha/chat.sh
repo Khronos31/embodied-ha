@@ -206,7 +206,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）
 - **今の自分にはできない**: ファイルの読み書き・設定ファイルの編集・コードの実装。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 
@@ -330,6 +330,7 @@ msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type
 # --- MCP 設定生成（recall/ha_get/remember/loops/sociality/ha_call_service を配線）---
 # 家電操作・記憶・社会性レイヤー・ループはすべて MCP ツール呼びで処理する。
 # chat はユーザー起点なので操作サーバー(hacontrol)を常時繋ぐ。
+ユーザー発話に「それ」「あれ」「これ」「さっきの」などの指示語があり、文脈上カメラや直前 scene の対象を指しそうなら resolve_reference を使う。
 # JSON は reply / private / proposal_resolved / preferences_update のみ。
 cmd = [CLAUDE, "-p", "--model", "sonnet",
        "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
@@ -343,7 +344,7 @@ if _sd:
         cmd += ["--allowedTools",
                 "mcp__memory__recall,mcp__memory__remember,"
                 "mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,"
-                "mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__list_episodes,mcp__memory__get_causal_chain,"
+                "mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__resolve_reference,mcp__memory__list_episodes,mcp__memory__get_causal_chain,"
                 "mcp__memory__loops_add,mcp__memory__loops_close,"
                 "mcp__sociality__get_relationship,mcp__sociality__update_relationship,"
                 "mcp__sociality__get_narrative,mcp__sociality__append_narrative,"

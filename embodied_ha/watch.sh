@@ -440,6 +440,8 @@ phase2_prompt = context + f"""
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
 - record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。
 - get_working_memory … 直前に活性化した episode を確認する。
+- ingest_scene … カメラ観察で見えた objects/people/changes を保存する。
+- compare_recent_scenes … 同じカメラの直近 scene と比べ、いつもと違う点を確認する。
 - loops_add … 「後で気にかけておきたい」こと（消し忘れ・植物の世話・{resident}さんの作業の続き等）があれば text に一言、source="watch" で追加。既に【気にかけていること】にある内容は繰り返さない
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。自発発話を出す前に必要なら見る。
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。
@@ -453,7 +455,8 @@ phase2_prompt = context + f"""
   "speak": "ユーザーへのショートメッセージ。センサートリガー時は積極的に。定期実行時は明確な変化があるときだけ。それ以外は null。",
   "speak_room": "発話先の部屋。speak が null なら null。speak が null でなければ **必ずこの中から1つ選ぶ**（null 禁止）。利用可能な部屋: {_speaker_rooms}。{resident}さんが今いる部屋（人感センサー履歴・在室から判断）を選ぶ。外出中で away があれば away。居場所が不明なら先頭の部屋を選ぶ。",
   "schedule": "スケジュールを変更したい場合のみオブジェクトで。変更不要なら null。変更可能フィールド: watch_interval(秒,300-3600), explore_interval(秒,600-7200), day_probability(%,10-100), late_probability(%,0-50), night_probability(%,0-30)。例: {{\"watch_interval\": 600}}",
-  "feature_presented": "speak でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"
+  "feature_presented": "speak でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。",
+  "scene_objects": [{"id":"obj_...", "label":"見えた物", "location":"場所", "confidence":0.0}]
 }}"""
 
 content = []
@@ -497,7 +500,7 @@ if _sd:
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
         _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__camera__camera_get,"
-                    "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__record_counterfactual,"
+                    "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                     "mcp__sociality__record_boundary,mcp__sociality__record_consent,"
@@ -570,6 +573,22 @@ for k, v in pairs.items():
     print(f'{k}={shlex.quote(v)}')
 ")"
 tlog "6.parsed.json一括抽出(python1回)"
+
+# scene_objects が返ってきた場合は軽量な scene state に保存する。
+SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" PARSED_FILE="$PARSED_FILE" python3 -c "
+import json, os, sys
+sys.path.insert(0, os.environ['SCRIPT_DIR'])
+import scene_state
+try:
+    d = json.load(open(os.environ['PARSED_FILE'], encoding='utf-8'))
+except Exception:
+    d = {}
+objects = d.get('scene_objects') if isinstance(d.get('scene_objects'), list) else []
+people = d.get('scene_people') if isinstance(d.get('scene_people'), list) else []
+changes = d.get('scene_changes') if isinstance(d.get('scene_changes'), list) else []
+if objects or people or changes:
+    scene_state.ingest_scene_parse('watch_phase2', {}, objects, people, changes, log_dir=os.environ.get('LOG_DIR'))
+" 2>/dev/null || true
 
 # speak があるのに speak_room が空の場合、preferences.speakers の先頭キーにフォールバック
 if [ -n "$SPEAK" ] && [ -z "$SPEAK_ROOM" ]; then

@@ -95,6 +95,9 @@ def default_shared_focus() -> dict[str, Any]:
     return {
         "topic": "",
         "context": "",
+        "object_id": "",
+        "scene_source": "",
+        "last_seen_at": "",
         "updated_at": "",
     }
 
@@ -155,6 +158,9 @@ def normalize_shared_focus(raw: Any) -> dict[str, Any]:
         return focus
     focus["topic"] = _clean(raw.get("topic"))
     focus["context"] = _clean(raw.get("context"))
+    focus["object_id"] = _clean(raw.get("object_id"))
+    focus["scene_source"] = _clean(raw.get("scene_source"))
+    focus["last_seen_at"] = _clean(raw.get("last_seen_at"))
     focus["updated_at"] = _clean(raw.get("updated_at"))
     return focus
 

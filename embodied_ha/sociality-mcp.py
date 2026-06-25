@@ -187,6 +187,9 @@ def _load_shared_focus() -> dict[str, Any]:
     default = {
         "topic": "",
         "context": "",
+        "object_id": "",
+        "scene_source": "",
+        "last_seen_at": "",
         "updated_at": "",
     }
     data = _load_json(_shared_focus_path(), default)
@@ -195,6 +198,9 @@ def _load_shared_focus() -> dict[str, Any]:
     focus = dict(default)
     focus["topic"] = _clean(data.get("topic"))
     focus["context"] = _clean(data.get("context"))
+    focus["object_id"] = _clean(data.get("object_id"))
+    focus["scene_source"] = _clean(data.get("scene_source"))
+    focus["last_seen_at"] = _clean(data.get("last_seen_at"))
     focus["updated_at"] = _clean(data.get("updated_at"))
     return focus
 
@@ -364,6 +370,9 @@ def set_shared_focus(args: dict[str, Any]):
     focus = {
         "topic": topic,
         "context": context,
+        "object_id": _clean(args.get("object_id")),
+        "scene_source": _clean(args.get("scene_source")),
+        "last_seen_at": _clean(args.get("last_seen_at")),
         "updated_at": _now_ts(),
     }
     _write_json(_shared_focus_path(), focus)
@@ -501,6 +510,9 @@ def main() -> None:
                             "type": "string",
                             "description": "補足コンテキスト",
                         },
+                        "object_id": {"type": "string", "description": "scene 内の注目 object id"},
+                        "scene_source": {"type": "string", "description": "scene の camera/source"},
+                        "last_seen_at": {"type": "string", "description": "最後に見た時刻"},
                     },
                     "required": ["topic", "context"],
                 },

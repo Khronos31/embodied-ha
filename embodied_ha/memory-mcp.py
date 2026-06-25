@@ -31,6 +31,8 @@ from typing import Any, Mapping
 from mcp_lib import log, serve, text
 import memory_state as ms
 import counterfactual_state as cs
+import scene_state as scenes
+import sociality_state as ss
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
@@ -215,6 +217,31 @@ def get_episode(args: dict[str, Any]):
 
 def get_working_memory(args: dict[str, Any]):
     return _json_text(ms.get_working_memory(LOG_DIR))
+
+
+def ingest_scene(args: dict[str, Any]):
+    payload = _merge_payload(args, "scene")
+    scene_id = scenes.ingest_scene_parse(
+        _clean(payload.get("source")),
+        payload.get("camera_pose") if isinstance(payload.get("camera_pose"), dict) else {},
+        payload.get("objects") if isinstance(payload.get("objects"), list) else [],
+        payload.get("people") if isinstance(payload.get("people"), list) else [],
+        payload.get("changes") if isinstance(payload.get("changes"), list) else [],
+        log_dir=LOG_DIR,
+    )
+    log(f"[memory-mcp] scene: {scene_id} {payload.get('source', '')}")
+    return _json_text({"scene_id": scene_id})
+
+
+def resolve_reference(args: dict[str, Any]):
+    phrase = _clean(args.get("phrase"))
+    shared_focus = ss.load_shared_focus(LOG_DIR)
+    resolved = scenes.resolve_reference(phrase, shared_focus=shared_focus, log_dir=LOG_DIR)
+    return _json_text(resolved or {})
+
+
+def compare_recent_scenes(args: dict[str, Any]):
+    return _json_text(scenes.compare_recent_scenes(_clean(args.get("source")) or None, log_dir=LOG_DIR))
 
 
 def list_episodes(args: dict[str, Any]):
@@ -505,6 +532,48 @@ def main() -> None:
                 "inputSchema": {"type": "object", "properties": {}},
             },
             "handler": get_working_memory,
+        },
+        "ingest_scene": {
+            "spec": {
+                "name": "ingest_scene",
+                "description": "カメラ観察から抽出した objects/people/changes を scene として保存する。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "scene": {"type": "object"},
+                        "source": {"type": "string"},
+                        "camera_pose": {"type": "object"},
+                        "objects": {"type": "array", "items": {"type": "object"}},
+                        "people": {"type": "array", "items": {"type": "object"}},
+                        "changes": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["source"],
+                },
+            },
+            "handler": ingest_scene,
+        },
+        "resolve_reference": {
+            "spec": {
+                "name": "resolve_reference",
+                "description": "「それ」「あれ」「右のやつ」などを直近 scene と shared_focus から候補解決する。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"phrase": {"type": "string"}},
+                    "required": ["phrase"],
+                },
+            },
+            "handler": resolve_reference,
+        },
+        "compare_recent_scenes": {
+            "spec": {
+                "name": "compare_recent_scenes",
+                "description": "同じ camera/source の直近2 scene を比較し、見えた差分を返す。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"source": {"type": "string"}},
+                },
+            },
+            "handler": compare_recent_scenes,
         },
         "list_episodes": {
             "spec": {

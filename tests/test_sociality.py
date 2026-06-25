@@ -67,10 +67,19 @@ class SocialityTests(unittest.TestCase):
         self.assertIsNone(payload["elapsed_since_last_interaction_seconds"])
 
     def test_set_shared_focus_is_read_back_by_get_shared_focus(self):
-        self.sociality.set_shared_focus({"topic": "猫の話", "context": "今は会話の焦点"})
+        self.sociality.set_shared_focus({
+            "topic": "猫の話",
+            "context": "今は会話の焦点",
+            "object_id": "obj_mug_1",
+            "scene_source": "camera.living",
+            "last_seen_at": "2026-06-25T10:00:00+09:00",
+        })
         payload = json.loads(self._text(self.sociality.get_shared_focus({})))
         self.assertEqual(payload["topic"], "猫の話")
         self.assertEqual(payload["context"], "今は会話の焦点")
+        self.assertEqual(payload["object_id"], "obj_mug_1")
+        self.assertEqual(payload["scene_source"], "camera.living")
+        self.assertEqual(payload["last_seen_at"], "2026-06-25T10:00:00+09:00")
         self.assertTrue(payload["updated_at"])
 
     def test_get_person_model_returns_defaults_for_empty_and_unknown_person(self):
