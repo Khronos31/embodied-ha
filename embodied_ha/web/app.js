@@ -2408,6 +2408,15 @@ function renderAudioEvents() {
     }).join('');
 }
 
+function escapeHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 async function postAudioTag(eventId, payload) {
     const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
         method: 'POST',
