@@ -131,6 +131,35 @@ class AudioDaemonTests(unittest.TestCase):
         )
         self.assertFalse(should_record)
 
+    def test_non_speech_importance_score_prefers_stronger_events(self):
+        weak = self.audio_daemon.non_speech_importance_score(
+            "empty_transcription",
+            {
+                "duration_sec": 1.28,
+                "peak_db": -38.5,
+                "speech_ratio": 0.05,
+                "high_energy": 0.2,
+                "mid_energy": 0.4,
+                "transient": False,
+                "periodic": False,
+            },
+        )
+        strong = self.audio_daemon.non_speech_importance_score(
+            "empty_transcription",
+            {
+                "duration_sec": 4.5,
+                "peak_db": -27.0,
+                "speech_ratio": 0.35,
+                "high_energy": 0.0,
+                "mid_energy": 1.0,
+                "transient": True,
+                "periodic": False,
+            },
+        )
+        self.assertLess(weak, self.audio_daemon.NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD)
+        self.assertGreaterEqual(strong, self.audio_daemon.NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD)
+        self.assertLess(weak, strong)
+
     def test_load_enabled_audio_sources_filters_and_normalizes(self):
         prefs = {
             "audio_sources": [
@@ -183,6 +212,56 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].label, "Google TV")
         self.assertTrue(sources[0].background_only)
+
+    def test_load_enabled_audio_sources_parses_tcp_pull_source(self):
+        prefs = {
+            "audio_sources": [
+                {
+                    "source": "hallway_voice_s3r",
+                    "label": "Hallway VoiceS3R",
+                    "transport": "tcp_pull",
+                    "host": "192.168.1.31",
+                    "port": 3333,
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "format": "s16le",
+                    "stt_enabled": True,
+                }
+            ]
+        }
+        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].transport, "tcp_pull")
+        self.assertEqual(sources[0].host, "192.168.1.31")
+        self.assertEqual(sources[0].port, 3333)
+        self.assertEqual(sources[0].sample_rate, 16000)
+        self.assertEqual(sources[0].channels, 1)
+        self.assertEqual(sources[0].audio_format, "s16le")
+
+    def test_load_enabled_audio_sources_rejects_invalid_tcp_pull_source(self):
+        prefs = {
+            "audio_sources": [
+                {
+                    "source": "hallway_voice_s3r",
+                    "label": "Hallway VoiceS3R",
+                    "transport": "tcp_pull",
+                    "host": "192.168.1.31",
+                    "port": 3333,
+                    "sample_rate": 48000,
+                    "channels": 1,
+                    "format": "s16le",
+                    "stt_enabled": True,
+                }
+            ]
+        }
+        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        self.assertEqual(sources, [])
+
+    def test_parse_tcp_port_accepts_valid_range(self):
+        self.assertEqual(self.audio_daemon.parse_tcp_port(3333), 3333)
+        self.assertEqual(self.audio_daemon.parse_tcp_port("65535"), 65535)
+        self.assertIsNone(self.audio_daemon.parse_tcp_port(0))
+        self.assertIsNone(self.audio_daemon.parse_tcp_port(65536))
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)

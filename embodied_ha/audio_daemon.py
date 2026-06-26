@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,8 @@ FALLBACK_DB_THRESHOLD = -47.0
 FALLBACK_SEGMENT_MIN_SPEECH_RATIO = 0.12
 FALLBACK_SEGMENT_MIN_PEAK_DB = -42.0
 FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
+NON_SPEECH_IMPORTANCE_THRESHOLD = 0.55
+NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD = 0.65
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
 DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/log/audio_log.jsonl"
 DEFAULT_BACKGROUND_AUDIO_LOG_FILE = "/data/embodied-ha/log/background_audio_log.jsonl"
@@ -66,6 +69,12 @@ class AudioSourceConfig:
     background_only: bool = False
     room: str = ""
     note: str = ""
+    transport: str = "rtsp"
+    host: str = ""
+    port: int = 0
+    sample_rate: int = SAMPLE_RATE
+    channels: int = CHANNELS
+    audio_format: str = "s16le"
 
 
 @dataclass(frozen=True)
@@ -175,6 +184,107 @@ def background_hearing_enabled(item: dict) -> bool:
     return True
 
 
+def infer_transport(item: dict) -> str:
+    transport = clean(item.get("transport")).lower()
+    if transport in {"rtsp", "tcp_pull"}:
+        return transport
+    if clean(item.get("host")) or clean(item.get("port")):
+        return "tcp_pull"
+    return "rtsp"
+
+
+def _source_identity(item: dict, transport: str) -> str:
+    if transport == "tcp_pull":
+        value = clean(item.get("source")) or clean(item.get("name"))
+        if value:
+            return value
+        host = clean(item.get("host"))
+        port = clean(item.get("port"))
+        return f"{host}:{port}" if host and port else host
+    return canonical_source(item.get("source"))
+
+
+def parse_tcp_port(value) -> int | None:
+    try:
+        port = int(value)
+    except Exception:
+        return None
+    if port <= 0 or port > 65535:
+        return None
+    return port
+
+
+def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
+    if not isinstance(item, dict):
+        return None
+    transport = infer_transport(item)
+    source = _source_identity(item, transport)
+    if not source:
+        log(f"invalid audio source config: missing source/name for transport={transport}")
+        return None
+    label = clean(item.get("label")) or source
+    try:
+        retention = int(item.get("stt_retention_hours", 60))
+    except Exception:
+        retention = 60
+    background_only = retention <= 0
+    if background_only and not background_hearing_enabled(item):
+        return None
+
+    host = ""
+    port = 0
+    sample_rate = SAMPLE_RATE
+    channels = CHANNELS
+    audio_format = "s16le"
+
+    if transport == "tcp_pull":
+        host = clean(item.get("host"))
+        port = parse_tcp_port(item.get("port")) or 0
+        try:
+            sample_rate = int(item.get("sample_rate", SAMPLE_RATE))
+        except Exception:
+            sample_rate = -1
+        try:
+            channels = int(item.get("channels", CHANNELS))
+        except Exception:
+            channels = -1
+        audio_format = clean(item.get("format")).lower() or "s16le"
+
+        if not host:
+            log(f"invalid audio source config for {label}: tcp_pull requires host")
+            return None
+        if port <= 0:
+            log(f"invalid audio source config for {label}: tcp_pull requires valid port")
+            return None
+        if sample_rate != SAMPLE_RATE or channels != CHANNELS or audio_format != "s16le":
+            log(
+                f"invalid audio source config for {label}: tcp_pull only supports "
+                f"sample_rate={SAMPLE_RATE}, channels={CHANNELS}, format=s16le "
+                f"(got sample_rate={sample_rate}, channels={channels}, format={audio_format or 'unset'})"
+            )
+            return None
+    else:
+        if not source:
+            log(f"invalid audio source config for {label}: rtsp source is empty")
+            return None
+
+    return AudioSourceConfig(
+        source=source,
+        label=label,
+        retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
+        wake_word_enabled=bool(item.get("wake_word_enabled")),
+        background_only=background_only,
+        room=clean(item.get("room")),
+        note=clean(item.get("note")),
+        transport=transport,
+        host=host,
+        port=port,
+        sample_rate=sample_rate,
+        channels=channels,
+        audio_format=audio_format,
+    )
+
+
 def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSourceConfig]:
     prefs = preferences if isinstance(preferences, dict) else load_preferences()
     raw_sources = prefs.get("audio_sources")
@@ -187,28 +297,10 @@ def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSou
             continue
         if item.get("stt_enabled") is not True:
             continue
-        source = canonical_source(item.get("source"))
-        if not source:
+        config = build_audio_source_config(item)
+        if config is None:
             continue
-        label = clean(item.get("label")) or source
-        try:
-            retention = int(item.get("stt_retention_hours", 60))
-        except Exception:
-            retention = 60
-        background_only = retention <= 0
-        if background_only and not background_hearing_enabled(item):
-            continue
-        enabled.append(
-            AudioSourceConfig(
-                source=source,
-                label=label,
-                retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
-                wake_word_enabled=bool(item.get("wake_word_enabled")),
-                background_only=background_only,
-                room=clean(item.get("room")),
-                note=clean(item.get("note")),
-            )
-        )
+        enabled.append(config)
     return enabled
 
 
@@ -249,7 +341,7 @@ def load_runtime_settings(
         for item in raw_sources:
             if not isinstance(item, dict):
                 continue
-            source = canonical_source(item.get("source"))
+            source = _source_identity(item, infer_transport(item))
             if source != base_config.source:
                 continue
             label = clean(item.get("label")) or source
@@ -268,6 +360,12 @@ def load_runtime_settings(
                 background_only=background_only,
                 room=clean(item.get("room")) or base_config.room,
                 note=clean(item.get("note")) or base_config.note,
+                transport=base_config.transport,
+                host=base_config.host,
+                port=base_config.port,
+                sample_rate=base_config.sample_rate,
+                channels=base_config.channels,
+                audio_format=base_config.audio_format,
             )
             stt_enabled = item.get("stt_enabled") is True and retention > 0
             break
@@ -281,8 +379,10 @@ def load_runtime_settings(
     )
 
 
-def build_ffmpeg_command(source: str) -> list[str]:
-    if source == "default":
+def build_ffmpeg_command(config: AudioSourceConfig) -> list[str]:
+    if config.transport != "rtsp":
+        raise ValueError(f"ffmpeg transport unsupported for {config.transport}")
+    if config.source == "default":
         return [
             "ffmpeg",
             "-loglevel",
@@ -306,7 +406,7 @@ def build_ffmpeg_command(source: str) -> list[str]:
         "-rtsp_transport",
         "tcp",
         "-i",
-        source,
+        config.source,
         "-vn",
         "-ar",
         str(SAMPLE_RATE),
@@ -517,13 +617,17 @@ def build_acoustic_features(audio_bytes: bytes, diagnostics: dict | None = None)
     }
 
 
-def should_record_non_speech_event(reason: str, features: dict) -> bool:
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def non_speech_importance_score(reason: str, features: dict) -> float:
     try:
         peak_db = float(features.get("peak_db"))
     except Exception:
-        peak_db = None
+        peak_db = -120.0
     try:
-        duration_sec = float(features.get("duration_sec") or 0)
+        duration_sec = float(features.get("duration_sec") or 0.0)
     except Exception:
         duration_sec = 0.0
     try:
@@ -533,22 +637,44 @@ def should_record_non_speech_event(reason: str, features: dict) -> bool:
     high_energy = float(features.get("high_energy") or 0.0)
     mid_energy = float(features.get("mid_energy") or 0.0)
     transient = features.get("transient") is True
+    periodic = features.get("periodic") is True
+
+    peak_score = clamp01((peak_db + 42.0) / 10.0)
+    duration_score = clamp01((duration_sec - MIN_SEGMENT_SECONDS) / 2.5)
+    speech_score = clamp01((speech_ratio - 0.08) / 0.32)
+    band_score = 1.0 if (high_energy >= 0.55 or mid_energy >= 0.55) else 0.0
+    transient_score = 1.0 if transient else 0.0
+    periodic_penalty = 0.1 if periodic and not transient else 0.0
+
+    score = (
+        0.45 * peak_score
+        + 0.20 * duration_score
+        + 0.20 * speech_score
+        + 0.10 * band_score
+        + 0.10 * transient_score
+        - periodic_penalty
+    )
+    if reason == "empty_transcription":
+        score += 0.05 * speech_score
+    return round(clamp01(score), 3)
+
+
+def should_record_non_speech_event(reason: str, features: dict) -> bool:
+    try:
+        peak_db = float(features.get("peak_db"))
+    except Exception:
+        peak_db = None
+    try:
+        duration_sec = float(features.get("duration_sec") or 0)
+    except Exception:
+        duration_sec = 0.0
 
     if duration_sec < MIN_SEGMENT_SECONDS or peak_db is None:
         return False
-    if reason == "empty_transcription":
-        if peak_db >= -32.0:
-            return True
-        if peak_db >= -38.0 and speech_ratio >= 0.10:
-            return True
-        return False
-    if peak_db >= -34.0:
-        return True
-    if transient and peak_db >= -38.0 and speech_ratio >= 0.08:
-        return True
-    if duration_sec <= 1.2 and peak_db >= -39.0 and speech_ratio >= 0.08 and (high_energy >= 0.55 or mid_energy >= 0.55):
-        return True
-    return False
+
+    score = non_speech_importance_score(reason, features)
+    threshold = NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD if reason == "empty_transcription" else NON_SPEECH_IMPORTANCE_THRESHOLD
+    return score >= threshold
 
 
 def non_speech_event_id(timestamp: str, config: AudioSourceConfig, audio_bytes: bytes) -> str:
@@ -638,6 +764,7 @@ def record_non_speech_audio_event(
     error: str | None = None,
 ) -> dict | None:
     features = build_acoustic_features(audio_bytes, diagnostics)
+    features["importance_score"] = non_speech_importance_score(reason, features)
     if not should_record_non_speech_event(reason, features):
         return None
     sensory = classify_sensory_origin(
@@ -661,6 +788,7 @@ def record_non_speech_audio_event(
         "origin": config.source,
         "source": config.label,
         "duration_sec": features.get("duration_sec"),
+        "importance_score": features.get("importance_score"),
         "has_sound": True,
         "reason": reason,
         "stt_error": error,
@@ -1036,27 +1164,189 @@ def new_vad():
         return None, "fallback"
 
 
-def audio_worker(
+def _runtime_signature(settings: RuntimeSettings) -> tuple[str | None, str, tuple[str, ...], bool, bool]:
+    return (
+        settings.provider,
+        settings.language,
+        tuple(settings.wake_words),
+        settings.config.wake_word_enabled,
+        settings.config.background_only,
+    )
+
+
+def log_runtime_settings(config: AudioSourceConfig, settings: RuntimeSettings) -> None:
+    log(
+        "runtime settings updated for "
+        f"{config.label}: provider={settings.provider or 'unset'}, "
+        f"language={settings.language}, "
+        f"wake_words={len(settings.wake_words)}, "
+        f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}, mode={'background' if settings.config.background_only else 'stt'}"
+    )
+
+
+def read_exact_socket(conn: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining > 0:
+        piece = conn.recv(remaining)
+        if not piece:
+            break
+        chunks.append(piece)
+        remaining -= len(piece)
+    return b"".join(chunks)
+
+
+def reset_vad(detector) -> None:
+    if detector is None:
+        return
+    try:
+        detector.reset()
+    except Exception:
+        pass
+
+
+def run_audio_stream_session(
     config: AudioSourceConfig,
     token: str,
-) -> None:
+    read_chunk,
+    detector,
+    vad_mode: str,
+) -> dict[str, int]:
     prebuffer_chunks = max(1, math.ceil(PREBUFFER_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
     max_silence_chunks = max(1, math.ceil(SILENCE_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
     max_segment_chunks = max(1, math.ceil(MAX_SEGMENT_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
 
+    last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
+    last_background_log_at = 0.0
+    prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
+    segment_chunks: list[bytes] = []
+    segment_levels: list[float] = []
+    segment_speech_chunks = 0
+    silence_chunks = 0
+    active = False
+    stats = {"chunks": 0, "bytes": 0}
+
+    while True:
+        chunk = read_chunk()
+        if len(chunk) < CHUNK_BYTES:
+            break
+        stats["chunks"] += 1
+        stats["bytes"] += len(chunk)
+
+        voice_prob = detect_voice(chunk, detector)
+        is_speech = voice_prob > VAD_THRESHOLD
+        level_db = chunk_db(chunk)
+
+        if active:
+            segment_chunks.append(chunk)
+            segment_levels.append(level_db)
+            if is_speech:
+                segment_speech_chunks += 1
+            silence_chunks = 0 if is_speech else silence_chunks + 1
+            if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
+                peak_db, mean_db = summarize_chunk_levels(segment_levels)
+                speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
+                settings = load_runtime_settings(config)
+                signature = _runtime_signature(settings)
+                if signature != last_settings_signature:
+                    last_settings_signature = signature
+                    log_runtime_settings(config, settings)
+                diagnostics = {
+                    "vad_mode": vad_mode,
+                    "speech_ratio": speech_ratio,
+                    "peak_db": peak_db,
+                    "mean_db": mean_db,
+                }
+                if not settings.stt_enabled:
+                    if settings.config.background_only:
+                        last_background_log_at = maybe_record_background_audio(
+                            settings.config,
+                            b"".join(segment_chunks),
+                            vad_mode,
+                            diagnostics,
+                            last_background_log_at,
+                        )
+                    segment_chunks = []
+                    segment_levels = []
+                    segment_speech_chunks = 0
+                    silence_chunks = 0
+                    active = False
+                    prebuffer.clear()
+                    reset_vad(detector)
+                    continue
+                process_segment(
+                    settings.config,
+                    b"".join(segment_chunks),
+                    settings.provider,
+                    settings.language,
+                    token,
+                    settings.wake_words,
+                    diagnostics=diagnostics,
+                )
+                segment_chunks = []
+                segment_levels = []
+                segment_speech_chunks = 0
+                silence_chunks = 0
+                active = False
+                prebuffer.clear()
+                reset_vad(detector)
+        elif is_speech:
+            segment_chunks = list(prebuffer)
+            segment_chunks.append(chunk)
+            segment_levels = [chunk_db(buffered) for buffered in prebuffer]
+            segment_levels.append(level_db)
+            segment_speech_chunks = 1
+            silence_chunks = 0
+            active = True
+            prebuffer.clear()
+        else:
+            prebuffer.append(chunk)
+
+    if active and segment_chunks:
+        peak_db, mean_db = summarize_chunk_levels(segment_levels)
+        speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
+        settings = load_runtime_settings(config)
+        signature = _runtime_signature(settings)
+        if signature != last_settings_signature:
+            last_settings_signature = signature
+            log_runtime_settings(config, settings)
+        diagnostics = {
+            "vad_mode": vad_mode,
+            "speech_ratio": speech_ratio,
+            "peak_db": peak_db,
+            "mean_db": mean_db,
+        }
+        if settings.stt_enabled:
+            process_segment(
+                settings.config,
+                b"".join(segment_chunks),
+                settings.provider,
+                settings.language,
+                token,
+                settings.wake_words,
+                diagnostics=diagnostics,
+            )
+        elif settings.config.background_only:
+            maybe_record_background_audio(
+                settings.config,
+                b"".join(segment_chunks),
+                vad_mode,
+                diagnostics,
+                last_background_log_at,
+            )
+
+    return stats
+
+
+def audio_worker(
+    config: AudioSourceConfig,
+    token: str,
+) -> None:
     while True:
         proc: subprocess.Popen | None = None
         detector, vad_mode = new_vad()
-        last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
-        last_background_log_at = 0.0
-        prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
-        segment_chunks: list[bytes] = []
-        segment_levels: list[float] = []
-        segment_speech_chunks = 0
-        silence_chunks = 0
-        active = False
         try:
-            cmd = build_ffmpeg_command(config.source)
+            cmd = build_ffmpeg_command(config)
             log(f"starting ffmpeg for {config.label} ({vad_mode}): {' '.join(cmd)}")
             proc = subprocess.Popen(
                 cmd,
@@ -1066,148 +1356,18 @@ def audio_worker(
             )
             if proc.stdout is None:
                 raise RuntimeError("ffmpeg stdout is unavailable")
-
-            while True:
-                chunk = read_exact(proc.stdout, CHUNK_BYTES)
-                if len(chunk) < CHUNK_BYTES:
-                    break
-
-                voice_prob = detect_voice(chunk, detector)
-                is_speech = voice_prob > VAD_THRESHOLD
-                level_db = chunk_db(chunk)
-
-                if active:
-                    segment_chunks.append(chunk)
-                    segment_levels.append(level_db)
-                    if is_speech:
-                        segment_speech_chunks += 1
-                    silence_chunks = 0 if is_speech else silence_chunks + 1
-                    if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
-                        peak_db, mean_db = summarize_chunk_levels(segment_levels)
-                        speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
-                        settings = load_runtime_settings(config)
-                        signature = (
-                            settings.provider,
-                            settings.language,
-                            tuple(settings.wake_words),
-                            settings.config.wake_word_enabled,
-                            settings.config.background_only,
-                        )
-                        if signature != last_settings_signature:
-                            last_settings_signature = signature
-                            log(
-                                "runtime settings updated for "
-                                f"{config.label}: provider={settings.provider or 'unset'}, "
-                                f"language={settings.language}, "
-                                f"wake_words={len(settings.wake_words)}, "
-                                f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}, mode={'background' if settings.config.background_only else 'stt'}"
-                            )
-                        diagnostics = {
-                            "vad_mode": vad_mode,
-                            "speech_ratio": speech_ratio,
-                            "peak_db": peak_db,
-                            "mean_db": mean_db,
-                        }
-                        if not settings.stt_enabled:
-                            if settings.config.background_only:
-                                last_background_log_at = maybe_record_background_audio(
-                                    settings.config,
-                                    b"".join(segment_chunks),
-                                    vad_mode,
-                                    diagnostics,
-                                    last_background_log_at,
-                                )
-                            segment_chunks = []
-                            segment_levels = []
-                            segment_speech_chunks = 0
-                            silence_chunks = 0
-                            active = False
-                            prebuffer.clear()
-                            if detector is not None:
-                                try:
-                                    detector.reset()
-                                except Exception:
-                                    pass
-                            continue
-                        process_segment(
-                            settings.config,
-                            b"".join(segment_chunks),
-                            settings.provider,
-                            settings.language,
-                            token,
-                            settings.wake_words,
-                            diagnostics=diagnostics,
-                        )
-                        segment_chunks = []
-                        segment_levels = []
-                        segment_speech_chunks = 0
-                        silence_chunks = 0
-                        active = False
-                        prebuffer.clear()
-                        if detector is not None:
-                            try:
-                                detector.reset()
-                            except Exception:
-                                pass
-                elif is_speech:
-                    segment_chunks = list(prebuffer)
-                    segment_chunks.append(chunk)
-                    segment_levels = [chunk_db(buffered) for buffered in prebuffer]
-                    segment_levels.append(level_db)
-                    segment_speech_chunks = 1
-                    silence_chunks = 0
-                    active = True
-                    prebuffer.clear()
-                else:
-                    prebuffer.append(chunk)
-
-            if active and segment_chunks:
-                peak_db, mean_db = summarize_chunk_levels(segment_levels)
-                speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
-                settings = load_runtime_settings(config)
-                signature = (
-                    settings.provider,
-                    settings.language,
-                    tuple(settings.wake_words),
-                    settings.config.wake_word_enabled,
-                    settings.config.background_only,
-                )
-                if signature != last_settings_signature:
-                    last_settings_signature = signature
-                    log(
-                        "runtime settings updated for "
-                        f"{config.label}: provider={settings.provider or 'unset'}, "
-                        f"language={settings.language}, "
-                        f"wake_words={len(settings.wake_words)}, "
-                        f"wake_word_enabled={'yes' if settings.config.wake_word_enabled else 'no'}, mode={'background' if settings.config.background_only else 'stt'}"
-                    )
-                diagnostics = {
-                    "vad_mode": vad_mode,
-                    "speech_ratio": speech_ratio,
-                    "peak_db": peak_db,
-                    "mean_db": mean_db,
-                }
-                if settings.stt_enabled:
-                    process_segment(
-                        settings.config,
-                        b"".join(segment_chunks),
-                        settings.provider,
-                        settings.language,
-                        token,
-                        settings.wake_words,
-                        diagnostics=diagnostics,
-                    )
-                elif settings.config.background_only:
-                    last_background_log_at = maybe_record_background_audio(
-                        settings.config,
-                        b"".join(segment_chunks),
-                        vad_mode,
-                        diagnostics,
-                        last_background_log_at,
-                    )
-
+            stats = run_audio_stream_session(
+                config,
+                token,
+                lambda: read_exact(proc.stdout, CHUNK_BYTES),
+                detector,
+                vad_mode,
+            )
             rc = proc.wait(timeout=2)
-            log(f"ffmpeg exited for {config.label} with code {rc}; retrying in 10s")
+            log(
+                f"ffmpeg exited for {config.label} with code {rc}; "
+                f"chunks={stats['chunks']} bytes={stats['bytes']}; retrying in 10s"
+            )
         except Exception as exc:
             log(f"worker error for {config.label}: {exc}")
         finally:
@@ -1223,6 +1383,43 @@ def audio_worker(
         time.sleep(10)
 
 
+def tcp_pull_worker(
+    config: AudioSourceConfig,
+    token: str,
+) -> None:
+    while True:
+        conn: socket.socket | None = None
+        detector, vad_mode = new_vad()
+        try:
+            log(
+                f"tcp pull connecting for {config.label}: host={config.host} port={config.port} "
+                f"sample_rate={config.sample_rate} channels={config.channels} format={config.audio_format}"
+            )
+            conn = socket.create_connection((config.host, config.port), timeout=10)
+            conn.settimeout(10)
+            stats = run_audio_stream_session(
+                config,
+                token,
+                lambda: read_exact_socket(conn, CHUNK_BYTES),
+                detector,
+                vad_mode,
+            )
+            log(
+                f"tcp pull disconnected for {config.label}: host={config.host} port={config.port} "
+                f"chunks={stats['chunks']} bytes={stats['bytes']}; retrying in 3s"
+            )
+            time.sleep(3)
+        except Exception as exc:
+            log(f"tcp pull error for {config.label}: {exc}; retrying in 10s")
+            time.sleep(10)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
 def main() -> int:
     preferences = load_preferences()
     sources = load_enabled_audio_sources(preferences)
@@ -1234,8 +1431,9 @@ def main() -> int:
 
     threads = []
     for config in sources:
+        worker = tcp_pull_worker if config.transport == "tcp_pull" else audio_worker
         thread = threading.Thread(
-            target=audio_worker,
+            target=worker,
             args=(config, token),
             daemon=False,
             name=f"audio:{config.label}",

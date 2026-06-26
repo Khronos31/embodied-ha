@@ -28,7 +28,8 @@
     { "source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー", "note": "go2rtc経由のTV/レコーダー音声" },
     { "source": "rtsp://localhost:8556/mic_only",   "label": "PC",             "note": "PCマイク" },
     { "source": "rtsp://localhost:8558/mic_only",   "label": "Google TV",      "note": "Google TV Streamerマイク" },
-    { "source": "alsa",                             "label": "スタディマイク", "note": "USBマイク直接録音（/dev/snd 必要）" }
+    { "source": "alsa",                             "label": "スタディマイク", "note": "USBマイク直接録音（/dev/snd 必要）" },
+    { "source": "hallway_voice_s3r",                "label": "廊下 VoiceS3R",  "transport": "tcp_pull", "host": "192.168.1.31", "port": 3333, "sample_rate": 16000, "channels": 1, "format": "s16le", "room": "hallway", "note": "常時計測用の固定IPノード" }
   ],
 
   "speakers": {
