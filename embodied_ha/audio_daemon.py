@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -183,6 +184,137 @@ def background_hearing_enabled(item: dict) -> bool:
     if "background_hearing_enabled" in item:
         return item.get("background_hearing_enabled") is True
     return True
+
+
+def default_active_listen_request_dir() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "runtime", "active_listen_requests")
+    return "/config/embodied-ha/runtime/active_listen_requests"
+
+
+def active_listen_request_dir() -> str:
+    return clean(os.environ.get("EHA_ACTIVE_LISTEN_REQUEST_DIR")) or default_active_listen_request_dir()
+
+
+def _write_json_atomic(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp-{uuid.uuid4().hex}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _load_json_file(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _pending_active_listen_requests(config: AudioSourceConfig) -> list[dict]:
+    directory = active_listen_request_dir()
+    try:
+        names = sorted(os.listdir(directory))
+    except FileNotFoundError:
+        return []
+    now_ts = time.time()
+    requests: list[dict] = []
+    for name in names:
+        if not name.endswith('.json') or name.endswith('.response.json'):
+            continue
+        req_path = os.path.join(directory, name)
+        payload = _load_json_file(req_path)
+        if not payload:
+            continue
+        if clean(payload.get('source')) != config.source:
+            continue
+        request_id = clean(payload.get('request_id'))
+        output_path = clean(payload.get('output_path'))
+        response_path = clean(payload.get('response_path'))
+        try:
+            duration = int(payload.get('duration') or 0)
+        except Exception:
+            duration = 0
+        try:
+            created_at = float(payload.get('created_at') or 0.0)
+        except Exception:
+            created_at = 0.0
+        if not request_id or not output_path or not response_path or duration <= 0:
+            continue
+        if created_at and now_ts - created_at > max(15.0, duration + 15.0):
+            _write_json_atomic(response_path, {
+                'ok': False,
+                'request_id': request_id,
+                'source': config.source,
+                'error': 'request expired',
+            })
+            try:
+                os.unlink(req_path)
+            except FileNotFoundError:
+                pass
+            continue
+        requests.append({
+            'request_id': request_id,
+            'source': config.source,
+            'duration': duration,
+            'output_path': output_path,
+            'response_path': response_path,
+            'request_path': req_path,
+            'expected_bytes': duration * SAMPLE_RATE * SAMPLE_WIDTH,
+        })
+    return requests
+
+
+def _finalize_active_listen_capture(request: dict, audio_bytes: bytes, error: str | None = None) -> None:
+    response = {
+        'ok': error is None,
+        'request_id': request.get('request_id'),
+        'source': request.get('source'),
+        'output_path': request.get('output_path'),
+    }
+    if error is None:
+        try:
+            write_wav(request['output_path'], audio_bytes)
+            response['captured_bytes'] = len(audio_bytes)
+            response['duration_sec'] = round(len(audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH), 2)
+        except Exception as exc:
+            error = str(exc) or 'failed to write capture'
+    if error is not None:
+        response['ok'] = False
+        response['error'] = error
+    _write_json_atomic(request['response_path'], response)
+    try:
+        os.unlink(request['request_path'])
+    except FileNotFoundError:
+        pass
+
+
+def _service_active_listen_requests(
+    config: AudioSourceConfig,
+    chunk: bytes,
+    active_requests: dict[str, dict],
+    last_scan_at: float,
+) -> float:
+    now_ts = time.monotonic()
+    if now_ts - last_scan_at >= 0.25:
+        for request in _pending_active_listen_requests(config):
+            request_id = request['request_id']
+            if request_id not in active_requests:
+                active_requests[request_id] = {**request, 'buffer': bytearray()}
+        last_scan_at = now_ts
+
+    completed: list[str] = []
+    for request_id, state in list(active_requests.items()):
+        state['buffer'].extend(chunk)
+        if len(state['buffer']) >= state['expected_bytes']:
+            _finalize_active_listen_capture(state, bytes(state['buffer'][:state['expected_bytes']]))
+            completed.append(request_id)
+    for request_id in completed:
+        active_requests.pop(request_id, None)
+    return last_scan_at
 
 
 def normalize_source_uri(value: str) -> str:
@@ -1249,6 +1381,8 @@ def run_audio_stream_session(
 
     last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
     last_background_log_at = 0.0
+    active_listen_requests: dict[str, dict] = {}
+    last_request_scan_at = 0.0
     prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
     segment_chunks: list[bytes] = []
     segment_levels: list[float] = []
@@ -1263,6 +1397,12 @@ def run_audio_stream_session(
             break
         stats["chunks"] += 1
         stats["bytes"] += len(chunk)
+        last_request_scan_at = _service_active_listen_requests(
+            config,
+            chunk,
+            active_listen_requests,
+            last_request_scan_at,
+        )
 
         voice_prob = detect_voice(chunk, detector)
         is_speech = voice_prob > VAD_THRESHOLD
@@ -1366,6 +1506,8 @@ def run_audio_stream_session(
                 last_background_log_at,
             )
 
+    for request in list(active_listen_requests.values()):
+        _finalize_active_listen_capture(request, bytes(request.get('buffer') or b''), error='stream ended before capture completed')
     return stats
 
 

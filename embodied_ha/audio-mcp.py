@@ -7,17 +7,15 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import tempfile
 import threading
 import time
-import wave
+import uuid
 from datetime import timedelta
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
 
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
@@ -89,6 +87,59 @@ AUDIO_EVENT_TAGS_FILE = clean(os.environ.get("EHA_AUDIO_EVENT_TAGS_FILE")) or de
 
 def active_listen_log_name() -> str:
     return os.path.basename(ACTIVE_LISTEN_LOG_FILE) or "active_listen_log.jsonl"
+
+
+def default_active_listen_request_dir() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "runtime", "active_listen_requests")
+    return "/config/embodied-ha/runtime/active_listen_requests"
+
+
+def active_listen_request_dir() -> str:
+    return clean(os.environ.get("EHA_ACTIVE_LISTEN_REQUEST_DIR")) or default_active_listen_request_dir()
+
+
+def _write_json_atomic(path: str, payload: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp-{uuid.uuid4().hex}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def request_daemon_capture_to_wav(source: str, duration: int, output_path: str) -> None:
+    request_id = uuid.uuid4().hex
+    request_dir = active_listen_request_dir()
+    os.makedirs(request_dir, exist_ok=True)
+    response_path = os.path.join(request_dir, f"{request_id}.response.json")
+    request_path = os.path.join(request_dir, f"{request_id}.json")
+    payload = {
+        'request_id': request_id,
+        'source': normalize_source_uri(source),
+        'duration': max(1, int(duration)),
+        'output_path': output_path,
+        'response_path': response_path,
+        'created_at': time.time(),
+    }
+    _write_json_atomic(request_path, payload)
+    deadline = time.monotonic() + duration + 12
+    try:
+        while time.monotonic() < deadline:
+            if os.path.exists(response_path):
+                with open(response_path, encoding='utf-8') as f:
+                    response = json.load(f)
+                if response.get('ok') is not True:
+                    raise TimeoutError(clean(response.get('error')) or 'daemon capture failed')
+                return
+            time.sleep(0.1)
+        raise TimeoutError(f'timed out waiting for daemon capture for {source}')
+    finally:
+        for candidate in (request_path, response_path):
+            try:
+                os.unlink(candidate)
+            except FileNotFoundError:
+                pass
 
 
 def _prefs_path() -> str:
@@ -344,59 +395,6 @@ def _truthy(value) -> bool:
 
 def find_ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
-
-
-def parse_tcp_source(source: str) -> tuple[str, int] | None:
-    normalized = normalize_source_uri(source)
-    if not normalized.startswith("tcp://"):
-        return None
-    parsed = urlparse(normalized)
-    host = clean(parsed.hostname)
-    try:
-        port = int(parsed.port)
-    except Exception:
-        return None
-    if not host or port <= 0 or port > 65535:
-        return None
-    if clean(parsed.path) not in {"", "/"}:
-        return None
-    return host, port
-
-
-def record_tcp_source_to_wav(source: str, duration: int, output_path: str) -> None:
-    parsed = parse_tcp_source(source)
-    if parsed is None:
-        raise ValueError(f"invalid tcp source: {source}")
-    host, port = parsed
-    expected_bytes = 16000 * 2 * max(1, duration)
-    received = bytearray()
-    sock = socket.create_connection((host, port), timeout=10)
-    try:
-        sock.settimeout(2.0)
-        deadline = time.monotonic() + max(2, duration + 2)
-        while len(received) < expected_bytes and time.monotonic() < deadline:
-            try:
-                chunk = sock.recv(min(4096, expected_bytes - len(received)))
-            except socket.timeout:
-                if received:
-                    break
-                raise TimeoutError(f"tcp audio timeout for {source}")
-            if not chunk:
-                break
-            received.extend(chunk)
-        if not received:
-            raise TimeoutError(f"tcp audio timeout for {source}")
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-
-    with wave.open(output_path, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(16000)
-        wav_file.writeframes(bytes(received))
 
 
 def build_record_command(source: str, duration: int) -> list[str]:
@@ -678,7 +676,7 @@ def listen(args: dict):
             tmp_path = tmp.name
         if source.startswith("tcp://"):
             try:
-                record_tcp_source_to_wav(source, duration, tmp_path)
+                request_daemon_capture_to_wav(source, duration, tmp_path)
             except Exception as exc:
                 message = clean(str(exc)) or "tcp recording failed"
                 payload = {**base_payload(), "error": message}
