@@ -51,6 +51,10 @@ class AudioMcpTests(unittest.TestCase):
         self.assertEqual(cmd[:5], ["ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertIn("7", cmd)
 
+    def test_build_record_command_rejects_tcp(self):
+        with self.assertRaises(ValueError):
+            self.audio_mcp.build_record_command("tcp://192.168.1.153:3333", 5)
+
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
             self.assertEqual(
@@ -144,6 +148,28 @@ class AudioMcpTests(unittest.TestCase):
         self.assertEqual(first_cmd[:5], ["/usr/bin/ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertFalse(payload["has_sound"])
 
+
+    def test_listen_tcp_branch_records_audio(self):
+        recorded_entries = []
+        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),              mock.patch.object(self.audio_mcp, "record_tcp_source_to_wav") as tcp_mock,              mock.patch.object(self.audio_mcp, "analyze_volume", return_value=(-18.0, -29.0)),              mock.patch.object(self.audio_mcp, "record_active_listen", side_effect=lambda entry, source: recorded_entries.append((entry, source))):
+            payload = self._json(self.audio_mcp.listen({"source": "tcp://192.168.1.153:3333", "duration": 4}))
+
+        tcp_mock.assert_called_once()
+        self.assertEqual(payload["source"], "tcp://192.168.1.153:3333")
+        self.assertTrue(payload["has_sound"])
+        self.assertEqual(recorded_entries[-1][1], "tcp://192.168.1.153:3333")
+        self.assertEqual(recorded_entries[-1][0]["source"], "tcp://192.168.1.153:3333")
+
+    def test_listen_tcp_timeout_is_logged(self):
+        recorded_entries = []
+        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),              mock.patch.object(self.audio_mcp, "record_tcp_source_to_wav", side_effect=TimeoutError("tcp audio timeout for tcp://192.168.1.153:3333")),              mock.patch.object(self.audio_mcp, "record_active_listen", side_effect=lambda entry, source: recorded_entries.append((entry, source))):
+            result = self.audio_mcp.listen({"source": "tcp://192.168.1.153:3333", "duration": 4})
+
+        payload = json.loads(result[0][0]["text"])
+        self.assertIn("timeout", payload["error"])
+        self.assertEqual(payload["source"], "tcp://192.168.1.153:3333")
+        self.assertEqual(recorded_entries[-1][1], "tcp://192.168.1.153:3333")
+        self.assertIn("timeout", recorded_entries[-1][0]["error"])
 
     def test_listen_records_active_log_with_transcript(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -7,13 +7,17 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
+import time
+import wave
 from datetime import timedelta
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
@@ -342,8 +346,63 @@ def find_ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
 
 
+def parse_tcp_source(source: str) -> tuple[str, int] | None:
+    normalized = normalize_source_uri(source)
+    if not normalized.startswith("tcp://"):
+        return None
+    parsed = urlparse(normalized)
+    host = clean(parsed.hostname)
+    try:
+        port = int(parsed.port)
+    except Exception:
+        return None
+    if not host or port <= 0 or port > 65535:
+        return None
+    if clean(parsed.path) not in {"", "/"}:
+        return None
+    return host, port
+
+
+def record_tcp_source_to_wav(source: str, duration: int, output_path: str) -> None:
+    parsed = parse_tcp_source(source)
+    if parsed is None:
+        raise ValueError(f"invalid tcp source: {source}")
+    host, port = parsed
+    expected_bytes = 16000 * 2 * max(1, duration)
+    received = bytearray()
+    sock = socket.create_connection((host, port), timeout=10)
+    try:
+        sock.settimeout(2.0)
+        deadline = time.monotonic() + max(2, duration + 2)
+        while len(received) < expected_bytes and time.monotonic() < deadline:
+            try:
+                chunk = sock.recv(min(4096, expected_bytes - len(received)))
+            except socket.timeout:
+                if received:
+                    break
+                raise TimeoutError(f"tcp audio timeout for {source}")
+            if not chunk:
+                break
+            received.extend(chunk)
+        if not received:
+            raise TimeoutError(f"tcp audio timeout for {source}")
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+    with wave.open(output_path, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(bytes(received))
+
+
 def build_record_command(source: str, duration: int) -> list[str]:
     source = normalize_source_uri(source)
+    if source.startswith("tcp://"):
+        raise ValueError("tcp sources require direct socket capture")
     if source.startswith("alsa://"):
         device = source[len("alsa://"):].lstrip("/") or "default"
         return [
@@ -600,8 +659,8 @@ def listen(args: dict):
             **sensory,
         }
 
-    # 未登録でも rtsp:// または alsa:// なら直接使用する
-    if source not in _source_map() and not (source.startswith("rtsp://") or source.startswith("alsa://")):
+    # 未登録でも rtsp:// / alsa:// / tcp:// なら直接使用する
+    if source not in _source_map() and not (source.startswith("rtsp://") or source.startswith("alsa://") or source.startswith("tcp://")):
         payload = {**base_payload(), "error": f"unknown source: {source}"}
         record_active_listen(payload, source)
         return [text(json.dumps({"error": payload["error"]}, ensure_ascii=False))], True
@@ -617,14 +676,23 @@ def listen(args: dict):
     try:
         with tempfile.NamedTemporaryFile(dir=TMP_DIR, suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
-        command = build_record_command(source, duration) + [tmp_path]
-        command[0] = ffmpeg
-        record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
-        if record.returncode != 0:
-            message = clean(record.stderr) or clean(record.stdout) or "recording failed"
-            payload = {**base_payload(), "error": message}
-            record_active_listen(payload, source)
-            return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
+        if source.startswith("tcp://"):
+            try:
+                record_tcp_source_to_wav(source, duration, tmp_path)
+            except Exception as exc:
+                message = clean(str(exc)) or "tcp recording failed"
+                payload = {**base_payload(), "error": message}
+                record_active_listen(payload, source)
+                return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
+        else:
+            command = build_record_command(source, duration) + [tmp_path]
+            command[0] = ffmpeg
+            record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
+            if record.returncode != 0:
+                message = clean(record.stderr) or clean(record.stdout) or "recording failed"
+                payload = {**base_payload(), "error": message}
+                record_active_listen(payload, source)
+                return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
 
         peak_db, mean_db = analyze_volume(tmp_path)
         payload = {
