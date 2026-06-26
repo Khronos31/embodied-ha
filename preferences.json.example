@@ -1,8 +1,6 @@
 {
   "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
-
   "character_name": "Claude",
-
   "cameras": [
     {
       "source": "capture_tv",
@@ -21,17 +19,39 @@
       "note": "リビングの広角カメラ"
     }
   ],
-
   "stt_provider": null,
-
   "audio_sources": [
-    { "source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー", "note": "go2rtc経由のTV/レコーダー音声" },
-    { "source": "rtsp://localhost:8556/mic_only",   "label": "PC",             "note": "PCマイク" },
-    { "source": "rtsp://localhost:8558/mic_only",   "label": "Google TV",      "note": "Google TV Streamerマイク" },
-    { "source": "alsa",                             "label": "スタディマイク", "note": "USBマイク直接録音（/dev/snd 必要）" },
-    { "source": "hallway_voice_s3r",                "label": "廊下 VoiceS3R",  "transport": "tcp_pull", "host": "192.168.1.31", "port": 3333, "sample_rate": 16000, "channels": 1, "format": "s16le", "room": "hallway", "note": "常時計測用の固定IPノード" }
+    {
+      "source": "rtsp://localhost:8554/capture_tv",
+      "label": "TV・レコーダー",
+      "room": "living",
+      "note": "go2rtc経由のTV/レコーダー音声"
+    },
+    {
+      "source": "rtsp://localhost:8556/mic_only",
+      "label": "PC",
+      "room": "study",
+      "note": "PCマイク"
+    },
+    {
+      "source": "rtsp://localhost:8558/mic_only",
+      "label": "Google TV",
+      "room": "study",
+      "note": "Google TV Streamerマイク"
+    },
+    {
+      "source": "alsa://default",
+      "label": "スタディマイク",
+      "room": "study",
+      "note": "USBマイク直接録音（/dev/snd 必要）"
+    },
+    {
+      "source": "tcp://192.168.1.31:3333",
+      "label": "廊下 VoiceS3R",
+      "room": "hallway",
+      "note": "常時計測用の固定IPノード"
+    }
   ],
-
   "speakers": {
     "study": {
       "type": "tts",
@@ -52,50 +72,77 @@
       "title": "Embodied HA"
     }
   },
-
   "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
   "entities": [
-    { "name": "リビングのライト", "entity_id": "light.living_room", "note": "" }
+    {
+      "name": "リビングのライト",
+      "entity_id": "light.living_room",
+      "note": ""
+    }
   ],
-
   "presence": {
     "entity": "input_boolean.resident_home"
   },
-
   "policies": [
     "深夜1〜6時は発話しない（watch/explore に組み込み済み）"
   ],
-
   "_sensors_doc": "観察ループ(watch)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
   "sensors": {
     "groups": [
       {
         "title": "人感センサー",
-        "contexts": ["watch"],
+        "contexts": [
+          "watch"
+        ],
         "items": [
-          { "label": "リビング", "entity": "binary_sensor.living_motion" },
-          { "label": "廊下1", "entity": "binary_sensor.hall_motion_1", "note": "リビング誤反応あり" }
+          {
+            "label": "リビング",
+            "entity": "binary_sensor.living_motion"
+          },
+          {
+            "label": "廊下1",
+            "entity": "binary_sensor.hall_motion_1",
+            "note": "リビング誤反応あり"
+          }
         ]
       },
       {
         "title": "温湿度",
-        "contexts": ["watch"],
+        "contexts": [
+          "watch"
+        ],
         "items": [
-          { "label": "リビング", "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%" }
+          {
+            "label": "リビング",
+            "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%"
+          }
         ]
       },
       {
         "title": "テレビ",
-        "contexts": ["watch"],
+        "contexts": [
+          "watch"
+        ],
         "items": [
-          { "label": "最前面アプリ", "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}", "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入" }
+          {
+            "label": "最前面アプリ",
+            "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}",
+            "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入"
+          }
         ]
       },
       {
-        "contexts": ["chat"],
+        "contexts": [
+          "chat"
+        ],
         "items": [
-          { "label": "在宅", "entity": "input_boolean.resident_home" },
-          { "template": "人感→ リビング:{{ states('binary_sensor.living_motion') }}" }
+          {
+            "label": "在宅",
+            "entity": "input_boolean.resident_home"
+          },
+          {
+            "template": "人感→ リビング:{{ states('binary_sensor.living_motion') }}"
+          }
         ]
       }
     ]

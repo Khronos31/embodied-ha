@@ -163,13 +163,13 @@ class AudioDaemonTests(unittest.TestCase):
     def test_load_enabled_audio_sources_filters_and_normalizes(self):
         prefs = {
             "audio_sources": [
-                {"source": "alsa", "label": "Desk", "stt_enabled": True, "wake_word_enabled": True},
-                {"source": "rtsp://example", "label": "TV", "stt_enabled": False},
+                {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "wake_word_enabled": True},
+                {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": False},
             ]
         }
         sources = self.audio_daemon.load_enabled_audio_sources(prefs)
         self.assertEqual(len(sources), 1)
-        self.assertEqual(sources[0].source, "default")
+        self.assertEqual(sources[0].source, "alsa://default")
         self.assertEqual(sources[0].label, "Desk")
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
@@ -177,8 +177,8 @@ class AudioDaemonTests(unittest.TestCase):
     def test_load_enabled_audio_sources_keeps_zero_retention_as_background_by_default(self):
         prefs = {
             "audio_sources": [
-                {"source": "default", "label": "Desk", "stt_enabled": True, "stt_retention_hours": 0},
-                {"source": "rtsp://example", "label": "TV", "stt_enabled": True, "stt_retention_hours": 1},
+                {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "stt_retention_hours": 0},
+                {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": True, "stt_retention_hours": 1},
             ]
         }
         sources = self.audio_daemon.load_enabled_audio_sources(prefs)
@@ -195,6 +195,7 @@ class AudioDaemonTests(unittest.TestCase):
                 {
                     "source": "rtsp://example/recorder",
                     "label": "Recorder",
+                    "room": "study",
                     "stt_enabled": True,
                     "stt_retention_hours": 0,
                     "background_hearing_enabled": False,
@@ -202,6 +203,7 @@ class AudioDaemonTests(unittest.TestCase):
                 {
                     "source": "rtsp://example/google-tv",
                     "label": "Google TV",
+                    "room": "study",
                     "stt_enabled": True,
                     "stt_retention_hours": 0,
                     "background_hearing_enabled": True,
@@ -217,11 +219,9 @@ class AudioDaemonTests(unittest.TestCase):
         prefs = {
             "audio_sources": [
                 {
-                    "source": "hallway_voice_s3r",
+                    "source": "tcp://192.168.1.31:3333",
                     "label": "Hallway VoiceS3R",
-                    "transport": "tcp_pull",
-                    "host": "192.168.1.31",
-                    "port": 3333,
+                    "room": "hallway",
                     "sample_rate": 16000,
                     "channels": 1,
                     "format": "s16le",
@@ -232,8 +232,10 @@ class AudioDaemonTests(unittest.TestCase):
         sources = self.audio_daemon.load_enabled_audio_sources(prefs)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].transport, "tcp_pull")
+        self.assertEqual(sources[0].source, "tcp://192.168.1.31:3333")
         self.assertEqual(sources[0].host, "192.168.1.31")
         self.assertEqual(sources[0].port, 3333)
+        self.assertEqual(sources[0].room, "hallway")
         self.assertEqual(sources[0].sample_rate, 16000)
         self.assertEqual(sources[0].channels, 1)
         self.assertEqual(sources[0].audio_format, "s16le")
@@ -242,14 +244,25 @@ class AudioDaemonTests(unittest.TestCase):
         prefs = {
             "audio_sources": [
                 {
-                    "source": "hallway_voice_s3r",
+                    "source": "tcp://192.168.1.31:3333",
                     "label": "Hallway VoiceS3R",
-                    "transport": "tcp_pull",
-                    "host": "192.168.1.31",
-                    "port": 3333,
+                    "room": "hallway",
                     "sample_rate": 48000,
                     "channels": 1,
                     "format": "s16le",
+                    "stt_enabled": True,
+                }
+            ]
+        }
+        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        self.assertEqual(sources, [])
+
+    def test_load_enabled_audio_sources_rejects_missing_room(self):
+        prefs = {
+            "audio_sources": [
+                {
+                    "source": "alsa://default",
+                    "label": "Desk",
                     "stt_enabled": True,
                 }
             ]
@@ -264,7 +277,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertIsNone(self.audio_daemon.parse_tcp_port(65536))
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
-        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
         settings = self.audio_daemon.load_runtime_settings(
             base_config,
             {
@@ -273,8 +286,9 @@ class AudioDaemonTests(unittest.TestCase):
                 "wake_words": ["あかねちゃん"],
                 "audio_sources": [
                     {
-                        "source": "default",
+                        "source": "alsa://default",
                         "label": "Desk",
+                        "room": "study",
                         "stt_enabled": True,
                         "stt_retention_hours": 10,
                         "wake_word_enabled": True,
@@ -290,15 +304,16 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(settings.config.wake_word_enabled)
 
     def test_load_runtime_settings_detects_disabled_source(self):
-        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
         settings = self.audio_daemon.load_runtime_settings(
             base_config,
             {
                 "stt_provider": "stt.home_assistant_cloud",
                 "audio_sources": [
                     {
-                        "source": "default",
+                        "source": "alsa://default",
                         "label": "Desk",
+                        "room": "study",
                         "stt_enabled": False,
                         "wake_word_enabled": False,
                     }
@@ -309,15 +324,16 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertFalse(settings.config.wake_word_enabled)
 
     def test_load_runtime_settings_uses_zero_retention_as_background_by_default(self):
-        base_config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
         settings = self.audio_daemon.load_runtime_settings(
             base_config,
             {
                 "stt_provider": "stt.home_assistant_cloud",
                 "audio_sources": [
                     {
-                        "source": "default",
+                        "source": "alsa://default",
                         "label": "Desk",
+                        "room": "study",
                         "stt_enabled": True,
                         "stt_retention_hours": 0,
                         "wake_word_enabled": True,
@@ -330,7 +346,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(settings.config.retention_hours, 24)
 
     def test_load_runtime_settings_disables_background_when_requested(self):
-        base_config = self.audio_daemon.AudioSourceConfig("rtsp://example", "Recorder", 24, False, background_only=True)
+        base_config = self.audio_daemon.AudioSourceConfig("rtsp://example", "Recorder", 24, False, background_only=True, room="study")
         settings = self.audio_daemon.load_runtime_settings(
             base_config,
             {
@@ -339,6 +355,7 @@ class AudioDaemonTests(unittest.TestCase):
                     {
                         "source": "rtsp://example",
                         "label": "Recorder",
+                        "room": "study",
                         "stt_enabled": True,
                         "stt_retention_hours": 0,
                         "background_hearing_enabled": False,
@@ -423,7 +440,7 @@ class AudioDaemonTests(unittest.TestCase):
             self.assertEqual([row["text"] for row in rows], ["old tv", "new desk"])
 
     def test_process_segment_records_diagnostics_on_empty_transcription(self):
-        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
         logged_entries: list[dict] = []
 
         def capture_entry(entry, retention_hours, source_label):
@@ -459,7 +476,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(non_speech_mock.call_args.args[3], "empty_transcription")
 
     def test_process_segment_writes_auditory_event_on_success(self):
-        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, True)
+        config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
         logged_entries: list[dict] = []
         auditory_events: list[dict] = []
 
@@ -497,7 +514,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(event["modality"], "auditory")
         self.assertEqual(event["transcript"], "こんにちは。聞こえますか？")
         self.assertEqual(event["source"], "Desk")
-        self.assertEqual(event["origin"], "default")
+        self.assertEqual(event["origin"], "alsa://default")
         self.assertEqual(event["speaker_hint"], "user")
         self.assertEqual(event["duration_sec"], 1.0)
         self.assertEqual(event["stt_provider"], "stt.home_assistant_cloud")
@@ -510,7 +527,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertIsNone(event["raw_audio_ref"])
 
     def test_process_segment_skips_fallback_noise_before_stt(self):
-        config = self.audio_daemon.AudioSourceConfig("default", "Desk", 24, False)
+        config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
         logged_entries: list[dict] = []
         auditory_events: list[dict] = []
 

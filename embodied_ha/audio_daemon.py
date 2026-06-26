@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 import wave
 from collections import deque
 from dataclasses import dataclass
@@ -69,7 +70,7 @@ class AudioSourceConfig:
     background_only: bool = False
     room: str = ""
     note: str = ""
-    transport: str = "rtsp"
+    transport: str = "alsa"
     host: str = ""
     port: int = 0
     sample_rate: int = SAMPLE_RATE
@@ -162,7 +163,7 @@ def non_speech_audio_retention_hours() -> int:
 
 def canonical_source(value: str) -> str:
     source = clean(value)
-    return "default" if source in {"", "alsa", "default"} else source
+    return "alsa://default" if source in {"", "alsa", "default"} else source
 
 
 def load_preferences() -> dict:
@@ -184,24 +185,37 @@ def background_hearing_enabled(item: dict) -> bool:
     return True
 
 
+def normalize_source_uri(value: str) -> str:
+    source = clean(value)
+    if source in {"", "alsa", "default"}:
+        return "alsa://default"
+    if source.startswith("alsa://"):
+        device = source[len("alsa://"):].lstrip("/")
+        return f"alsa://{device or 'default'}"
+    return source
+
+
 def infer_transport(item: dict) -> str:
-    transport = clean(item.get("transport")).lower()
-    if transport in {"rtsp", "tcp_pull"}:
-        return transport
+    source = normalize_source_uri(item.get("source"))
+    if source.startswith("rtsp://"):
+        return "rtsp"
+    if source.startswith("tcp://"):
+        return "tcp_pull"
+    if source.startswith("alsa://"):
+        return "alsa"
     if clean(item.get("host")) or clean(item.get("port")):
         return "tcp_pull"
-    return "rtsp"
+    return "unknown"
 
 
 def _source_identity(item: dict, transport: str) -> str:
-    if transport == "tcp_pull":
-        value = clean(item.get("source")) or clean(item.get("name"))
-        if value:
-            return value
+    source = normalize_source_uri(item.get("source"))
+    if transport == "tcp_pull" and source and not source.startswith("tcp://") and clean(item.get("host")):
         host = clean(item.get("host"))
         port = clean(item.get("port"))
-        return f"{host}:{port}" if host and port else host
-    return canonical_source(item.get("source"))
+        if host and port:
+            return f"tcp://{host}:{port}"
+    return source
 
 
 def parse_tcp_port(value) -> int | None:
@@ -214,15 +228,43 @@ def parse_tcp_port(value) -> int | None:
     return port
 
 
+def parse_source_uri(source: str) -> tuple[str, str, str, int] | None:
+    normalized = normalize_source_uri(source)
+    if normalized.startswith("alsa://"):
+        device = normalized[len("alsa://"):].lstrip("/") or "default"
+        return "alsa", normalized, device, 0
+    if normalized.startswith("rtsp://"):
+        return "rtsp", normalized, "", 0
+    if normalized.startswith("tcp://"):
+        parsed = urlparse(normalized)
+        host = clean(parsed.hostname)
+        port = parse_tcp_port(parsed.port)
+        if not host or port is None:
+            return None
+        if clean(parsed.path) not in {"", "/"}:
+            return None
+        return "tcp_pull", normalized, host, port
+    return None
+
+
 def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
     if not isinstance(item, dict):
         return None
     transport = infer_transport(item)
     source = _source_identity(item, transport)
     if not source:
-        log(f"invalid audio source config: missing source/name for transport={transport}")
+        log(f"invalid audio source config: missing source for transport={transport}")
         return None
+    parsed = parse_source_uri(source)
+    if parsed is None:
+        log(f"invalid audio source config: unsupported source URI {source}")
+        return None
+    transport, source, host_or_device, port = parsed
     label = clean(item.get("label")) or source
+    room = clean(item.get("room"))
+    if not room:
+        log(f"invalid audio source config for {label}: room is required")
+        return None
     try:
         retention = int(item.get("stt_retention_hours", 60))
     except Exception:
@@ -232,14 +274,12 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
         return None
 
     host = ""
-    port = 0
     sample_rate = SAMPLE_RATE
     channels = CHANNELS
     audio_format = "s16le"
 
     if transport == "tcp_pull":
-        host = clean(item.get("host"))
-        port = parse_tcp_port(item.get("port")) or 0
+        host = host_or_device
         try:
             sample_rate = int(item.get("sample_rate", SAMPLE_RATE))
         except Exception:
@@ -249,13 +289,6 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
         except Exception:
             channels = -1
         audio_format = clean(item.get("format")).lower() or "s16le"
-
-        if not host:
-            log(f"invalid audio source config for {label}: tcp_pull requires host")
-            return None
-        if port <= 0:
-            log(f"invalid audio source config for {label}: tcp_pull requires valid port")
-            return None
         if sample_rate != SAMPLE_RATE or channels != CHANNELS or audio_format != "s16le":
             log(
                 f"invalid audio source config for {label}: tcp_pull only supports "
@@ -263,10 +296,8 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
                 f"(got sample_rate={sample_rate}, channels={channels}, format={audio_format or 'unset'})"
             )
             return None
-    else:
-        if not source:
-            log(f"invalid audio source config for {label}: rtsp source is empty")
-            return None
+    elif transport == "alsa":
+        host = host_or_device
 
     return AudioSourceConfig(
         source=source,
@@ -274,7 +305,7 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
         retention_hours=max(1, retention) if not background_only else background_audio_retention_hours(),
         wake_word_enabled=bool(item.get("wake_word_enabled")),
         background_only=background_only,
-        room=clean(item.get("room")),
+        room=room,
         note=clean(item.get("note")),
         transport=transport,
         host=host,
@@ -380,9 +411,7 @@ def load_runtime_settings(
 
 
 def build_ffmpeg_command(config: AudioSourceConfig) -> list[str]:
-    if config.transport != "rtsp":
-        raise ValueError(f"ffmpeg transport unsupported for {config.transport}")
-    if config.source == "default":
+    if config.transport == "alsa":
         return [
             "ffmpeg",
             "-loglevel",
@@ -390,7 +419,7 @@ def build_ffmpeg_command(config: AudioSourceConfig) -> list[str]:
             "-f",
             "alsa",
             "-i",
-            "default",
+            config.host or "default",
             "-ar",
             str(SAMPLE_RATE),
             "-ac",
@@ -399,6 +428,8 @@ def build_ffmpeg_command(config: AudioSourceConfig) -> list[str]:
             "s16le",
             "-",
         ]
+    if config.transport != "rtsp":
+        raise ValueError(f"ffmpeg transport unsupported for {config.transport}")
     return [
         "ffmpeg",
         "-loglevel",
@@ -1392,7 +1423,7 @@ def tcp_pull_worker(
         detector, vad_mode = new_vad()
         try:
             log(
-                f"tcp pull connecting for {config.label}: host={config.host} port={config.port} "
+                f"tcp pull connecting for {config.label}: source={config.source} host={config.host} port={config.port} "
                 f"sample_rate={config.sample_rate} channels={config.channels} format={config.audio_format}"
             )
             conn = socket.create_connection((config.host, config.port), timeout=10)
@@ -1405,7 +1436,7 @@ def tcp_pull_worker(
                 vad_mode,
             )
             log(
-                f"tcp pull disconnected for {config.label}: host={config.host} port={config.port} "
+                f"tcp pull disconnected for {config.label}: source={config.source} host={config.host} port={config.port} "
                 f"chunks={stats['chunks']} bytes={stats['bytes']}; retrying in 3s"
             )
             time.sleep(3)
