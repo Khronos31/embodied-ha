@@ -16,7 +16,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 import wave
 from collections import deque
 from dataclasses import dataclass
@@ -24,8 +24,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from auditory_context import append_auditory_event
-from sensory_origin import classify_sensory_origin
-from state_utils import clean, now, parse_ts
+from sensory_origin import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
+from state_utils import clean, now, parse_ts, read_json
 
 try:
     from pysilero_vad import SileroVoiceActivityDetector
@@ -60,6 +60,16 @@ BACKGROUND_LOG_RETENTION_HOURS = 24
 _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
+_HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
+
+MOTION_CLASSES = {"motion", "occupancy", "presence"}
+MOTION_ACTIVE_STATES = {"on", "open", "occupied", "detected", "home"}
+HA_STATES_CACHE_TTL_SECONDS = 15.0
+RECENT_MOTION_WINDOW_MINUTES = 20
+RECENT_VISUAL_WINDOW_MINUTES = 60
+RELATED_HA_STATE_LIMIT = 5
+LOCATION_PRIOR_ROOM_LIMIT = 4
+
 
 
 @dataclass(frozen=True)
@@ -165,6 +175,373 @@ def non_speech_audio_retention_hours() -> int:
 def canonical_source(value: str) -> str:
     source = clean(value)
     return "alsa://default" if source in {"", "alsa", "default"} else source
+
+
+def log_dir_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    fallback = os.path.join(data_dir, "log") if data_dir else "/config/embodied-ha/log"
+    return clean(os.environ.get("EHA_LOG_DIR")) or fallback
+
+
+def scene_state_path() -> str:
+    return os.path.join(log_dir_path(), "scene_state.json")
+
+
+def ha_api_base() -> str:
+    return clean(os.environ.get("HA_URL")) or "http://supervisor/core/api"
+
+
+def ha_token() -> str:
+    return clean(os.environ.get("SUPERVISOR_TOKEN")) or clean(os.environ.get("HASSIO_TOKEN"))
+
+
+def ha_api_json(path: str) -> Any:
+    token = ha_token()
+    if not token:
+        return None
+    target = path if path.startswith("http://") or path.startswith("https://") else f"{ha_api_base().rstrip('/')}" + path
+    request = urllib.request.Request(target, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return json.loads(response.read().decode(charset, errors="replace"))
+    except Exception:
+        return None
+
+
+def get_current_ha_states(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+    now_ts = time.monotonic()
+    if not force_refresh:
+        try:
+            expires_at = float(_HA_STATES_CACHE.get("expires_at") or 0.0)
+        except Exception:
+            expires_at = 0.0
+        if expires_at > now_ts:
+            states = _HA_STATES_CACHE.get("states")
+            if isinstance(states, list):
+                return [row for row in states if isinstance(row, dict)]
+    data = ha_api_json("/states")
+    states = data if isinstance(data, list) else []
+    _HA_STATES_CACHE["states"] = [row for row in states if isinstance(row, dict)]
+    _HA_STATES_CACHE["expires_at"] = now_ts + HA_STATES_CACHE_TTL_SECONDS
+    return [row for row in _HA_STATES_CACHE["states"] if isinstance(row, dict)]
+
+
+def state_by_entity_id(states: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in states:
+        if not isinstance(row, dict):
+            continue
+        eid = clean(row.get("entity_id"))
+        if eid:
+            out[eid] = row
+    return out
+
+
+def _looks_like_motion(entity_id: str, title: str = "", attributes: dict[str, Any] | None = None) -> bool:
+    entity_id = clean(entity_id)
+    if not entity_id.startswith("binary_sensor."):
+        return False
+    if entity_id.endswith("_motion"):
+        return True
+    attrs = attributes if isinstance(attributes, dict) else {}
+    if clean(attrs.get("device_class")).lower() in MOTION_CLASSES:
+        return True
+    title_text = clean(title).lower()
+    return "人感" in clean(title) or "motion" in title_text or "occupancy" in title_text or "presence" in title_text
+
+
+def _entity_area_room(entity_id: str) -> str | None:
+    return resolve_room(area_for_entity(entity_id))
+
+
+def _infer_item_room(item: dict[str, Any], group_title: str = "") -> str | None:
+    if not isinstance(item, dict):
+        return None
+    for candidate in (item.get("room"), item.get("area"), item.get("label"), group_title, item.get("note")):
+        room_id = resolve_room(candidate) or infer_room_from_text(candidate)
+        if room_id:
+            return room_id
+    entity_id = clean(item.get("entity")) or clean(item.get("entity_id"))
+    if entity_id:
+        room_id = _entity_area_room(entity_id) or infer_room_from_text(entity_id)
+        if room_id:
+            return room_id
+    return None
+
+
+def _minutes_ago(timestamp: str | None, *, reference_ts: str | None = None) -> float | None:
+    parsed = parse_ts(timestamp) if timestamp else None
+    reference = parse_ts(reference_ts) if reference_ts else now()
+    if parsed is None or reference is None:
+        return None
+    return round(max(0.0, (reference - parsed).total_seconds() / 60.0), 1)
+
+
+def _format_state_value(row: dict[str, Any]) -> str:
+    state = clean(row.get("state"))
+    if state in {"unknown", "unavailable", ""}:
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        for key in ("friendly_name", "temperature", "current_temperature"):
+            value = clean(attrs.get(key))
+            if value:
+                return value
+    return state
+
+
+def _state_is_active_motion(value: Any) -> bool:
+    state = clean(value).lower()
+    return bool(state) and state in MOTION_ACTIVE_STATES
+
+
+def load_recent_scenes(limit: int = 20) -> list[dict[str, Any]]:
+    data = read_json(scene_state_path(), {})
+    scenes = data.get("scenes") if isinstance(data, dict) else []
+    if not isinstance(scenes, list):
+        return []
+    return [scene for scene in scenes[-max(1, limit):] if isinstance(scene, dict)]
+
+
+def build_recent_visual_context(source_room: str | None, timestamp: str) -> dict[str, Any] | None:
+    if not source_room:
+        return None
+    candidates: list[tuple[Any, dict[str, Any]]] = []
+    for scene in reversed(load_recent_scenes()):
+        camera_pose = scene.get("camera_pose") if isinstance(scene.get("camera_pose"), dict) else {}
+        room_id = resolve_room(camera_pose.get("room")) or infer_room_from_text(scene.get("source"), camera_pose.get("room"))
+        if room_id != source_room:
+            continue
+        scene_minutes_ago = _minutes_ago(clean(scene.get("timestamp")), reference_ts=timestamp)
+        if scene_minutes_ago is not None and scene_minutes_ago > RECENT_VISUAL_WINDOW_MINUTES:
+            continue
+        objects = [clean(item.get("label")) for item in scene.get("objects", []) if isinstance(item, dict) and clean(item.get("label"))]
+        people = [clean(item.get("label")) for item in scene.get("people", []) if isinstance(item, dict) and clean(item.get("label"))]
+        payload = {
+            "scene_id": clean(scene.get("id")) or None,
+            "source": clean(scene.get("source")) or None,
+            "room": room_id,
+            "timestamp": clean(scene.get("timestamp")) or None,
+            "minutes_ago": scene_minutes_ago,
+            "changes": [clean(item) for item in (scene.get("changes") or []) if clean(item)][:3],
+            "objects": objects[:5],
+            "people": people[:3],
+        }
+        candidates.append((parse_ts(scene.get("timestamp")) or now(), payload))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def motion_entities_for_room(source_room: str | None, preferences: dict[str, Any], states: list[dict[str, Any]]) -> list[dict[str, str]]:
+    if not source_room:
+        return []
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    sensors = preferences.get("sensors") if isinstance(preferences, dict) else {}
+    groups = sensors.get("groups") if isinstance(sensors, dict) else []
+    if isinstance(groups, list):
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            title = clean(group.get("title"))
+            for item in group.get("items", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                entity_id = clean(item.get("entity"))
+                if not entity_id or entity_id in seen or not _looks_like_motion(entity_id, title):
+                    continue
+                room_id = _infer_item_room(item, title)
+                if room_id != source_room:
+                    continue
+                seen.add(entity_id)
+                results.append({
+                    "entity_id": entity_id,
+                    "label": clean(item.get("label")) or entity_id,
+                    "room": room_id,
+                })
+    if results:
+        return results
+    for row in states:
+        entity_id = clean(row.get("entity_id"))
+        attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+        if not _looks_like_motion(entity_id, clean(attrs.get("friendly_name")), attrs):
+            continue
+        room_id = _entity_area_room(entity_id) or infer_room_from_text(attrs.get("friendly_name"), entity_id)
+        if room_id != source_room or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        results.append({
+            "entity_id": entity_id,
+            "label": clean(attrs.get("friendly_name")) or entity_id,
+            "room": room_id,
+        })
+    return results
+
+
+def build_recent_motion_context(source_room: str | None, timestamp: str, preferences: dict[str, Any], states: list[dict[str, Any]]) -> dict[str, Any] | None:
+    motion_entities = motion_entities_for_room(source_room, preferences, states)
+    if not motion_entities:
+        return None
+    start = (parse_ts(timestamp) or now()) - timedelta(minutes=RECENT_MOTION_WINDOW_MINUTES)
+    csv = ",".join(entity["entity_id"] for entity in motion_entities)
+    path = f"/history/period/{quote(start.astimezone().isoformat())}?filter_entity_id={csv}&minimal_response"
+    data = ha_api_json(path)
+    if not isinstance(data, list):
+        return None
+    label_map = {item["entity_id"]: item for item in motion_entities}
+    events: list[dict[str, Any]] = []
+    for series in data:
+        if not isinstance(series, list) or not series:
+            continue
+        entity_id = clean(series[0].get("entity_id"))
+        meta = label_map.get(entity_id)
+        if not meta:
+            continue
+        for row in series:
+            if not isinstance(row, dict) or not _state_is_active_motion(row.get("state")):
+                continue
+            event_ts = clean(row.get("last_changed") or row.get("last_updated"))
+            if not event_ts:
+                continue
+            events.append({
+                "entity_id": entity_id,
+                "label": meta["label"],
+                "room": meta["room"],
+                "state": clean(row.get("state")),
+                "timestamp": event_ts,
+                "minutes_ago": _minutes_ago(event_ts, reference_ts=timestamp),
+            })
+    if not events:
+        return None
+    events.sort(key=lambda item: parse_ts(item.get("timestamp")) or now(), reverse=True)
+    return {
+        "window_minutes": RECENT_MOTION_WINDOW_MINUTES,
+        "events": events[:3],
+    }
+
+
+def room_related_sensor_items(source_room: str | None, preferences: dict[str, Any]) -> list[dict[str, str]]:
+    if not source_room:
+        return []
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    sensors = preferences.get("sensors") if isinstance(preferences, dict) else {}
+    groups = sensors.get("groups") if isinstance(sensors, dict) else []
+    if not isinstance(groups, list):
+        return results
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        title = clean(group.get("title"))
+        for item in group.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = clean(item.get("entity")) or clean(item.get("entity_id"))
+            if not entity_id or entity_id in seen:
+                continue
+            room_id = _infer_item_room(item, title)
+            if room_id != source_room:
+                continue
+            seen.add(entity_id)
+            results.append({
+                "entity_id": entity_id,
+                "label": clean(item.get("label")) or clean(title) or entity_id,
+                "group": title,
+            })
+    return results
+
+
+def build_related_ha_state_context(source_room: str | None, timestamp: str, preferences: dict[str, Any], states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = state_by_entity_id(states)
+    results: list[dict[str, Any]] = []
+    for item in room_related_sensor_items(source_room, preferences)[:RELATED_HA_STATE_LIMIT]:
+        row = by_id.get(item["entity_id"])
+        if not row:
+            continue
+        results.append({
+            "entity_id": item["entity_id"],
+            "label": item["label"],
+            "group": item.get("group") or None,
+            "state": _format_state_value(row),
+            "changed_minutes_ago": _minutes_ago(clean(row.get("last_changed") or row.get("last_updated")), reference_ts=timestamp),
+        })
+    presence_entity = clean((preferences.get("presence") or {}).get("entity")) if isinstance(preferences, dict) else ""
+    if presence_entity and all(row.get("entity_id") != presence_entity for row in results):
+        row = by_id.get(presence_entity)
+        if row:
+            results.append({
+                "entity_id": presence_entity,
+                "label": "在宅",
+                "group": "presence",
+                "state": _format_state_value(row),
+                "changed_minutes_ago": _minutes_ago(clean(row.get("last_changed") or row.get("last_updated")), reference_ts=timestamp),
+            })
+    return results[:RELATED_HA_STATE_LIMIT]
+
+
+def build_location_prior_context(source_room: str | None, body_room: str | None, recent_motion: dict[str, Any] | None, recent_visual_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    scores: dict[str, float] = {}
+    basis: list[str] = []
+
+    def boost(room_id: str | None, amount: float, reason: str) -> None:
+        room_key = clean(room_id)
+        if not room_key:
+            return
+        scores[room_key] = scores.get(room_key, 0.0) + amount
+        basis.append(f"{reason}:{room_key}")
+
+    boost(source_room, 0.35, "source_room")
+    boost(body_room, 0.30, "body_room")
+    if isinstance(recent_motion, dict):
+        for index, event in enumerate(recent_motion.get("events") or []):
+            if not isinstance(event, dict):
+                continue
+            room_id = clean(event.get("room")) or source_room
+            minutes_ago = event.get("minutes_ago")
+            try:
+                minutes_value = float(minutes_ago)
+            except Exception:
+                minutes_value = RECENT_MOTION_WINDOW_MINUTES
+            amount = 0.30 if minutes_value <= 5 else 0.18 if minutes_value <= 15 else 0.10
+            amount *= max(0.4, 1.0 - (0.15 * index))
+            boost(room_id, amount, "recent_motion")
+    if isinstance(recent_visual_context, dict):
+        boost(recent_visual_context.get("room"), 0.15, "recent_visual")
+
+    if not scores:
+        return None
+    total = sum(scores.values()) or 1.0
+    ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:LOCATION_PRIOR_ROOM_LIMIT]
+    return {
+        "best_room": ordered[0][0],
+        "candidate_rooms": [
+            {"room": room_id, "score": round(score / total, 3)}
+            for room_id, score in ordered
+        ],
+        "basis": basis[:8],
+    }
+
+
+def build_non_speech_situational_context(config: AudioSourceConfig, timestamp: str, sensory: dict[str, Any]) -> dict[str, Any]:
+    source_room = clean(sensory.get("source_room")) or None
+    body_room = clean(sensory.get("body_room")) or None
+    preferences = load_preferences()
+    states = get_current_ha_states()
+    recent_motion = build_recent_motion_context(source_room, timestamp, preferences, states)
+    recent_visual_context = build_recent_visual_context(source_room, timestamp)
+    related_ha_state = build_related_ha_state_context(source_room, timestamp, preferences, states)
+    return {
+        "body_room": body_room,
+        "source_room": source_room,
+        "sensory_origin": sensory.get("sensory_origin"),
+        "move_cost": sensory.get("move_cost"),
+        "time_of_day": _time_of_day(timestamp),
+        "recent_motion": recent_motion,
+        "related_ha_state": related_ha_state,
+        "recent_visual_context": recent_visual_context,
+        "location_prior": build_location_prior_context(source_room, body_room, recent_motion, recent_visual_context),
+    }
 
 
 def load_preferences() -> dict:
@@ -958,13 +1335,7 @@ def record_non_speech_audio_event(
         "transcript": None,
         "wav_ref": wav_ref,
         "acoustic_features": features,
-        "situational_context": {
-            "body_room": sensory.get("body_room"),
-            "source_room": sensory.get("source_room"),
-            "sensory_origin": sensory.get("sensory_origin"),
-            "move_cost": sensory.get("move_cost"),
-            "time_of_day": _time_of_day(timestamp),
-        },
+        "situational_context": build_non_speech_situational_context(config, timestamp, sensory),
         **sensory,
     }
     if isinstance(diagnostics, dict):

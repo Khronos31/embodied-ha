@@ -747,9 +747,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "invalid type"}, 400)
                     return
                 label = (body.get("label") or body.get("sound") or "").strip()
+                disposition = (body.get("disposition") or "").strip().lower() or None
+                if disposition not in {None, "ignore", "important", "notify", "silent_record"}:
+                    self.send_json({"error": "invalid disposition"}, 400)
+                    return
                 candidates = body.get("candidates")
-                if not label and not isinstance(candidates, list):
-                    self.send_json({"error": "label or candidates is required"}, 400)
+                if not label and not isinstance(candidates, list) and disposition is None:
+                    self.send_json({"error": "label or candidates or disposition is required"}, 400)
                     return
                 confidence = body.get("confidence")
                 if confidence is None and tag_type == "manual":
@@ -759,6 +763,7 @@ class Handler(BaseHTTPRequestHandler):
                     "event_id": event_id,
                     "type": tag_type,
                     "label": label or None,
+                    "disposition": disposition,
                     "confidence": confidence,
                     "candidates": candidates if isinstance(candidates, list) else None,
                     "note": body.get("note"),

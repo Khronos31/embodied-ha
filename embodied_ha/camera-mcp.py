@@ -125,6 +125,8 @@ def camera_context(source):
         source=source,
         label=matched.get("label") if isinstance(matched, dict) else "",
         room=matched.get("room") if isinstance(matched, dict) else "",
+        area=matched.get("area") if isinstance(matched, dict) else "",
+        entity_id=matched.get("entity_id") if isinstance(matched, dict) else "",
         note=matched.get("note") if isinstance(matched, dict) else "",
         modality="visual",
     )

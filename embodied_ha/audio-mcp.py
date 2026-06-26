@@ -359,6 +359,8 @@ def sensory_for_source(source: str, label: str, modality: str = "auditory") -> d
         source=source,
         label=label,
         room=item.get("room") if isinstance(item, dict) else "",
+        area=item.get("area") if isinstance(item, dict) else "",
+        entity_id=item.get("entity_id") if isinstance(item, dict) else "",
         note=item.get("note") if isinstance(item, dict) else "",
         modality=modality,
     )

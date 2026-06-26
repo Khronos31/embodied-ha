@@ -1463,6 +1463,50 @@ select.stt-loading {
     gap: 8px;
 }
 
+.audio-review-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.audio-current-review {
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.audio-review-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.audio-review-important {
+    background-color: rgba(185, 28, 28, 0.10);
+    color: #b91c1c;
+}
+
+.audio-review-notify {
+    background-color: rgba(3, 105, 161, 0.10);
+    color: #0369a1;
+}
+
+.audio-review-silent {
+    background-color: rgba(107, 114, 128, 0.12);
+    color: #4b5563;
+}
+
+.audio-review-ignore {
+    background-color: rgba(120, 113, 108, 0.12);
+    color: #57534e;
+}
+
 .audio-tag-history {
     display: flex;
     flex-direction: column;

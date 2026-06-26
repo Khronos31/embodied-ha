@@ -626,6 +626,50 @@ class AudioDaemonTests(unittest.TestCase):
             self.assertEqual(row["acoustic_features"]["dominant_band"], "mid")
             self.assertEqual(row["situational_context"]["source_room"], "study")
 
+    def test_build_non_speech_situational_context_expands_phase_2b_fields(self):
+        config = self.audio_daemon.AudioSourceConfig("rtsp://localhost:8554/capture_tv", "TV・レコーダー", 24, False, room="living_room")
+        sensory = {
+            "body_room": "study",
+            "source_room": "living_room",
+            "sensory_origin": "remote",
+            "move_cost": 2.0,
+        }
+        recent_motion = {
+            "window_minutes": 20,
+            "events": [{"room": "living_room", "label": "リビング人感", "minutes_ago": 2.0, "timestamp": "2026-06-26T09:58:00+09:00"}],
+        }
+        recent_visual = {
+            "scene_id": "scene_1",
+            "source": "camera.living_room",
+            "room": "living_room",
+            "timestamp": "2026-06-26T09:57:00+09:00",
+            "objects": ["mug"],
+            "people": [],
+            "changes": ["ソファの前にマグカップ"],
+        }
+        related = [{
+            "entity_id": "binary_sensor.living_motion",
+            "label": "リビング",
+            "group": "人感センサー",
+            "state": "on",
+            "changed_minutes_ago": 2.0,
+        }]
+        with mock.patch.object(self.audio_daemon, "load_preferences", return_value={}), \
+             mock.patch.object(self.audio_daemon, "get_current_ha_states", return_value=[]), \
+             mock.patch.object(self.audio_daemon, "build_recent_motion_context", return_value=recent_motion), \
+             mock.patch.object(self.audio_daemon, "build_recent_visual_context", return_value=recent_visual), \
+             mock.patch.object(self.audio_daemon, "build_related_ha_state_context", return_value=related):
+            payload = self.audio_daemon.build_non_speech_situational_context(config, "2026-06-26T10:00:00+09:00", sensory)
+
+        self.assertEqual(payload["body_room"], "study")
+        self.assertEqual(payload["source_room"], "living_room")
+        self.assertEqual(payload["recent_motion"], recent_motion)
+        self.assertEqual(payload["recent_visual_context"], recent_visual)
+        self.assertEqual(payload["related_ha_state"], related)
+        self.assertIsInstance(payload["location_prior"], dict)
+        self.assertEqual(payload["location_prior"]["best_room"], "living_room")
+        self.assertTrue(any(item["room"] == "living_room" for item in payload["location_prior"]["candidate_rooms"]))
+
     def test_format_recent_auditory_prompt_is_voice_specific(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             events_path = Path(tmpdir) / "auditory_events.jsonl"

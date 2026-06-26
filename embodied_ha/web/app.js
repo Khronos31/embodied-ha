@@ -2214,11 +2214,46 @@ function updateAudioPreview() {
         const tags = audioEventTags
             .filter(t => t.event_id === latest.event_id)
             .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        const tagLabel = tags.length > 0 ? tags[tags.length - 1].label : '';
+        const latestTag = tags.length > 0 ? tags[tags.length - 1] : null;
+        const tagLabel = displayTagLabel(latestTag);
         previewEl.textContent = tagLabel ? `${timeStr} - ${tagLabel}` : `${timeStr} - ${latest.source || '音'}`;
     } else {
         previewEl.textContent = '最近の非音声イベント';
     }
+}
+
+function latestManualTag(tags) {
+    const manualTags = tags.filter(t => t.type === 'manual');
+    return manualTags.length > 0 ? manualTags[manualTags.length - 1] : null;
+}
+
+function dispositionMeta(disposition) {
+    switch (disposition) {
+        case 'important':
+            return { label: '重要', className: 'audio-review-important' };
+        case 'notify':
+            return { label: '次から知らせる', className: 'audio-review-notify' };
+        case 'silent_record':
+            return { label: '黙って記録だけ', className: 'audio-review-silent' };
+        case 'ignore':
+            return { label: '無視', className: 'audio-review-ignore' };
+        default:
+            return null;
+    }
+}
+
+function displayTagLabel(tag) {
+    if (!tag) return '';
+    const textLabel = (tag.label || '').trim();
+    if (textLabel) return textLabel;
+    const meta = dispositionMeta(tag.disposition);
+    return meta ? meta.label : '';
+}
+
+function renderDispositionBadge(tag) {
+    const meta = dispositionMeta(tag?.disposition);
+    if (!meta) return '';
+    return `<span class="audio-review-badge ${meta.className}">${meta.label}</span>`;
 }
 
 function renderAudioEvents() {
@@ -2245,9 +2280,7 @@ function renderAudioEvents() {
         const tags = audioEventTags.filter(t => t.event_id === eventId);
         tags.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        const manualTags = tags.filter(t => t.type === 'manual');
-        const manualTag = manualTags.length > 0 ? manualTags[manualTags.length - 1] : null;
-
+        const manualTag = latestManualTag(tags);
         const source = event.source || '不明なマイク';
         const origin = event.situational_context?.sensory_origin || 'direct';
         const bodyRoom = event.situational_context?.body_room || '';
@@ -2282,6 +2315,7 @@ function renderAudioEvents() {
         const centroid = features.spectral_centroid_hz !== undefined ? `${Math.round(features.spectral_centroid_hz)} Hz` : '--';
         const isTransient = features.transient ? '瞬発的 (Transient)' : '';
         const isPeriodic = features.periodic ? '周期性 (Periodic)' : '';
+        const currentDisposition = dispositionMeta(manualTag?.disposition);
 
         let tagHistoryHtml = '';
         if (tags.length > 0) {
@@ -2292,10 +2326,12 @@ function renderAudioEvents() {
                         const confStr = t.confidence !== undefined ? `${(t.confidence * 100).toFixed(0)}%` : '';
                         const actorStr = t.actor ? `by ${t.actor}` : '';
                         const dateStr = new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const renderedLabel = displayTagLabel(t);
                         return `
                             <div class="tag-history-item">
                                 <div>
-                                    <span class="tag-history-label">${escapeHtml(t.label)}</span>
+                                    ${renderedLabel ? `<span class="tag-history-label">${escapeHtml(renderedLabel)}</span>` : ''}
+                                    ${renderDispositionBadge(t)}
                                     ${confStr ? `<span class="tag-history-confidence">(${confStr})</span>` : ''}
                                     ${t.note ? `<div class="tag-history-meta">${escapeHtml(t.note)}</div>` : ''}
                                 </div>
@@ -2310,7 +2346,7 @@ function renderAudioEvents() {
             `;
         }
 
-        const currentLabel = manualTag ? manualTag.label : '';
+        const currentLabel = manualTag && manualTag.label ? manualTag.label : '';
         const currentNote = manualTag ? (manualTag.note || '') : '';
 
         return `
@@ -2323,6 +2359,7 @@ function renderAudioEvents() {
                             <span class="audio-badge ${badgeClass}">${badgeText}</span>
                             ${roomInfo ? `<span style="opacity: 0.8;">| ${escapeHtml(roomInfo)}</span>` : ''}
                         </div>
+                        ${currentDisposition ? `<div class="audio-current-review">現在の扱い: <span class="audio-review-badge ${currentDisposition.className}">${currentDisposition.label}</span></div>` : ''}
                     </div>
                     <div class="audio-card-features">
                         <span class="feature-tag">長さ: <strong>${duration}</strong></span>
@@ -2345,14 +2382,19 @@ function renderAudioEvents() {
                         <form class="audio-label-form" onsubmit="saveAudioTag(event, '${eventId}')">
                             <div class="form-group" style="margin-bottom: 8px;">
                                 <label class="form-label" style="margin-bottom: 4px;">音のラベル (手動登録)</label>
-                                <input type="text" class="form-input" name="label" placeholder="例: キーボード音、咳払い、犬の鳴き声..." value="${escapeHtml(currentLabel)}" required>
+                                <input type="text" class="form-input" name="label" placeholder="例: キーボード音、咳払い、犬の鳴き声..." value="${escapeHtml(currentLabel)}">
                             </div>
                             <div class="form-group" style="margin-bottom: 12px;">
                                 <label class="form-label" style="margin-bottom: 4px;">メモ (任意)</label>
                                 <input type="text" class="form-input" name="note" placeholder="例: 実際に聞いて確認、かなり近かった" value="${escapeHtml(currentNote)}">
                             </div>
+                            <div class="audio-review-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickReviewAction(this, '${eventId}', 'ignore')">無視</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickReviewAction(this, '${eventId}', 'important')">重要</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickReviewAction(this, '${eventId}', 'notify')">次から知らせる</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickReviewAction(this, '${eventId}', 'silent_record')">黙って記録だけ</button>
+                            </div>
                             <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickIgnore(this, '${eventId}')">無視 (Ignore)</button>
                                 <button type="submit" class="btn btn-primary btn-sm">ラベルを保存</button>
                             </div>
                         </form>
@@ -2366,13 +2408,19 @@ function renderAudioEvents() {
     }).join('');
 }
 
-function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#039;");
+async function postAudioTag(eventId, payload) {
+    const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || '保存に失敗しました');
+    }
+    return response.json();
 }
 
 async function saveAudioTag(e, eventId) {
@@ -2390,29 +2438,23 @@ async function saveAudioTag(e, eventId) {
         return;
     }
 
+    if (!label) {
+        alert('ラベルを入力してください');
+        return;
+    }
+
     const saveBtn = form.querySelector('button[type="submit"]');
     if (saveBtn) saveBtn.disabled = true;
 
     try {
-        const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                type: 'manual',
-                label: label,
-                confidence: 0.95,
-                note: note,
-                actor: 'user'
-            })
+        await postAudioTag(eventId, {
+            type: 'manual',
+            label,
+            confidence: 0.95,
+            note,
+            actor: 'user'
         });
-
-        if (response.ok) {
-            await fetchAudioEvents();
-        } else {
-            alert('保存に失敗しました');
-        }
+        await fetchAudioEvents();
     } catch (err) {
         console.error('[Audio] Failed to save tag:', err);
         alert(`エラーが発生しました: ${err.message}`);
@@ -2421,30 +2463,32 @@ async function saveAudioTag(e, eventId) {
     }
 }
 
-async function quickIgnore(btn, eventId) {
+async function quickReviewAction(btn, eventId, disposition) {
+    const labels = {
+        ignore: '無視',
+        important: '重要',
+        notify: '次から知らせる',
+        silent_record: '黙って記録だけ'
+    };
+    const notes = {
+        ignore: 'UIから無視として登録',
+        important: 'UIから重要イベントとして登録',
+        notify: 'UIから今後の通知候補として登録',
+        silent_record: 'UIから黙って記録だけに設定'
+    };
     btn.disabled = true;
     try {
-        const response = await fetch(`${base}/api/audio-events/${eventId}/tags`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                type: 'manual',
-                label: '無視 (Ignore)',
-                confidence: 0.95,
-                note: 'UIからの一括無視',
-                actor: 'user'
-            })
+        await postAudioTag(eventId, {
+            type: 'manual',
+            disposition,
+            label: labels[disposition],
+            confidence: 0.95,
+            note: notes[disposition],
+            actor: 'user'
         });
-
-        if (response.ok) {
-            await fetchAudioEvents();
-        } else {
-            alert('保存に失敗しました');
-        }
+        await fetchAudioEvents();
     } catch (err) {
-        console.error('[Audio] Failed to ignore tag:', err);
+        console.error('[Audio] Failed to save review action:', err);
         alert(`エラー: ${err.message}`);
     } finally {
         btn.disabled = false;

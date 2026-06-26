@@ -73,6 +73,58 @@ class SensoryOriginTests(unittest.TestCase):
         self.assertEqual(payload["move_cost"], 2.0)
         self.assertEqual(payload["move_path"], ["study", "living_room"])
 
+    def test_explicit_room_takes_priority_over_area(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = self._write_location(tmpdir, "study")
+            with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(state_path)}, clear=False):
+                payload = self.sensory_origin.classify_sensory_origin(
+                    source="camera.somewhere",
+                    room="kitchen",
+                    area="リビング",
+                    modality="visual",
+                )
+        self.assertEqual(payload["source_room"], "kitchen")
+        self.assertEqual(payload["source_area"], "リビング")
+        self.assertEqual(payload["sensory_origin"], "remote")
+
+    def test_explicit_area_resolves_room_without_text_hint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = self._write_location(tmpdir, "study")
+            with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(state_path)}, clear=False):
+                payload = self.sensory_origin.classify_sensory_origin(
+                    source="camera.unknown_name",
+                    area="リビング",
+                    modality="visual",
+                )
+        self.assertEqual(payload["source_room"], "living_room")
+        self.assertEqual(payload["source_area"], "リビング")
+        self.assertEqual(payload["source_entity_id"], "camera.unknown_name")
+
+    def test_ha_area_is_used_for_entity_sources(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = self._write_location(tmpdir, "study")
+            env = {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "SUPERVISOR_TOKEN": "dummy-token",
+            }
+            mocked = mock.Mock(returncode=0, stdout="リビング")
+            with mock.patch.dict(os.environ, env, clear=False):
+                self.sensory_origin._AREA_CACHE.clear()
+                with mock.patch.object(self.sensory_origin.subprocess, "run", return_value=mocked) as run_mock:
+                    payload = self.sensory_origin.classify_sensory_origin(
+                        source="camera.living_room",
+                        label="名前だけでは部屋不明",
+                        modality="visual",
+                    )
+        self.assertEqual(payload["source_room"], "living_room")
+        self.assertEqual(payload["source_area"], "リビング")
+        self.assertEqual(payload["source_entity_id"], "camera.living_room")
+        run_mock.assert_called_once()
+
     def test_unknown_source_room_is_home_assistant(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)

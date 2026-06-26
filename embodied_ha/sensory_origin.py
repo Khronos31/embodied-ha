@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import heapq
+import json
 import os
+import subprocess
+import time
 from typing import Any
 
 from state_utils import clean, read_json
@@ -19,6 +22,70 @@ SPECIAL_SOURCE_HINTS = {
     "capture_pc": "study",
     "capture_pc2": "study",
 }
+
+
+AREA_CACHE_TTL_SEC = 300.0
+_AREA_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
+def _ha_token() -> str:
+    return clean(os.environ.get("SUPERVISOR_TOKEN")) or clean(os.environ.get("HASSIO_TOKEN"))
+
+
+def _ha_api_base() -> str:
+    base = clean(os.environ.get("EHA_HA_API_URL")) or clean(os.environ.get("HA_URL"))
+    if base:
+        return base if base.endswith("/api") else f"{base.rstrip('/')}/api"
+    return "http://supervisor/core/api"
+
+
+def _looks_like_entity_id(value: Any) -> bool:
+    text = clean(value)
+    if not text or "://" in text or " " in text:
+        return False
+    head, sep, tail = text.partition(".")
+    return bool(sep and head and tail)
+
+
+def _ha_template(template: str) -> str | None:
+    token = _ha_token()
+    if not token:
+        return None
+    body = json.dumps({"template": template}, ensure_ascii=False)
+    result = subprocess.run(
+        [
+            "curl", "-sf", "--max-time", "5",
+            "-X", "POST",
+            "-H", f"Authorization: Bearer {token}",
+            "-H", "Content-Type: application/json",
+            "-d", body,
+            f"{_ha_api_base().rstrip('/')}/template",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    value = clean(result.stdout)
+    return value or None
+
+
+def area_for_entity(entity_id: Any) -> str | None:
+    eid = clean(entity_id)
+    if not _looks_like_entity_id(eid):
+        return None
+    now = time.time()
+    cached = _AREA_CACHE.get(eid)
+    if cached and cached[0] > now:
+        return cached[1]
+    template = "{{ area_name(%s) or '' }}" % json.dumps(eid, ensure_ascii=False)
+    area = _ha_template(template)
+    _AREA_CACHE[eid] = (now + AREA_CACHE_TTL_SEC, area)
+    return area
+
+
+def resolve_area_room(area: Any, graph: dict[str, Any] | None = None) -> str | None:
+    return resolve_room(area, graph)
 
 
 def data_dir() -> str:
@@ -186,6 +253,8 @@ def classify_sensory_origin(
     source: Any = "",
     label: Any = "",
     room: Any = "",
+    area: Any = "",
+    entity_id: Any = "",
     note: Any = "",
     modality: str = "",
     graph: dict[str, Any] | None = None,
@@ -193,7 +262,13 @@ def classify_sensory_origin(
 ) -> dict[str, Any]:
     graph = graph if isinstance(graph, dict) else load_room_graph()
     body_room = resolve_room(current_room, graph) or current_body_room(graph)
-    source_room = resolve_room(room, graph) or infer_room_from_text(source, label, note, graph=graph)
+    effective_entity_id = clean(entity_id) or (clean(source) if _looks_like_entity_id(source) else "")
+    resolved_area = clean(area) or area_for_entity(effective_entity_id)
+    source_room = (
+        resolve_room(room, graph)
+        or resolve_area_room(resolved_area, graph)
+        or infer_room_from_text(source, label, note, graph=graph)
+    )
 
     if source_room:
         origin = "direct" if source_room == body_room else "remote"
@@ -208,6 +283,8 @@ def classify_sensory_origin(
         "body_room_label": room_label(body_room, graph),
         "source_room": source_room,
         "source_room_label": room_label(source_room, graph),
+        "source_area": resolved_area,
+        "source_entity_id": effective_entity_id or None,
         "sensory_origin": origin,
         "access_mode": origin,
         "move_cost": move_cost,
