@@ -935,8 +935,24 @@ async function fetchSettings() {
                     { source: "camera.living_room", label: "リビング", note: "リビング広角カメラ" }
                 ],
                 audio_sources: [
-                    { source: "rtsp://localhost:8554/capture_tv", label: "TV・レコーダー", note: "go2rtc経由のTV/レコーダー音声", background_hearing_enabled: false },
-                    { source: "alsa", label: "スタディマイク", note: "USBマイク直接録音（/dev/snd 必要）" }
+                    { source: "rtsp://localhost:8554/capture_tv", label: "TV・レコーダー", note: "go2rtc経由 of TV/レコーダー音声", background_hearing_enabled: false },
+                    { source: "alsa", label: "スタディマイク", note: "USBマイク直接録音（/dev/snd 必要）" },
+                    {
+                        source: "kitchen_voice_s3r",
+                        label: "台所（VoiceS3R）",
+                        transport: "tcp_pull",
+                        host: "192.168.1.153",
+                        port: 3333,
+                        sample_rate: 16000,
+                        channels: 1,
+                        format: "s16le",
+                        room: "kitchen",
+                        note: "Atom VoiceS3R 常時計測ノード",
+                        stt_enabled: true,
+                        stt_retention_hours: 24,
+                        wake_word_enabled: false,
+                        background_hearing_enabled: true
+                    }
                 ],
                 stt_provider: "wyoming",
                 speakers: {
@@ -1627,6 +1643,7 @@ function addAudioSourceRow(source = {}) {
     const card = document.createElement('div');
     card.className = 'setting-item-card audio-source-item';
 
+    const transportVal = source.transport || 'rtsp';
     const sourceVal = source.source || '';
     const labelVal = source.label || '';
     const noteVal = source.note || '';
@@ -1634,6 +1651,9 @@ function addAudioSourceRow(source = {}) {
     const sttRetentionVal = source.stt_retention_hours !== undefined ? source.stt_retention_hours : 60;
     const wakeWordEnabledVal = !!source.wake_word_enabled;
     const backgroundHearingEnabledVal = source.background_hearing_enabled !== false;
+    const hostVal = source.host || '';
+    const portVal = source.port !== undefined ? source.port : 3333;
+    const roomVal = source.room || '';
 
     card.innerHTML = `
         <div class="setting-item-header">
@@ -1643,18 +1663,66 @@ function addAudioSourceRow(source = {}) {
             </button>
         </div>
         
-        <div class="config-grid-3">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ソース (source)</label>
-                <input type="text" class="audio-source-path form-input" placeholder="rtsp://localhost:8554/stream または alsa" value="${esc(sourceVal)}">
+        <div class="type-selector">
+            <button type="button" class="type-btn ${transportVal === 'rtsp' ? 'active' : ''}" onclick="toggleAudioSourceTransport(this, 'rtsp')">RTSP</button>
+            <button type="button" class="type-btn ${transportVal === 'tcp_pull' ? 'active' : ''}" onclick="toggleAudioSourceTransport(this, 'tcp_pull')">TCPプル (VoiceS3R など)</button>
+            <input type="hidden" class="audio-source-transport" value="${esc(transportVal)}">
+        </div>
+
+        <div class="audio-source-fields-rtsp" style="display: ${transportVal === 'rtsp' ? 'block' : 'none'};">
+            <div class="config-grid-3">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>入力元URL (source)</label>
+                    <input type="text" class="audio-source-path form-input" placeholder="rtsp://localhost:8554/stream または alsa" value="${esc(transportVal === 'rtsp' ? sourceVal : '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>ラベル名 (label)</label>
+                    <input type="text" class="audio-source-label form-input" placeholder="例：TV・レコーダー" value="${esc(transportVal === 'rtsp' ? labelVal : '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>メモ (note)</label>
+                    <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(transportVal === 'rtsp' ? noteVal : '')}">
+                </div>
             </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ラベル名 (label)</label>
-                <input type="text" class="audio-source-label form-input" placeholder="例：TV・レコーダー" value="${esc(labelVal)}">
+            <div class="form-hint" style="margin-top:8px;">
+                RTSPストリームのURL、またはローカルのalsaデバイスを指定します。
             </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>メモ (note)</label>
-                <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(noteVal)}">
+        </div>
+
+        <div class="audio-source-fields-tcp" style="display: ${transportVal === 'tcp_pull' ? 'block' : 'none'};">
+            <div class="config-grid-3">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>識別用ソースID (source)</label>
+                    <input type="text" class="audio-source-path-tcp form-input" placeholder="例：kitchen_voice_s3r" value="${esc(transportVal === 'tcp_pull' ? sourceVal : '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>接続先IP/ホスト (host)</label>
+                    <input type="text" class="audio-source-host form-input" placeholder="例：192.168.1.153" value="${esc(hostVal)}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>ポート (port)</label>
+                    <input type="number" class="audio-source-port form-input" placeholder="3333" value="${portVal}">
+                </div>
+            </div>
+            <div class="config-grid-3" style="margin-top:12px;">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>部屋名 (room)</label>
+                    <input type="text" class="audio-source-room form-input" placeholder="例：kitchen" value="${esc(roomVal)}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>ラベル名 (label)</label>
+                    <input type="text" class="audio-source-label-tcp form-input" placeholder="例：台所（VoiceS3R）" value="${esc(labelVal)}">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>メモ (note)</label>
+                    <input type="text" class="audio-source-note-tcp form-input" placeholder="例：Atom VoiceS3R 常時計測ノード" value="${esc(noteVal)}">
+                </div>
+            </div>
+            <div class="form-hint" style="margin-top:8px; line-height: 1.4;">
+                💡 <b>TCPプル接続:</b> アドオンから音声ノード（M5Stack Atom VoiceS3R等）へ接続します。<br>
+                ・<b>ソースID</b>はURLではなくノード識別用のIDです。<br>
+                ・<b>接続先IP/ホスト</b>はノードのIPアドレス、<b>ポート</b>はノードの待受ポートです。<br>
+                ・現在は <b>16kHz / 1ch / s16le</b> 形式のみ対応しています。
             </div>
         </div>
 
@@ -1690,6 +1758,26 @@ function addAudioSourceRow(source = {}) {
     listEl.appendChild(card);
 }
 
+function toggleAudioSourceTransport(btn, targetTransport) {
+    const card = btn.closest('.audio-source-item');
+    const buttons = card.querySelectorAll('.type-btn');
+    buttons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    card.querySelector('.audio-source-transport').value = targetTransport;
+
+    const rtspFields = card.querySelector('.audio-source-fields-rtsp');
+    const tcpFields = card.querySelector('.audio-source-fields-tcp');
+
+    if (targetTransport === 'rtsp') {
+        rtspFields.style.display = 'block';
+        tcpFields.style.display = 'none';
+    } else {
+        rtspFields.style.display = 'none';
+        tcpFields.style.display = 'block';
+    }
+}
+
 function toggleAudioSttRetention(checkbox) {
     const card = checkbox.closest('.audio-source-item');
     if (!card) return;
@@ -1703,19 +1791,55 @@ function getAudioSourcesFromUI() {
     const sources = [];
     const items = document.querySelectorAll('.audio-source-item');
     items.forEach(card => {
-        const source = card.querySelector('.audio-source-path').value.trim();
-        const label = card.querySelector('.audio-source-label').value.trim();
-        const note = card.querySelector('.audio-source-note').value.trim();
+        const transport = card.querySelector('.audio-source-transport').value;
         const stt_enabled = card.querySelector('.audio-source-stt-enabled').checked;
         const sttRetentionRaw = parseInt(card.querySelector('.audio-source-stt-retention').value, 10);
         const stt_retention_hours = Number.isNaN(sttRetentionRaw) ? 60 : Math.max(0, sttRetentionRaw);
         const wake_word_enabled = card.querySelector('.audio-source-wake-word-enabled').checked;
         const background_hearing_enabled = card.querySelector('.audio-source-background-hearing-enabled').checked;
-        
-        if (source) {
-            const srcObj = { source };
-            if (label) srcObj.label = label;
-            if (note) srcObj.note = note;
+
+        let srcObj = {};
+
+        if (transport === 'tcp_pull') {
+            const source = card.querySelector('.audio-source-path-tcp').value.trim();
+            const host = card.querySelector('.audio-source-host').value.trim();
+            const portRaw = parseInt(card.querySelector('.audio-source-port').value.trim(), 10);
+            const port = Number.isNaN(portRaw) ? 3333 : portRaw;
+            const room = card.querySelector('.audio-source-room').value.trim();
+            const label = card.querySelector('.audio-source-label-tcp').value.trim();
+            const note = card.querySelector('.audio-source-note-tcp').value.trim();
+
+            if (source) {
+                srcObj = {
+                    source,
+                    transport: 'tcp_pull',
+                    host,
+                    port,
+                    sample_rate: 16000,
+                    channels: 1,
+                    format: 's16le',
+                };
+                if (room) srcObj.room = room;
+                if (label) srcObj.label = label;
+                if (note) srcObj.note = note;
+            }
+        } else {
+            // rtsp
+            const source = card.querySelector('.audio-source-path').value.trim();
+            const label = card.querySelector('.audio-source-label').value.trim();
+            const note = card.querySelector('.audio-source-note').value.trim();
+
+            if (source) {
+                srcObj = {
+                    source,
+                    transport: 'rtsp'
+                };
+                if (label) srcObj.label = label;
+                if (note) srcObj.note = note;
+            }
+        }
+
+        if (srcObj.source) {
             srcObj.stt_enabled = stt_enabled;
             srcObj.stt_retention_hours = stt_retention_hours;
             srcObj.wake_word_enabled = wake_word_enabled;
