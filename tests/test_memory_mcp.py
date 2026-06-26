@@ -39,7 +39,7 @@ class MemoryMcpRecallAudioTests(unittest.TestCase):
 
     def test_recall_finds_auditory_events_transcript(self):
         (self.log_dir / "auditory_events.jsonl").write_text(
-            '{"timestamp":"2026-06-26T09:30:00+09:00","source":"スタディマイク","origin":"default","speaker_hint":"user","transcript":"こんにちは、朝ごはんできたよ"}\n',
+            '{"timestamp":"2026-06-26T09:30:00+09:00","source":"スタディマイク","origin":"alsa://default","speaker_hint":"user","transcript":"こんにちは、朝ごはんできたよ"}\n',
             encoding="utf-8",
         )
         recall = self._text(self.memory_mcp.recall({"keywords": ["朝ごはん"]}))
@@ -59,11 +59,11 @@ class MemoryMcpRecallAudioTests(unittest.TestCase):
 
     def test_recall_distinguishes_heard_vs_listened_audio(self):
         (self.log_dir / "auditory_events.jsonl").write_text(
-            '{"timestamp":"2026-06-26T09:30:00+09:00","source":"スタディマイク","origin":"default","speaker_hint":"user","transcript":"同じキーワードを含む声"}\n',
+            '{"timestamp":"2026-06-26T09:30:00+09:00","source":"スタディマイク","origin":"alsa://default","speaker_hint":"user","transcript":"同じキーワードを含む声"}\n',
             encoding="utf-8",
         )
         (self.log_dir / "active_listen_log.jsonl").write_text(
-            '{"timestamp":"2026-06-26T09:35:00+09:00","actor":"watch","source":"default","source_label":"スタディマイク","transcript":"同じキーワードを含む録音"}\n',
+            '{"timestamp":"2026-06-26T09:35:00+09:00","actor":"watch","source":"alsa://default","source_label":"スタディマイク","transcript":"同じキーワードを含む録音"}\n',
             encoding="utf-8",
         )
         recall = self._text(self.memory_mcp.recall({"keywords": ["キーワード"]}))

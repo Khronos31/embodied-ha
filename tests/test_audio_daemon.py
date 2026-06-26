@@ -633,7 +633,7 @@ class AudioDaemonTests(unittest.TestCase):
                 {
                     "timestamp": "2026-06-25T09:59:00+09:00",
                     "modality": "auditory",
-                    "origin": "default",
+                    "origin": "alsa://default",
                     "source": "Desk",
                     "speaker_hint": "unknown",
                     "transcript": "別の発話",
@@ -644,7 +644,7 @@ class AudioDaemonTests(unittest.TestCase):
                 {
                     "timestamp": "2026-06-25T10:00:00+09:00",
                     "modality": "auditory",
-                    "origin": "default",
+                    "origin": "alsa://default",
                     "source": "Desk",
                     "speaker_hint": "user",
                     "transcript": "こんにちは",
@@ -666,7 +666,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertIn("# 直近の聴覚入力", prompt)
         self.assertIn("これはテキストチャットではなく、部屋の音声入力からSTTされた発話です。", prompt)
         self.assertIn("時刻: 2026-06-25T10:00:00+09:00", prompt)
-        self.assertIn("音源: Desk (default)", prompt)
+        self.assertIn("音源: Desk (alsa://default)", prompt)
         self.assertIn("話者推定: user", prompt)
         self.assertIn("内容: 「こんにちは」", prompt)
         self.assertIn("duration=2.4s, peak=-36.8dB, speech_ratio=0.42", prompt)

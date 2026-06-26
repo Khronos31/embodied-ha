@@ -47,7 +47,7 @@ class AudioMcpTests(unittest.TestCase):
         self.assertIn("rtsp://localhost:8554/capture_tv", cmd)
 
     def test_build_record_command_alsa(self):
-        cmd = self.audio_mcp.build_record_command("alsa", 7)
+        cmd = self.audio_mcp.build_record_command("alsa://default", 7)
         self.assertEqual(cmd[:5], ["ffmpeg", "-f", "alsa", "-i", "default"])
         self.assertIn("7", cmd)
 
@@ -138,7 +138,7 @@ class AudioMcpTests(unittest.TestCase):
             with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
                  mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
                  mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
-                payload = self._json(self.audio_mcp.listen({"source": "alsa", "duration": 3}))
+                payload = self._json(self.audio_mcp.listen({"source": "alsa://default", "duration": 3}))
 
         first_cmd = run_mock.call_args_list[0].args[0]
         self.assertEqual(first_cmd[:5], ["/usr/bin/ffmpeg", "-f", "alsa", "-i", "default"])

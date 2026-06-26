@@ -23,7 +23,7 @@ DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
     {"source": "rtsp://localhost:8556/mic_only",   "label": "PC"},
     {"source": "rtsp://localhost:8558/mic_only",   "label": "Google TV"},
-    {"source": "default",                          "label": "スタディマイク"},
+    {"source": "alsa://default",                    "label": "スタディマイク"},
 ]
 DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
@@ -91,6 +91,16 @@ def _prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
 
+def normalize_source_uri(value: str) -> str:
+    source = clean(value)
+    if source in {"", "alsa", "default"}:
+        return "alsa://default"
+    if source.startswith("alsa://"):
+        device = source[len("alsa://"):].lstrip("/")
+        return f"alsa://{device or 'default'}"
+    return source
+
+
 def load_preferences() -> dict:
     path = _prefs_path()
     if not path:
@@ -112,9 +122,7 @@ def load_audio_source_configs() -> list[dict]:
     for item in sources:
         if not isinstance(item, dict):
             continue
-        source = clean(item.get("source"))
-        if source == "alsa":
-            source = "default"
+        source = normalize_source_uri(item.get("source"))
         if not source:
             continue
         config = dict(item)
@@ -151,7 +159,7 @@ def build_listen_spec() -> dict:
     source_lines = "\n".join(
         f'  - "{s["source"]}"（{s["label"]}）' for s in sources
     )
-    default = sources[0]["source"] if sources else "default"
+    default = sources[0]["source"] if sources else "alsa://default"
     return {
         "name": "listen",
         "description": (
@@ -335,11 +343,13 @@ def find_ffmpeg() -> str | None:
 
 
 def build_record_command(source: str, duration: int) -> list[str]:
-    if source in {"default", "alsa"}:
+    source = normalize_source_uri(source)
+    if source.startswith("alsa://"):
+        device = source[len("alsa://"):].lstrip("/") or "default"
         return [
             "ffmpeg",
             "-f", "alsa",
-            "-i", "default",
+            "-i", device,
             "-ar", "16000",
             "-ac", "1",
             "-t", str(duration),
@@ -566,9 +576,7 @@ def read_audio_event_tags(args: dict):
 
 
 def listen(args: dict):
-    source = clean(args.get("source")) or default_listen_source()
-    if source == "alsa":
-        source = "default"
+    source = normalize_source_uri(args.get("source") or default_listen_source())
 
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
@@ -592,8 +600,8 @@ def listen(args: dict):
             **sensory,
         }
 
-    # 未登録でも rtsp:// または default なら直接使用する
-    if source not in _source_map() and not (source.startswith("rtsp://") or source == "default"):
+    # 未登録でも rtsp:// または alsa:// なら直接使用する
+    if source not in _source_map() and not (source.startswith("rtsp://") or source.startswith("alsa://")):
         payload = {**base_payload(), "error": f"unknown source: {source}"}
         record_active_listen(payload, source)
         return [text(json.dumps({"error": payload["error"]}, ensure_ascii=False))], True

@@ -116,7 +116,7 @@ def load_location_state(graph: dict[str, Any] | None = None) -> dict[str, Any]:
         "previous_room": resolve_room(state.get("previous_room"), graph),
         "last_move_cost": state.get("last_move_cost"),
         "last_move_path": state.get("last_move_path") if isinstance(state.get("last_move_path"), list) else [],
-        "source": clean(state.get("source")) or "default",
+        "source": clean(state.get("source")) or "alsa://default",
     }
 
 
