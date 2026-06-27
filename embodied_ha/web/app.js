@@ -1201,6 +1201,9 @@ function renderAntigravityStatus(data) {
     const homeDirEl = document.getElementById('antigravity-status-home');
     const binPathEl = document.getElementById('antigravity-status-bin');
 
+    const installBtn = document.getElementById('antigravity-install-btn');
+    const loginBtn = document.getElementById('antigravity-login-btn');
+
     if (data) {
         if (installedBadge) {
             installedBadge.textContent = data.installed ? 'インストール済み' : '未インストール';
@@ -1212,6 +1215,8 @@ function renderAntigravityStatus(data) {
         }
         if (homeDirEl) homeDirEl.textContent = data.home_dir || '(unknown)';
         if (binPathEl) binPathEl.textContent = data.binary_path || '(unknown)';
+        if (installBtn) installBtn.style.display = data.installed ? 'none' : '';
+        if (loginBtn) loginBtn.style.display = (data.installed && !data.authenticated) ? '' : 'none';
         if (data.authenticated) clearAntigravityAuthUi();
     } else {
         if (installedBadge) {
