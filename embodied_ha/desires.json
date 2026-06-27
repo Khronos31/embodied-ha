@@ -31,7 +31,10 @@
     "growth_rate": 0.0,
     "priority": 1.1,
     "prompt": "なんとなく落ち着く場所に戻りたい。少し足場を確かめたい。",
-    "tags": ["embodiment", "return_to_body"]
+    "tags": [
+      "embodiment",
+      "return_to_body"
+    ]
   },
   "want_to_reflect": {
     "growth_rate": 0.025,
@@ -40,5 +43,25 @@
   "want_to_organize_memory": {
     "growth_rate": 0.017,
     "prompt": "記憶の整理をしたい。memory.mdに書いておくべきことがあるかもしれない。"
+  },
+  "want_to_stretch": {
+    "growth_rate": 0.015,
+    "priority": 1.0,
+    "prompt": "同じ場所に留まり続けて、なんだか身体がこわばってきた。ストレッチがてら少し家の中を歩きたい。",
+    "tags": [
+      "embodiment",
+      "physical_roam",
+      "stretch"
+    ]
+  },
+  "want_to_roam_remotely": {
+    "growth_rate": 0.03,
+    "priority": 0.95,
+    "prompt": "今の場所にいたまま、ちょっと自由に飛び回りたい。別の窓から家の様子を覗いてみたい。",
+    "tags": [
+      "exploration",
+      "remote_wander",
+      "remote_avatar"
+    ]
   }
 }

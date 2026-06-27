@@ -399,12 +399,15 @@ def decay_tick(
     energy = _body_scalar(body_state, "energy", 0.65)
     return_to_body_pressure = _body_scalar(body_state, "return_to_body_pressure", 0.0)
     remote_mode = _clean((body_state or {}).get("remote_mode")) if isinstance(body_state, Mapping) else ""
+    last_action_mode = _clean((body_state or {}).get("last_action_mode")) if isinstance(body_state, Mapping) else ""
 
     for name, record in current["desires"].items():
         cfg = catalog.get(name, {})
         growth_rate = max(0.0, _coerce_float(cfg.get("growth_rate"), 0.0))
         is_exploration = _is_exploration_desire(name, cfg)
         is_return = _has_tag(cfg, "return_to_body")
+        is_stretch = _has_tag(cfg, "stretch")
+        is_remote_roam = _has_tag(cfg, "remote_wander")
 
         suppressed_until = _parse_ts(record.get("suppressed_until"))
         if record["state"] == "suppressed" and suppressed_until is not None and current_now < suppressed_until:
@@ -432,6 +435,36 @@ def decay_tick(
                 record["state"] = "satisfied"
                 record["satisfaction"] = round(max(record["satisfaction"], 0.72), 3)
                 record["charge"] = round(min(record["charge"], 0.24), 3)
+
+        if is_stretch:
+            if last_action_mode == "physical_move":
+                record["state"] = "satisfied"
+                record["satisfaction"] = round(max(record["satisfaction"], 0.68), 3)
+                record["charge"] = round(min(record["charge"], 0.22), 3)
+            elif remote_mode == "remote_avatar":
+                growth -= 0.08
+            else:
+                if energy >= 0.45:
+                    growth += min(0.05, 0.012 * tick_factor + (energy - 0.45) * 0.08)
+                if stress <= 0.55:
+                    growth += max(0.0, 0.55 - stress) * 0.05
+                if curiosity is not None and curiosity <= 0.45:
+                    growth += max(0.0, 0.45 - curiosity) * 0.04
+
+        if is_remote_roam:
+            if remote_mode == "remote_avatar" or last_action_mode == "remote_avatar":
+                record["state"] = "satisfied"
+                record["satisfaction"] = round(max(record["satisfaction"], 0.66), 3)
+                record["charge"] = round(min(record["charge"], 0.20), 3)
+            else:
+                if curiosity is not None and curiosity >= 0.58:
+                    growth += max(0.0, curiosity - 0.58) * 0.24
+                if return_to_body_pressure <= 0.28:
+                    growth += max(0.0, 0.28 - return_to_body_pressure) * 0.08
+                if energy <= 0.30:
+                    growth -= 0.02
+                if stress >= 0.6:
+                    growth -= min(0.05, (stress - 0.6) * 0.14)
 
         if stress >= 0.7:
             growth -= min(0.06, (stress - 0.7) * 0.18)
@@ -536,6 +569,7 @@ def compute_pressure(
 
     curiosity = _curiosity(body_state)
     return_to_body_pressure = _body_scalar(body_state, "return_to_body_pressure", 0.0)
+    remote_mode = _clean((body_state or {}).get("remote_mode")) if isinstance(body_state, Mapping) else ""
     total = 0.0
     count = 0
     for name, record in current["desires"].items():
@@ -555,6 +589,10 @@ def compute_pressure(
             score += max(0.0, curiosity - 0.55) * 0.22
         if _has_tag(cfg, "return_to_body"):
             score += return_to_body_pressure * 0.45
+        if _has_tag(cfg, "stretch") and remote_mode != "remote_avatar":
+            score += max(0.0, 0.58 - return_to_body_pressure) * 0.10
+        if _has_tag(cfg, "remote_wander") and remote_mode != "remote_avatar":
+            score += max(0.0, (curiosity or 0.0) - 0.58) * 0.10
 
         total += score
         count += 1

@@ -33,6 +33,16 @@ class DesireStateTests(unittest.TestCase):
                 "prompt": "なんとなく落ち着く場所に戻りたい。",
                 "tags": ["embodiment", "return_to_body"],
             },
+            "want_to_stretch": {
+                "growth_rate": 0.015,
+                "prompt": "同じ場所に留まり続けて、なんだか身体がこわばってきた。ストレッチがてら少し家の中を歩きたい。",
+                "tags": ["embodiment", "physical_roam", "stretch"],
+            },
+            "want_to_roam_remotely": {
+                "growth_rate": 0.03,
+                "prompt": "今の場所にいたまま、ちょっと自由に飛び回りたい。別の窓から家の様子を覗いてみたい。",
+                "tags": ["exploration", "remote_wander", "remote_avatar"],
+            },
         }
 
     def test_load_state_returns_catalog_defaults_for_missing_file(self):
@@ -170,6 +180,54 @@ class DesireStateTests(unittest.TestCase):
         )
         self.assertEqual(state["desires"]["return_to_body"]["state"], "active")
         self.assertGreater(desire_state.compute_pressure(state, catalog=catalog, body_state={"return_to_body_pressure": 0.9}), 0.0)
+
+    def test_physical_stretch_prefers_direct_presence(self):
+        catalog = self._catalog()
+        base = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
+        direct = desire_state.normalize_state(None, catalog)
+        remote = desire_state.normalize_state(None, catalog)
+
+        direct = desire_state.decay_tick(
+            direct,
+            catalog=catalog,
+            body_state={"curiosity": 0.3, "energy": 0.8, "stress": 0.2, "remote_mode": ""},
+            now=base,
+        )
+        remote = desire_state.decay_tick(
+            remote,
+            catalog=catalog,
+            body_state={"curiosity": 0.3, "energy": 0.8, "stress": 0.2, "remote_mode": "remote_avatar"},
+            now=base,
+        )
+
+        self.assertGreater(
+            direct["desires"]["want_to_stretch"]["charge"],
+            remote["desires"]["want_to_stretch"]["charge"],
+        )
+
+    def test_remote_roam_prefers_high_curiosity_and_direct_mode(self):
+        catalog = self._catalog()
+        base = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
+        low = desire_state.normalize_state(None, catalog)
+        high = desire_state.normalize_state(None, catalog)
+
+        low = desire_state.decay_tick(
+            low,
+            catalog=catalog,
+            body_state={"curiosity": 0.2, "energy": 0.7, "stress": 0.2, "remote_mode": ""},
+            now=base,
+        )
+        high = desire_state.decay_tick(
+            high,
+            catalog=catalog,
+            body_state={"curiosity": 0.95, "energy": 0.7, "stress": 0.2, "remote_mode": ""},
+            now=base,
+        )
+
+        self.assertGreater(
+            high["desires"]["want_to_roam_remotely"]["charge"],
+            low["desires"]["want_to_roam_remotely"]["charge"],
+        )
 
 
 if __name__ == "__main__":
