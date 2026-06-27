@@ -2024,8 +2024,8 @@ function addProjectionTargetRow(target = {}) {
                 <div class="input-prefix-group" style="display:flex; align-items:center;">
                     <span class="input-prefix" style="
         padding: 0 8px;
-        background: var(--claude-surface, #1e1e1e);
-        border: 1px solid var(--claude-border, #444);
+        background: var(--claude-bg);
+        border: 1px solid var(--claude-border);
         border-right: none;
         border-radius: 6px 0 0 6px;
         color: var(--claude-text-sub, #888);
