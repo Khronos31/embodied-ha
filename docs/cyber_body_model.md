@@ -157,6 +157,3 @@ curiosity_factor = max(0.2, 1.0 - curiosity)
 
 ---
 
-## 今後の課題（未実装）
-
-- `projection_targets` をWeb UIから追加・削除できるフロー
