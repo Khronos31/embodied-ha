@@ -285,6 +285,7 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
 
     if not state.get("sent_method"):
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
+            print(f"[agy-login] method prompt, sending \\r", flush=True)
             os.write(master_fd, b"\r")
             state["sent_method"] = True
             return
@@ -292,25 +293,32 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
     if not state.get("url_found"):
         m = _ANTIGRAVITY_LOGIN_URL_RE.search(line)
         if m:
+            print(f"[agy-login] URL found: {m.group(0)[:80]}...", flush=True)
             q.put(("url", {"url": m.group(0)}))
             state["url_found"] = True
+            state["url_found_at"] = time.time()
         return
 
     if not state.get("sent_code_wait"):
-        if "code" in line_lower or "authorization" in line_lower:
+        # URL lines contain "code" in query params (code_challenge=, response_type=code) — skip them
+        if "https://" not in line and ("code" in line_lower or "authorization" in line_lower):
+            print(f"[agy-login] code prompt detected: {repr(line[:80])}", flush=True)
             q.put(("waiting_code", {}))
             state["sent_code_wait"] = True
         return
 
     if "color scheme" in line_lower:
+        print(f"[agy-login] color scheme prompt, sending \\r", flush=True)
         os.write(master_fd, b"\r")
         return
 
     if "terms of service" in line_lower or "terms" in line_lower:
+        print(f"[agy-login] terms prompt, sending accept", flush=True)
         os.write(master_fd, b"\x1b[B\x1b[C\r")
         return
 
     if "trust" in line_lower and not state.get("auth_done"):
+        print(f"[agy-login] trust prompt, sending \\r + marking done", flush=True)
         os.write(master_fd, b"\r")
         state["auth_done"] = True
         if antigravity_setup is not None:
@@ -760,6 +768,9 @@ class Handler(BaseHTTPRequestHandler):
                 buf = ""
                 state = {"sent_method": False, "url_found": False, "sent_code_wait": False}
                 deadline = time.time() + 600
+                # Keys to try in order to dismiss the URL pager (one per 0.5s timeout)
+                _PAGER_DISMISS_KEYS = [b"q", b"\x1b", b" ", b"\r", b"G"]
+                pager_dismiss_idx = [0]
 
                 while time.time() < deadline and not stop_event.is_set():
                     try:
@@ -770,17 +781,40 @@ class Handler(BaseHTTPRequestHandler):
                             if state.get("auth_done") or antigravity_setup.is_authenticated():
                                 _stop_antigravity_process(proc, master_fd=master_fd, use_ctrl_d=True)
                                 break
+                            # After URL found, try to dismiss URL pager so code entry prompt appears
+                            if state.get("url_found") and not state.get("sent_code_wait"):
+                                url_age = time.time() - state.get("url_found_at", deadline)
+                                if url_age > 1.5:
+                                    idx = pager_dismiss_idx[0]
+                                    if idx < len(_PAGER_DISMISS_KEYS):
+                                        key = _PAGER_DISMISS_KEYS[idx]
+                                        print(f"[agy-login] pager dismiss attempt {idx}: {repr(key)}", flush=True)
+                                        try:
+                                            os.write(master_fd, key)
+                                        except OSError:
+                                            pass
+                                        pager_dismiss_idx[0] += 1
                             continue
 
                         raw_bytes = os.read(master_fd, 4096)
                         _respond_terminal_queries(raw_bytes, master_fd)
                         raw = raw_bytes.decode("utf-8", errors="replace")
                         clean = ansi.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
+                        if clean.strip():
+                            print(f"[agy-login] PTY: {repr(clean[:200])}", flush=True)
                         buf += clean
 
                         while "\n" in buf:
                             line, buf = buf.split("\n", 1)
                             _antigravity_login_handle_line(line, state, master_fd, q)
+
+                        # Scan incomplete buf for code entry prompt (TUI prompt may lack trailing newline)
+                        if state.get("url_found") and not state.get("sent_code_wait"):
+                            buf_lower = buf.lower()
+                            if ("code" in buf_lower or "authorization" in buf_lower) and "https://" not in buf:
+                                print(f"[agy-login] code prompt in buf: {repr(buf[:80])}", flush=True)
+                                q.put(("waiting_code", {}))
+                                state["sent_code_wait"] = True
                     except (OSError, IOError):
                         break
                     if proc.poll() is not None:
