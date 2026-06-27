@@ -269,7 +269,7 @@ if ctx:
 PYEOF
 )"
 RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-（特になし）}" ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
@@ -286,44 +286,67 @@ recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "").strip()
 if recent_auditory_input:
     user_prompt = f"【いま聞こえた音】\n{recent_auditory_input}\n\n{user_prompt}"
 
-msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
-
 session_model = os.environ.get("EHA_SESSION_MODEL", "sonnet")
-cmd = [CLAUDE, "-p", "--model", session_model,
-       "--input-format", "stream-json",
-       "--output-format", "stream-json",
-       "--verbose",
-       "--allowedTools", os.environ["ALLOWED_TOOLS"],
-       "--append-system-prompt", sys_prompt]
+is_agy = os.path.basename(CLAUDE) == "agy"
 
-mcp_servers = os.environ.get("MCP_SERVERS", "").split()
-if mcp_servers and script_dir:
-    # mcp-config.py で必要なサーバーだけの設定を生成（env を各サーバーに注入）
-    mcp_config_path = "/tmp/embodied-ha/mcp.json"
-    gen = os.path.join(script_dir, "mcp-config.py")
-    subprocess.run(["python3", gen, mcp_config_path, *mcp_servers], env=env, check=False)
-    if os.path.exists(mcp_config_path):
-        cmd += ["--mcp-config", mcp_config_path]
+if is_agy:
+    full_prompt = (f"あなたへの指示:\n{sys_prompt}\n\n" if sys_prompt else "") + user_prompt + "\nJSON:\n"
+    cmd = [CLAUDE]
+    if session_model:
+        cmd += ["--model", session_model]
+    cmd += ["-p", full_prompt]
 
-r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or "/tmp/embodied-ha", env=env)
+    agy_home = os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/")
+    agy_env = {**env, "HOME": agy_home}
+    r = subprocess.run(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        cwd="/tmp/embodied-ha",
+        env=agy_env,
+    )
+    raw = r.stdout.strip()
+    m = re.search(r'\{.*\}', raw, re.DOTALL)
+    print(m.group(0) if m else raw)
+else:
+    msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
 
-# 自発行動の過程（どのツールを叩いたか）をstderrに流しておく
-for line in r.stdout.splitlines():
-    line = line.strip()
-    if not line: continue
-    try:
-        d = json.loads(line)
-        t = d.get("type")
-        if t == "assistant":
-            for blk in d.get("message", {}).get("content", []):
-                if blk.get("type") == "tool_use":
-                    import sys
-                    inp = blk.get("input", {})
-                    detail = inp.get("command") or inp.get("query") or json.dumps(inp, ensure_ascii=False)[:80]
-                    print(f"[{mode}][tool] {blk.get('name','')}: {detail}", file=sys.stderr)
-        elif t == "result":
-            print(d.get("result", ""))
-    except: pass
+    cmd = [CLAUDE, "-p", "--model", session_model,
+           "--input-format", "stream-json",
+           "--output-format", "stream-json",
+           "--verbose",
+           "--allowedTools", os.environ["ALLOWED_TOOLS"],
+           "--append-system-prompt", sys_prompt]
+
+    mcp_servers = os.environ.get("MCP_SERVERS", "").split()
+    if mcp_servers and script_dir:
+        # mcp-config.py で必要なサーバーだけの設定を生成（env を各サーバーに注入）
+        mcp_config_path = "/tmp/embodied-ha/mcp.json"
+        gen = os.path.join(script_dir, "mcp-config.py")
+        subprocess.run(["python3", gen, mcp_config_path, *mcp_servers], env=env, check=False)
+        if os.path.exists(mcp_config_path):
+            cmd += ["--mcp-config", mcp_config_path]
+
+    r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or "/tmp/embodied-ha", env=env)
+
+    # 自発行動の過程（どのツールを叩いたか）をstderrに流しておく
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line: continue
+        try:
+            d = json.loads(line)
+            t = d.get("type")
+            if t == "assistant":
+                for blk in d.get("message", {}).get("content", []):
+                    if blk.get("type") == "tool_use":
+                        import sys
+                        inp = blk.get("input", {})
+                        detail = inp.get("command") or inp.get("query") or json.dumps(inp, ensure_ascii=False)[:80]
+                        print(f"[{mode}][tool] {blk.get('name','')}: {detail}", file=sys.stderr)
+            elif t == "result":
+                print(d.get("result", ""))
+        except: pass
 PYEOF
 )
 

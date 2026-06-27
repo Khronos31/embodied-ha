@@ -109,6 +109,21 @@ mkdir -p "$EHA_ANTIGRAVITY_HOME" "$EHA_ANTIGRAVITY_BIN_DIR"
 echo "[run] Antigravity home: ${EHA_ANTIGRAVITY_HOME}"
 echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
 
+# --- agy 用 MCP config 生成（Antigravityが音声解析セッションで使うMCPサーバー設定）---
+python3 -c "
+import os, sys
+sys.path.insert(0, os.environ.get('SCRIPT_DIR', '/app'))
+import antigravity_setup
+result = antigravity_setup.write_mcp_config(
+    os.environ.get('SCRIPT_DIR', '/app'),
+    servers=('audio', 'memory', 'ha', 'sensors', 'body'),
+)
+if result:
+    print(f'[run] agy MCP config: {result}')
+else:
+    print('[run] agy MCP config: 生成スキップ（mcp-config.py なし or エラー）', file=sys.stderr)
+" 2>&1 || true
+
 # --- Claude 設定ディレクトリ ---
 # デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。
 # アンインストール時に /data/ が消えても記憶・認証が /config/ 側に残る。

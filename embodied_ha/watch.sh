@@ -199,7 +199,7 @@ if ctx:
 PYEOF
 )"
 RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
-import base64, json, os, subprocess, sys, urllib.request, time
+import base64, json, os, re, subprocess, sys, urllib.request, time
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 def _ptime(label):
@@ -260,9 +260,39 @@ def fetch_cameras(names):
 def call_claude(content_blocks, model="sonnet", allowed_tools=None, mcp_config=None, backend_bin=None, backend_model=None):
     import sys
 
-    msg = json.dumps({"type": "user", "message": {"role": "user", "content": content_blocks}})
     backend_bin = backend_bin or CLAUDE
     backend_model = backend_model or model
+    is_agy = os.path.basename(backend_bin) == "agy"
+
+    if is_agy:
+        parts = []
+        for blk in content_blocks:
+            if blk.get("type") == "text":
+                parts.append(blk["text"])
+            elif blk.get("type") == "image":
+                parts.append("[カメラ画像]")
+        prompt_text = "\n".join(parts) + "\nJSON:\n"
+
+        cmd = [backend_bin]
+        if backend_model:
+            cmd += ["--model", backend_model]
+        cmd += ["-p", prompt_text]
+
+        agy_home = os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/")
+        agy_env = {**os.environ, "HOME": agy_home}
+        r = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            cwd="/tmp/embodied-ha",
+            env=agy_env,
+        )
+        raw = r.stdout.strip()
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        return m.group(0) if m else raw
+
+    msg = json.dumps({"type": "user", "message": {"role": "user", "content": content_blocks}})
     cmd = [backend_bin, "-p", "--model", backend_model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
