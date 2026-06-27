@@ -223,7 +223,7 @@
                                 <button type="button" class="btn btn-primary btn-sm" onclick="addAudioSourceRow()">ソースを追加</button>
                             </div>
                             <p class="section-desc">
-                                あかねが「聴く」ことができる音声ソースを定義します。
+                                エージェントが「聴く」ことができる音声ソースを定義します。
                                 RTSPストリームURL（go2rtc経由）またはUSBマイク直接録音（<code>alsa</code>）を指定します。
                                 デフォルトソース（最初の行）は省略時に使用されます。
                             </p>
@@ -276,7 +276,7 @@
                             </div>
                             <div class="form-group">
                                 <label class="form-label">ウェイクワード (wake_words)</label>
-                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
+                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: ウェイクワード" style="max-width:320px;">
                                 <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
                             </div>
                         </section>
@@ -332,172 +332,6 @@
                             </div>
                         </section>
                     </div>
-
-                        <!-- Section: Extra Context -->
-                        <section class="settings-section card">
-                            <h3>追加コンテキスト (extra_context.conf)</h3>
-                            <p class="section-desc">毎回のLLM実行時、システムプロンプトの直後に追加される動的なテキスト（コンテキスト）を出力するシェルコマンドを1行に1個記述します。</p>
-                            <div class="form-group">
-                                <textarea id="setting-extra-context" rows="6" class="code-textarea" placeholder="例: date '+今日は%Y年%m月%d日です'"></textarea>
-                            </div>
-                        </section>
-
-                        <!-- Section: Presence -->
-                        <section class="settings-section card">
-                            <h3>在宅判定 (presence)</h3>
-                            <p class="section-desc">居住者が在宅しているか判定するためのエンティティを設定します。</p>
-                            <div class="form-group">
-                                <label>在宅判定スイッチ (entity)</label>
-                                <select id="setting-presence-entity" class="ha-entity-select" data-domain="input_boolean,binary_sensor,device_tracker,person">
-                                    <option value="">(未選択 / ロード中...)</option>
-                                </select>
-                            </div>
-                        </section>
-
-                        <!-- Section: Policies -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>行動ポリシー (policies)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addPolicyRow()">ポリシーを追加</button>
-                            </div>
-                            <p class="section-desc">エージェントの行動指針やルールを箇条書きで設定します。</p>
-                            <div id="policies-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-                    </div>
-
-                    <!-- Tab 2: Input / Output -->
-                    <div class="settings-tab-content" id="settings-tab-io" style="display:none;">
-                        <!-- Section: Cameras -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>カメラ (cameras)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addCameraRow()">カメラを追加</button>
-                            </div>
-                            <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
-                            <div id="cameras-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-
-                        <!-- Section: Audio Sources -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>音声ソース (audio_sources)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addAudioSourceRow()">ソースを追加</button>
-                            </div>
-                            <p class="section-desc">
-                                あかねが「聴く」ことができる音声ソースを定義します。
-                                RTSPストリームURL（go2rtc経由）またはUSBマイク直接録音（<code>alsa</code>）を指定します。
-                                デフォルトソース（最初の行）は省略時に使用されます。
-                            </p>
-                            <div id="audio-sources-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-
-                        <!-- Section: STT -->
-                        <section class="settings-section card">
-                            <h3>音声認識 (STT)</h3>
-                            <p class="section-desc">
-                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
-                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
-                                空欄の場合は音量検出のみ行います（文字起こしなし）。
-                            </p>
-                            <div class="form-group">
-                                <label class="form-label">STTプロバイダー (stt_provider)</label>
-                                <div class="stt-select-wrapper">
-                                    <select id="setting-stt-provider" class="form-input stt-loading">
-                                        <option value=""></option>
-                                    </select>
-                                </div>
-                                <div class="stt-loading-indicator visible" id="stt-provider-loading">
-                                    <span class="stt-spinner"></span>
-                                    <span>プロバイダー一覧を読み込んでいます…</span>
-                                </div>
-                                <div class="stt-error-banner" id="stt-provider-error">
-                                    <span class="stt-error-icon">⚠️</span>
-                                    <span>プロバイダー一覧の取得に失敗しました。HAの接続を確認してください。</span>
-                                </div>
-                                <p class="form-hint">HA統合で利用可能なSTTプロバイダー。未設定の場合は音量のみ検出します。</p>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">STT言語 (stt_language)</label>
-                                <div class="stt-select-wrapper">
-                                    <select id="setting-stt-language" class="form-input stt-loading">
-                                        <option value=""></option>
-                                    </select>
-                                </div>
-                                <div class="stt-loading-indicator visible" id="stt-language-loading">
-                                    <span class="stt-spinner"></span>
-                                    <span>言語一覧を読み込んでいます…</span>
-                                </div>
-                                <div class="stt-error-banner" id="stt-language-error">
-                                    <span class="stt-error-icon">⚠️</span>
-                                    <span>言語一覧の取得に失敗しました。STTプロバイダーを確認してください。</span>
-                                </div>
-                                <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">ウェイクワード (wake_words)</label>
-                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
-                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
-                            </div>
-                        </section>
-
-
-                        <!-- Section: Speakers -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>発話先スピーカー (speakers)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
-                            </div>
-                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるかを選択できます。</p>
-                            <div id="speakers-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-                    </div>
-
-                    <!-- Tab 3: Devices & Sensors -->
-                    <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
-                        <!-- Section: Entities (操作できる家電) -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>操作できる家電 (entities)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addEntityRow()">家電を追加</button>
-                            </div>
-                            <p class="section-desc">「リビングの電気つけて」のような操作を頼まれたとき、呼び方から entity_id を引くための対応表です。エンティティを選ぶと名前が自動で入ります（編集可）。同名が複数あるものは備考に「要確認」が付くので、不要な行は削除してください。</p>
-                            <div id="entities-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-
-                        <!-- Section: Sensors -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>おもなデバイス (sensors)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addSensorGroup()">グループを追加</button>
-                            </div>
-                            <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
-                            <div id="sensors-list" class="settings-list">
-                                <!-- Dynamically generated -->
-                            </div>
-                        </section>
-                    </div>
-
-                    <!-- Tab 4: Advanced JSON Settings -->
-                    <div class="settings-tab-content" id="settings-tab-advanced" style="display:none;">
-                        <section class="settings-section card">
-                            <h3>preferences.json の直接編集</h3>
-                            <p class="section-desc">アドオンの設定JSONを直接編集できます。保存前に文法チェックが行われます。</p>
-                            <div class="form-group">
-                                <textarea id="setting-json-editor" placeholder="設定JSONを読み込み中..."></textarea>
-                            </div>
-                        </section>
-                    </div>
-
                     <!-- Tab 5: Experimental Features -->
                     <div class="settings-tab-content" id="settings-tab-experimental" style="display:none;">
                         <section class="settings-section card experimental-card">
