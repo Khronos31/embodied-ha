@@ -740,11 +740,11 @@ class Handler(BaseHTTPRequestHandler):
                             continue
 
                         raw = os.read(master_fd, 4096).decode("utf-8", errors="replace")
-                        clean = ansi.sub("", raw).replace("\\r\\n", "\\n").replace("\\r", "\\n")
+                        clean = ansi.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
                         buf += clean
 
-                        while "\\n" in buf:
-                            line, buf = buf.split("\\n", 1)
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
                             _antigravity_login_handle_line(line, state, master_fd, q)
                     except (OSError, IOError):
                         break
