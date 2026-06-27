@@ -193,7 +193,7 @@ _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
-_ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://\S+")
+_ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
 
 def is_authenticated() -> bool:
