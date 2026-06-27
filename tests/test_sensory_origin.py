@@ -73,6 +73,7 @@ class SensoryOriginTests(unittest.TestCase):
         self.assertEqual(payload["move_cost"], 2.0)
         self.assertEqual(payload["move_path"], ["study", "living_room"])
 
+
     def test_explicit_room_takes_priority_over_area(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)

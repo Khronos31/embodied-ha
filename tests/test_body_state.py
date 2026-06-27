@@ -156,7 +156,6 @@ class BodyStateTests(unittest.TestCase):
         self.assertLess(settled["stress"], remote["stress"])
         self.assertGreater(settled["confidence"], remote["confidence"])
 
-
     def test_physical_move_clears_physical_anchor_host(self):
         state = body_state.normalize_state({
             "physical_anchor_host": "alsa://study",

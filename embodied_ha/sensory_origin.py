@@ -200,6 +200,14 @@ def current_body_room(graph: dict[str, Any] | None = None) -> str:
     return resolve_room(state.get("current_room"), graph) or initial_room(graph)
 
 
+def current_projected_room(graph: dict[str, Any] | None = None) -> str | None:
+    graph = graph if isinstance(graph, dict) else load_room_graph()
+    state = read_json(body_location_path(), {})
+    if not isinstance(state, dict):
+        return None
+    return resolve_room(state.get("projected_room"), graph) or None
+
+
 def adjacency(graph: dict[str, Any] | None = None) -> dict[str, list[tuple[str, float]]]:
     graph = graph if isinstance(graph, dict) else load_room_graph()
     adj: dict[str, list[tuple[str, float]]] = {room_id: [] for room_id in rooms(graph)}
@@ -271,7 +279,13 @@ def classify_sensory_origin(
     )
 
     if source_room:
-        origin = "direct" if source_room == body_room else "remote"
+        projected_room = current_projected_room(graph)
+        if source_room == body_room:
+            origin = "direct"
+        elif projected_room and source_room == projected_room:
+            origin = "cyber_direct"
+        else:
+            origin = "remote"
         move_cost, move_path = shortest_path(body_room, source_room, graph)
     else:
         origin = "home_assistant"

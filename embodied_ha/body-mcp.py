@@ -41,6 +41,26 @@ def body_location_log_path() -> str:
     return clean(os.environ.get("EHA_BODY_LOCATION_LOG_FILE")) or os.path.join(_data_dir(), "log", "body_location_log.jsonl") or DEFAULT_BODY_LOCATION_LOG_FILE
 
 
+def prefs_path() -> str:
+    return clean(os.environ.get("EHA_PREFS_FILE")) or os.path.join(_data_dir(), "preferences.json")
+
+
+def load_projection_targets() -> list[dict[str, Any]]:
+    prefs = read_json(prefs_path(), {})
+    if not isinstance(prefs, dict):
+        return []
+    targets = prefs.get("projection_targets", [])
+    return targets if isinstance(targets, list) else []
+
+
+def resolve_external_room(entity: str) -> str | None:
+    """external://xxx → room_id を projection_targets から引く"""
+    for target in load_projection_targets():
+        if isinstance(target, dict) and target.get("id") == entity:
+            return clean(target.get("room")) or None
+    return None
+
+
 def _json_text(data: Any) -> list[dict[str, str]]:
     return [text(json.dumps(data, ensure_ascii=False, indent=2))]
 
@@ -334,6 +354,185 @@ def move_to(args: dict[str, Any]):
     return _json_text({"state": new_state, "event": event})
 
 
+def enter_cyberspace(args: dict[str, Any]):
+    graph = load_room_graph()
+    state = load_location_state(graph)
+    if state.get("projected_room"):
+        return _json_text({
+            "error": "already in cyberspace",
+            "projected_room": state.get("projected_room"),
+            "projected_host": state.get("projected_host"),
+        }), True
+    entity = clean(args.get("entity"))
+    if not entity:
+        return _json_text({"error": "missing entity"}), True
+    room_arg = clean(args.get("room"))
+    target_room: str | None = None
+    if entity.startswith("external://"):
+        target_room = resolve_external_room(entity)
+        if not target_room:
+            return _json_text({"error": "unknown external projection target", "entity": entity}), True
+    else:
+        if room_arg:
+            # 明示的に room が渡された場合はそちらを優先
+            target_room = resolve_room(room_arg, graph)
+            if not target_room:
+                return _json_text({
+                    "error": "unknown target room",
+                    "room": room_arg,
+                    "available_rooms": list(rooms(graph).keys()),
+                }), True
+        else:
+            # room 省略時は HA エリア API で自動解決を試みる
+            from sensory_origin import area_for_entity, resolve_area_room
+
+            area = area_for_entity(entity)
+            target_room = resolve_area_room(area, graph) if area else None
+            if not target_room:
+                return _json_text({
+                    "error": "HAエンティティの部屋を自動解決できませんでした。room パラメータで部屋を指定してください",
+                    "entity": entity,
+                    "resolved_area": area,
+                    "available_rooms": list(rooms(graph).keys()),
+                }), True
+    body_room = state["current_room"]
+    if target_room != body_room:
+        return _json_text({
+            "error": "physical room mismatch",
+            "physical_room": body_room,
+            "requested_room": target_room,
+        }), True
+    cost, path = shortest_path(body_room, target_room, graph)
+    timestamp = now().isoformat(timespec="seconds")
+    reason = clean(args.get("reason")) or None
+    new_state = {
+        **state,
+        "current_room": body_room,
+        "display_name": _room_label(body_room, graph),
+        "projected_room": target_room,
+        "projected_display_name": _room_label(target_room, graph),
+        "projection_updated_at": timestamp,
+        "projected_host": entity,
+        "updated_at": timestamp,
+        "source": clean(args.get("source")) or "body-mcp",
+    }
+    if reason:
+        new_state["reason"] = reason
+    save_location_state(new_state)
+    publish_body_presence(new_state)
+    event = {
+        "timestamp": timestamp,
+        "kind": "body_project",
+        "body_room": body_room,
+        "body_display_name": _room_label(body_room, graph),
+        "to": target_room,
+        "to_display_name": _room_label(target_room, graph),
+        "target_host": entity,
+        "cost": cost,
+        "path": path,
+        "path_display": _format_path(path, graph),
+        "reason": reason,
+        "projection_mode": "enter_remote",
+        "sensory_origin_after_project": "remote_avatar",
+        "action_mode": "remote_avatar",
+        "action_cost": 0.35,
+        "target_room": target_room,
+    }
+    append_move_log(event)
+    try:
+        apply_action_to_body_state(
+            action_mode=event.get("action_mode"),
+            action_cost=event.get("action_cost"),
+            target_room=target_room,
+            target_host=entity,
+            move_cost=cost,
+        )
+    except Exception:
+        pass
+    return _json_text({"state": new_state, "event": event})
+
+
+def move_cyber(args: dict[str, Any]):
+    graph = load_room_graph()
+    state = load_location_state(graph)
+    if not state.get("projected_room"):
+        return _json_text({
+            "error": "not in cyberspace",
+            "projected_room": state.get("projected_room"),
+        }), True
+    entity = clean(args.get("entity"))
+    if not entity:
+        return _json_text({"error": "missing entity"}), True
+    room_arg = clean(args.get("room"))
+    target_room: str | None = None
+    if entity.startswith("external://"):
+        target_room = resolve_external_room(entity)
+    elif room_arg:
+        target_room = resolve_room(room_arg, graph)
+    else:
+        # room 省略時は HA エリア API で自動解決を試みる（失敗しても続行）
+        from sensory_origin import area_for_entity, resolve_area_room
+
+        area = area_for_entity(entity)
+        target_room = resolve_area_room(area, graph) if area else None
+    current_projected_room = state["projected_room"]
+    final_projected_room = target_room or current_projected_room
+    cost = 0.0
+    path = [current_projected_room]
+    if target_room and target_room != current_projected_room:
+        resolved_cost, resolved_path = shortest_path(current_projected_room, target_room, graph)
+        if resolved_cost is not None:
+            cost = resolved_cost
+            path = resolved_path
+    timestamp = now().isoformat(timespec="seconds")
+    reason = clean(args.get("reason")) or None
+    new_state = {
+        **state,
+        "current_room": state["current_room"],
+        "display_name": _room_label(state["current_room"], graph),
+        "projected_room": final_projected_room,
+        "projected_display_name": _room_label(final_projected_room, graph) if final_projected_room else None,
+        "projection_updated_at": timestamp,
+        "projected_host": entity,
+        "updated_at": timestamp,
+        "source": clean(args.get("source")) or "body-mcp",
+    }
+    if reason:
+        new_state["reason"] = reason
+    save_location_state(new_state)
+    publish_body_presence(new_state)
+    event = {
+        "timestamp": timestamp,
+        "kind": "body_project",
+        "body_room": state["current_room"],
+        "body_display_name": _room_label(state["current_room"], graph),
+        "to": final_projected_room,
+        "to_display_name": _room_label(final_projected_room, graph) if final_projected_room else None,
+        "target_host": entity,
+        "cost": cost,
+        "path": path,
+        "path_display": _format_path(path, graph) if path else [],
+        "reason": reason,
+        "projection_mode": "remote_move",
+        "sensory_origin_after_project": "remote_avatar",
+        "action_mode": "remote_avatar",
+        "action_cost": 0.0,
+        "target_room": final_projected_room,
+    }
+    append_move_log(event)
+    try:
+        apply_action_to_body_state(
+            action_mode=event.get("action_mode"),
+            action_cost=event.get("action_cost"),
+            target_room=final_projected_room,
+            target_host=entity,
+            move_cost=cost,
+        )
+    except Exception:
+        pass
+    return _json_text({"state": new_state, "event": event})
+
+
 def project_to(args: dict[str, Any]):
     graph = load_room_graph()
     target = resolve_room(args.get("room") or args.get("to") or args.get("to_room"), graph)
@@ -485,7 +684,7 @@ TOOL_MOVE_TO = {
 
 TOOL_PROJECT_TO = {
     "name": "project_to",
-    "description": "物理体は今の部屋に残したまま、別の部屋の窓へ電脳体をつなぎ、遠隔確認として記録する。",
+    "description": "物理体は今の部屋に残したまま、別の部屋の窓へ電脳体をつなぎ、遠隔確認として記録する。非推奨: このツールは後方互換のために残しています。代わりに enter_cyberspace（初回侵入）または move_cyber（電脳体での移動）を使ってください。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -494,6 +693,48 @@ TOOL_PROJECT_TO = {
             "reason": {"type": "string", "description": "投射する理由。任意"},
         },
         "required": ["room"],
+    },
+}
+
+TOOL_ENTER_CYBERSPACE = {
+    "name": "enter_cyberspace",
+    "description": (
+        "物理体は今の部屋に残したまま、同室にあるデバイスやカメラへ電脳体として侵入する。\n"
+        "entity には HA エンティティ ID（camera.xxx, media_player.xxx など）または "
+        "external://astrolabe のような外部デバイス ID を渡す。\n"
+        "侵入できるのは物理体と同じ部屋にあるエンティティのみ。\n"
+        "すでに電脳体モード中の場合は使えない（move_cyber を使うこと）。\n"
+        "HA エンティティの場合は room を省略すると HA のエリア設定から自動解決する。\n"
+        "エリアが未設定のエンティティは room パラメータで部屋を明示すること。\n"
+        "external:// デバイスは preferences.json の projection_targets に登録されていれば room 不要。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "entity": {"type": "string", "description": "侵入先のエンティティ ID または external://xxx"},
+            "room": {"type": "string", "description": "エンティティのある部屋 ID。HA エンティティは省略可"},
+            "reason": {"type": "string", "description": "侵入する理由。任意"},
+        },
+        "required": ["entity"],
+    },
+}
+
+TOOL_MOVE_CYBER = {
+    "name": "move_cyber",
+    "description": (
+        "電脳体モード中に、別のエンティティへ移動する。\n"
+        "enter_cyberspace で電脳空間に入った後にのみ使える。\n"
+        "物理体の場所に関係なく、どのエンティティへでも自由に移動できる。\n"
+        "entity には HA エンティティ ID または external://xxx を渡す。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "entity": {"type": "string", "description": "移動先のエンティティ ID または external://xxx"},
+            "room": {"type": "string", "description": "エンティティのある部屋 ID。任意"},
+            "reason": {"type": "string", "description": "移動する理由。任意"},
+        },
+        "required": ["entity"],
     },
 }
 
@@ -538,6 +779,8 @@ if __name__ == "__main__":
     serve("body-mcp", "1.0", {
         "get_location": {"spec": TOOL_GET_LOCATION, "handler": get_location},
         "move_to": {"spec": TOOL_MOVE_TO, "handler": move_to},
+        "enter_cyberspace": {"spec": TOOL_ENTER_CYBERSPACE, "handler": enter_cyberspace},
+        "move_cyber": {"spec": TOOL_MOVE_CYBER, "handler": move_cyber},
         "project_to": {"spec": TOOL_PROJECT_TO, "handler": project_to},
         "return_to_body": {"spec": TOOL_RETURN_TO_BODY, "handler": return_to_body},
         "estimate_move_cost": {"spec": TOOL_ESTIMATE_MOVE_COST, "handler": estimate_move_cost},

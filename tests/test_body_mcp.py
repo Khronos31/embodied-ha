@@ -54,6 +54,11 @@ class BodyMcpTests(unittest.TestCase):
         graph_path.write_text(json.dumps(graph, ensure_ascii=False), encoding="utf-8")
         return graph_path
 
+    def _write_prefs(self, tmpdir, projection_targets):
+        prefs_path = Path(tmpdir) / "preferences.json"
+        prefs_path.write_text(json.dumps({"projection_targets": projection_targets}, ensure_ascii=False), encoding="utf-8")
+        return prefs_path
+
     def test_defaults_use_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
             self.assertEqual(self.body_mcp.room_graph_path(), "/config/embodied-ha/floorplan_room_graph_draft.json")
@@ -151,6 +156,51 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(rows[0]["action_cost"], 0.0)
         self.assertEqual(rows[0]["projection_mode"], "remote_move")
         self.assertEqual(rows[0]["cost"], 2.0)
+
+    def test_enter_cyberspace_uses_external_projection_target(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            prefs_path = self._write_prefs(tmpdir, [{"id": "external://astrolabe", "room": "study"}])
+            state_path = Path(tmpdir) / "body_location.json"
+            log_path = Path(tmpdir) / "body_location_log.jsonl"
+            state_path.write_text(json.dumps({"current_room": "study"}, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_PREFS_FILE": str(prefs_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
+            }, clear=False):
+                payload = self._json(self.body_mcp.enter_cyberspace({"entity": "external://astrolabe", "reason": "見守る"}))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(payload["state"]["projected_room"], "study")
+        self.assertEqual(state["projected_host"], "external://astrolabe")
+        self.assertEqual(rows[0]["kind"], "body_project")
+        self.assertEqual(rows[0]["projection_mode"], "enter_remote")
+        self.assertEqual(rows[0]["action_cost"], 0.35)
+
+    def test_move_cyber_keeps_projection_when_room_unresolved(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = Path(tmpdir) / "body_location.json"
+            log_path = Path(tmpdir) / "body_location_log.jsonl"
+            state_path.write_text(json.dumps({
+                "current_room": "study",
+                "projected_room": "kitchen",
+                "projected_host": "camera.kitchen"
+            }, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
+            }, clear=False):
+                payload = self._json(self.body_mcp.move_cyber({"entity": "camera.living_room", "reason": "見直す"}))
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(payload["state"]["projected_room"], "kitchen")
+        self.assertEqual(state["projected_host"], "camera.living_room")
+        self.assertEqual(rows[0]["projection_mode"], "remote_move")
+        self.assertEqual(rows[0]["action_cost"], 0.0)
 
     def test_return_to_body_clears_projection(self):
         with tempfile.TemporaryDirectory() as tmpdir:

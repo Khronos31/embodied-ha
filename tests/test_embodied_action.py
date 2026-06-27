@@ -39,3 +39,4 @@ class EmbodiedActionTests(unittest.TestCase):
         self.assertEqual(saved["remote_room"], "washroom")
         self.assertEqual(saved["remote_avatar_host"], "camera.washroom")
         self.assertGreater(saved["embodiment_tension"], 0.0)
+

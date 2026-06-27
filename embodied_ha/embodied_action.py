@@ -25,9 +25,11 @@ def body_state_path() -> str:
     return clean(os.environ.get("EHA_BODY_STATE_FILE")) or os.path.join(_data_dir(), "body_state.json")
 
 
-def action_mode_for_rooms(body_room: Any, target_room: Any) -> str:
+def action_mode_for_rooms(body_room: Any, target_room: Any, projected_room: Any = None) -> str:
     if clean(body_room) and clean(body_room) == clean(target_room):
         return "direct_in_room"
+    if projected_room and clean(projected_room) and clean(projected_room) == clean(target_room):
+        return "cyber_in_room"
     return "remote_avatar"
 
 
@@ -38,6 +40,8 @@ def action_cost_for_mode(action_mode: str, move_cost: Any = None) -> float:
         return round(distance, 3)
     if mode == "direct_in_room":
         return 0.05
+    if mode == "cyber_in_room":
+        return 0.05
     return round(0.35 + min(0.20, distance * 0.05), 3)
 
 
@@ -45,7 +49,11 @@ def action_fields_for_sensory(sensory: dict[str, Any], host: Any = "") -> dict[s
     body_room = clean(sensory.get("body_room"))
     source_room = clean(sensory.get("source_room"))
     move_cost = sensory.get("move_cost")
-    mode = action_mode_for_rooms(body_room, source_room)
+    origin = clean(sensory.get("sensory_origin")) or clean(sensory.get("access_mode"))
+    if origin == "cyber_direct":
+        mode = "cyber_in_room"
+    else:
+        mode = action_mode_for_rooms(body_room, source_room)
     return {
         "action_mode": mode,
         "action_cost": action_cost_for_mode(mode, move_cost),

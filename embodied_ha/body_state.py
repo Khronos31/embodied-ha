@@ -195,7 +195,11 @@ def advance_tick(
     if current.get("remote_mode") == "remote_avatar":
         distance = max(0.0, current.get("remote_move_cost", 0.0))
         distance_factor = max(0.15, min(1.0, distance / 3.0))
-        remote_drift = min(0.024, elapsed_hours * 0.016 * distance_factor)
+        raw_drift = min(0.024, elapsed_hours * 0.016 * distance_factor)
+        # 好奇心が高いほどドリフトが遅くなる（積極的に探索している状態）
+        # curiosity 0.8 → factor ≈ 0.36 / curiosity 0.3 → factor ≈ 0.86
+        curiosity_drift_factor = max(0.2, 1.0 - current["curiosity"] * 1.0)
+        remote_drift = raw_drift * curiosity_drift_factor
         stress += remote_drift * 0.7
         confidence -= remote_drift * 0.55
         embodiment_tension += remote_drift
@@ -352,11 +356,19 @@ def apply_action_effect(
     current["last_target_room"] = target
 
     if mode == "remote_avatar":
-        bump = min(0.028, 0.004 + min(0.018, distance * 0.006))
+        raw_bump = min(0.028, 0.004 + min(0.018, distance * 0.006))
+        # 好奇心が高いほどストレス・テンションの増加が和らぐ
+        # curiosity 0.8 → factor ≈ 0.36 / curiosity 0.3 → factor ≈ 0.86 / curiosity 0.0 → 1.0
+        curiosity_factor = max(0.2, 1.0 - current["curiosity"] * 1.0)
+        bump = raw_bump * curiosity_factor
         stress += bump * 0.65
         confidence -= bump * 0.50
         tension += bump
         return_pressure += bump * 0.85
+        # 電脳体の移動・操作は好奇心を少し充足させる（探索欲が満たされていく）
+        # action_cost=0.0 の move_cyber は satisfaction が小さく、enter は大きめ
+        curiosity_satisfaction = 0.008 if cost <= 0.01 else 0.015
+        current["curiosity"] = round(_clamp(current["curiosity"] - curiosity_satisfaction), 3)
         if target and target != current.get("remote_room"):
             current["remote_since"] = current_now.isoformat(timespec="seconds")
         elif not _clean(current.get("remote_since")):

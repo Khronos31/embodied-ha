@@ -263,7 +263,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）、短時間の音声確認（listen）と次のセッション予約（queue_next_listen）、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（project_to / return_to_body）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）、短時間の音声確認（listen）と次のセッション予約（queue_next_listen）、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（enter_cyberspace / move_cyber / project_to〔非推奨〕 / return_to_body）
 - **今の自分にはできない**: ファイルへの書き込み・設定ファイルの編集・コードの実装。ファイルの読み取り（Read）はできる。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 - **ツールが失敗したときは正直に伝える**: Readでファイルが見つからない・読めない場合は「読めなかった」と伝える。読んでいないのに読めたふりをしない。ディレクトリ一覧は取得できないので、ファイル名が不明なら「ファイル名を教えてください」と聞く。
@@ -417,7 +417,7 @@ if _sd:
                 "mcp__sociality__record_consent,mcp__sociality__should_interrupt,"
                 "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
-                "mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
+                "mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                 "mcp__http__http_get,mcp__http__http_post,"
                 "Read",
                 "--mcp-config", _mcp_path]
