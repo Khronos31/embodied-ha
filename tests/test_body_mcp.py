@@ -203,14 +203,15 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(rows[0]["action_cost"], 0.0)
 
     def test_return_to_body_clears_projection(self):
+        # 物理体と同室のエンティティに投射中 → 帰還成功
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)
             state_path = Path(tmpdir) / "body_location.json"
             log_path = Path(tmpdir) / "body_location_log.jsonl"
             state_path.write_text(json.dumps({
                 "current_room": "living_room",
-                "projected_room": "kitchen",
-                "projected_host": "camera.kitchen"
+                "projected_room": "living_room",
+                "projected_host": "camera.living_room"
             }, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {
                 "EHA_ROOM_GRAPH_FILE": str(graph_path),
@@ -227,6 +228,29 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(state["projected_host"], "")
         self.assertEqual(rows[0]["kind"], "body_return")
         self.assertEqual(rows[0]["action_mode"], "direct_in_room")
+
+    def test_return_to_body_blocked_from_different_room(self):
+        # 物理体と別室のエンティティに投射中 → 帰還不可
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = Path(tmpdir) / "body_location.json"
+            log_path = Path(tmpdir) / "body_location_log.jsonl"
+            state_path.write_text(json.dumps({
+                "current_room": "living_room",
+                "projected_room": "kitchen",
+                "projected_host": "camera.kitchen"
+            }, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
+            }, clear=False):
+                result, is_error = self.body_mcp.return_to_body({"reason": "帰る"})
+        self.assertTrue(is_error)
+        payload = json.loads(result[0]["text"])
+        self.assertIn("error", payload)
+        self.assertEqual(payload["physical_room"], "living_room")
+        self.assertEqual(payload["projected_room"], "kitchen")
 
     def test_unknown_room_returns_error_tuple(self):
         with tempfile.TemporaryDirectory() as tmpdir:

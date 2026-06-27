@@ -4,7 +4,7 @@
 
 ## 概要
 
-あかねは「物理体」と「電脳体」の二重存在として設計されている。
+居住エージェントは「物理体」と「電脳体」の二重存在として設計されている。
 
 - **物理体**: 部屋グラフ上の位置。音声（マイク・スピーカー）を持つ身体の錨
 - **電脳体**: HAエンティティや外部デバイスに意識を投射した状態。カメラで見る、スマートスピーカーで話すなど
@@ -15,7 +15,7 @@
 
 ## 位置管理（body_location.json）
 
-あかねの現在位置は `/config/embodied-ha/body_location.json` に記録される。
+居住エージェントの現在位置は `/config/embodied-ha/body_location.json` に記録される。
 
 | フィールド | 意味 | 例 |
 |---|---|---|
@@ -48,10 +48,10 @@
 
 | ツール | 役割 | 前提条件 |
 |---|---|---|
-| `move_to(room)` | 物理体ごと移動 | 常に使える |
+| `move_to(room)` | 物理体ごと移動 | 物理体モード中のみ（電脳体に投射していない状態） |
 | `enter_cyberspace(entity)` | 電脳体として侵入 | 物理体と同室のエンティティのみ |
 | `move_cyber(entity)` | 電脳体で別エンティティへ移動 | 電脳体モード中のみ |
-| `return_to_body` | 電脳体を解除して物理体に帰還 | 常に使える |
+| `return_to_body` | 電脳体を解除して物理体に帰還 | 物理体と同室のエンティティに投射中のみ |
 
 ### 侵入条件の詳細
 
@@ -132,17 +132,12 @@ curiosity_factor = max(0.2, 1.0 - curiosity)
 
 ## MQTT 配信
 
-あかねの位置変化は MQTT で配信される。外部デバイスはこれを購読して表示を切り替える。
+居住エージェントの位置変化は MQTT で配信される。外部デバイスはこれを購読して表示を切り替える。
 
 | トピック | 値 | 例 |
 |---|---|---|
 | `embodied_ha/body/physical_room/state` | 物理体の部屋ID | `study` |
 | `embodied_ha/body/current_place/state` | 電脳体の場所、または「身体の中」 | `external://astrolabe` / `身体の中` |
-
-**Astrolabe の連携例**
-
-Astrolabe は `embodied_ha/body/current_place/state` を購読し、
-値が `external://astrolabe` になったら顔モード（あかねの顔アニメーション）に切り替える。
 
 ---
 
@@ -154,7 +149,7 @@ Astrolabe は `embodied_ha/body/current_place/state` を購読し、
 | `embodied_ha/body_state.py` | homeostasis（curiosity/stress/energy等）の状態管理 |
 | `embodied_ha/embodied_action.py` | action_mode → action_cost 変換、body_state への適用 |
 | `embodied_ha/sensory_origin.py` | エンティティの部屋判定（HA Template API 経由）。cyber_direct 判定 |
-| `/config/embodied-ha/body_location.json` | あかねの現在位置（ランタイム） |
+| `/config/embodied-ha/body_location.json` | 居住エージェントの現在位置（ランタイム） |
 | `/config/embodied-ha/body_state.json` | homeostasis の現在値（ランタイム） |
 | `/config/embodied-ha/preferences.json` | `projection_targets` など設定 |
 | `/config/embodied-ha/floorplan_room_graph_draft.json` | 部屋グラフ（隣接・コスト） |

@@ -303,6 +303,13 @@ def move_to(args: dict[str, Any]):
             "available_rooms": list(rooms(graph).keys()),
         }), True
     state = load_location_state(graph)
+    if state.get("projected_room"):
+        return _json_text({
+            "error": "cannot move physical body while in cyber mode",
+            "projected_room": state.get("projected_room"),
+            "projected_host": state.get("projected_host"),
+            "hint": "return_to_body を先に呼んでください",
+        }), True
     current = state["current_room"]
     cost, path = shortest_path(current, target, graph)
     if cost is None:
@@ -602,6 +609,16 @@ def project_to(args: dict[str, Any]):
 def return_to_body(args: dict[str, Any]):
     graph = load_room_graph()
     state = load_location_state(graph)
+    projected_room = state.get("projected_room")
+    body_room = state["current_room"]
+    if projected_room and projected_room != body_room:
+        return _json_text({
+            "error": "cannot return to body from a different room",
+            "physical_room": body_room,
+            "projected_room": projected_room,
+            "projected_host": state.get("projected_host"),
+            "hint": f"先に move_cyber で {body_room} にあるエンティティへ移動してから return_to_body を呼んでください",
+        }), True
     current = state["current_room"]
     timestamp = now().isoformat(timespec="seconds")
     reason = clean(args.get("reason")) or None
@@ -671,7 +688,7 @@ TOOL_GET_LOCATION = {
 
 TOOL_MOVE_TO = {
     "name": "move_to",
-    "description": "部屋グラフ上で物理体そのものを移動し、移動コストと経路を記録する。",
+    "description": "部屋グラフ上で物理体そのものを移動し、移動コストと経路を記録する。物理体モード中（電脳体に投射していない状態）のみ使用できる。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -740,7 +757,7 @@ TOOL_MOVE_CYBER = {
 
 TOOL_RETURN_TO_BODY = {
     "name": "return_to_body",
-    "description": "別室への投射をやめて、物理体のいる部屋に感覚の足場を戻す。",
+    "description": "電脳体モードを解除して物理体に帰還する。物理体と同じ部屋のエンティティに投射中のときのみ使用できる。別の部屋にいる場合は、先に move_cyber で物理体のいる部屋のエンティティへ移動すること。",
     "inputSchema": {
         "type": "object",
         "properties": {
