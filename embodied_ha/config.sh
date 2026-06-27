@@ -17,6 +17,11 @@ export CLAUDE_BIN="${CLAUDE_BIN:-/config/.tools/npm-global/bin/claude}"
 export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/config/.tools/claude-home}"
 export EHA_TOOLS_PATH="${EHA_TOOLS_PATH:-/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin}"
 
+# --- Antigravity CLI（任意・後からユーザーが導入する）---
+export EHA_ANTIGRAVITY_HOME="${EHA_ANTIGRAVITY_HOME:-/data/.agy}"
+export EHA_ANTIGRAVITY_BIN_DIR="${EHA_ANTIGRAVITY_BIN_DIR:-$EHA_ANTIGRAVITY_HOME/bin}"
+export EHA_ANTIGRAVITY_BIN="${EHA_ANTIGRAVITY_BIN:-$EHA_ANTIGRAVITY_BIN_DIR/agy}"
+
 # --- メモリディレクトリ ---
 export EHA_MEMORY_DIR="${EHA_MEMORY_DIR:-/config/.tools/claude-home/projects/-config/memory}"
 

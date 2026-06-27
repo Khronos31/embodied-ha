@@ -18,6 +18,8 @@ let entityList = {};
 let characterData = "";
 let extraContextData = "";
 let characterName = 'Claude';
+let antigravitySetupState = null;
+let antigravitySetupSource = null;
 
 function updateCharacterName(prefs) {
     characterName = ((prefs && prefs.character_name) || 'Claude').trim() || 'Claude';
@@ -70,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (langSel)     langSel.classList.add('stt-loading');
         await loadSttLanguages(this.value.trim());
     });
+    refreshAntigravityStatus().catch(() => {});
 });
 
 // --- Update Side Panel Previews ---
@@ -1147,6 +1150,233 @@ async function loadSttProviders(currentProvider) {
     }
 }
 
+function setAntigravityLog(lines) {
+    const logEl = document.getElementById('antigravity-log');
+    if (logEl) logEl.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
+}
+
+function appendAntigravityLog(line) {
+    const logEl = document.getElementById('antigravity-log');
+    if (!logEl) return;
+    const current = logEl.textContent ? logEl.textContent.split('\n') : [];
+    current.push(String(line));
+    logEl.textContent = current.slice(-120).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+}
+function renderAntigravityStatus(data) {
+    const statusEl = document.getElementById('antigravity-status-text');
+    if (statusEl) {
+        if (!data) {
+            statusEl.textContent = '状態を取得できませんでした。';
+        } else {
+            const parts = [];
+            parts.push(`HOME: ${data.home_dir || '(unknown)'}`);
+            parts.push(`bin: ${data.binary_path || '(unknown)'}`);
+            parts.push(`installed: ${data.installed ? 'yes' : 'no'}`);
+            parts.push(`authenticated: ${data.authenticated ? 'yes' : 'no'}`);
+            parts.push(`installing: ${data.installing ? 'yes' : 'no'}`);
+            parts.push(`login_active: ${data.login_active ? 'yes' : 'no'}`);
+            statusEl.textContent = parts.join(' / ');
+        }
+    }
+
+    const installedBadge = document.getElementById('antigravity-status-installed');
+    const authBadge = document.getElementById('antigravity-status-authenticated');
+    const homeDirEl = document.getElementById('antigravity-status-home');
+    const binPathEl = document.getElementById('antigravity-status-bin');
+    const step1El = document.getElementById('antigravity-step-1');
+    const step2El = document.getElementById('antigravity-step-2');
+
+    if (data) {
+        if (installedBadge) {
+            installedBadge.textContent = data.installed ? 'インストール済み' : '未インストール';
+            installedBadge.className = data.installed ? 'status-badge success' : 'status-badge danger';
+        }
+        if (authBadge) {
+            authBadge.textContent = data.authenticated ? '認証済み' : '未認証';
+            authBadge.className = data.authenticated ? 'status-badge success' : 'status-badge warning';
+        }
+        if (homeDirEl) homeDirEl.textContent = data.home_dir || '(unknown)';
+        if (binPathEl) binPathEl.textContent = data.binary_path || '(unknown)';
+
+        // Stepper state update
+        if (step1El && step2El) {
+            if (data.installed) {
+                step1El.classList.remove('active');
+                step1El.classList.add('completed');
+                step2El.classList.add('active');
+            } else {
+                step1El.classList.add('active');
+                step1El.classList.remove('completed');
+                step2El.classList.remove('active', 'completed');
+            }
+
+            if (data.authenticated) {
+                step2El.classList.remove('active');
+                step2El.classList.add('completed');
+            } else if (data.installed) {
+                step2El.classList.add('active');
+                step2El.classList.remove('completed');
+            }
+        }
+    } else {
+        if (installedBadge) {
+            installedBadge.textContent = '取得失敗';
+            installedBadge.className = 'status-badge unknown';
+        }
+        if (authBadge) {
+            authBadge.textContent = '取得失敗';
+            authBadge.className = 'status-badge unknown';
+        }
+        if (homeDirEl) homeDirEl.textContent = '-';
+        if (binPathEl) binPathEl.textContent = '-';
+
+        if (step1El && step2El) {
+            step1El.classList.add('active');
+            step1El.classList.remove('completed');
+            step2El.classList.remove('active', 'completed');
+        }
+    }
+}
+
+async function refreshAntigravityStatus() {
+    try {
+        const res = await fetch(`${base}/api/setup/antigravity/status`);
+        const data = await res.json();
+        antigravitySetupState = data;
+        renderAntigravityStatus(data);
+        if (data.installing) {
+            appendAntigravityLog('Antigravity CLI をインストール中です。');
+        } else if (!data.installed) {
+            appendAntigravityLog('Antigravity CLI は未インストールです。');
+        } else if (data.login_active) {
+            appendAntigravityLog('Antigravity の認証セッションが進行中です。');
+        } else if (data.authenticated) {
+            appendAntigravityLog('Antigravity は認証済みです。');
+        }
+    } catch (err) {
+        renderAntigravityStatus(null);
+        appendAntigravityLog(`status error: ${err?.message || err}`);
+    }
+}
+
+function clearAntigravitySource() {
+    if (antigravitySetupSource) {
+        antigravitySetupSource.close();
+        antigravitySetupSource = null;
+    }
+}
+
+function startAntigravityStream(path, onDone) {
+    clearAntigravitySource();
+    setAntigravityLog([]);
+    const source = new EventSource(`${base}${path}`);
+    let sawCustomError = false;
+    antigravitySetupSource = source;
+    source.addEventListener('line', (e) => {
+        try {
+            const { text } = JSON.parse(e.data);
+            if (text) appendAntigravityLog(text);
+        } catch (_) {}
+    });
+    source.addEventListener('done', (e) => {
+        let code = null;
+        try { code = JSON.parse(e.data).code; } catch (_) {}
+        appendAntigravityLog(`done: ${code}`);
+        clearAntigravitySource();
+        if (typeof onDone === 'function') onDone(code);
+        refreshAntigravityStatus();
+    });
+    source.addEventListener('error', (e) => {
+        if (e && typeof e.data === 'string' && e.data) {
+            sawCustomError = true;
+            try {
+                const payload = JSON.parse(e.data);
+                appendAntigravityLog(payload.error || payload.text || `error: ${e.data}`);
+            } catch (_) {
+                appendAntigravityLog(`error: ${e.data}`);
+            }
+            clearAntigravitySource();
+            refreshAntigravityStatus();
+            return;
+        }
+        if (sawCustomError) return;
+        appendAntigravityLog('stream error');
+        clearAntigravitySource();
+        refreshAntigravityStatus();
+    });
+    return source;
+}
+
+function startAntigravityInstall() {
+    if (antigravitySetupState?.installing) {
+        appendAntigravityLog('Antigravity install はすでに実行中です。');
+        return;
+    }
+    appendAntigravityLog('install の完了後に認証へ進みます...');
+    startAntigravityStream('/api/setup/antigravity/install', (code) => {
+        if (code === 0) {
+            appendAntigravityLog('install 完了。認証を開始します...');
+            startAntigravityLogin();
+        } else {
+            appendAntigravityLog(`install が終了コード ${code} で終わったため、認証は開始しません。`);
+        }
+    });
+}
+
+function startAntigravityInstallAndLogin() {
+    startAntigravityInstall();
+}
+
+function startAntigravityLogin() {
+    if (antigravitySetupState?.login_active) {
+        appendAntigravityLog('Antigravity 認証セッションはすでに進行中です。');
+        return;
+    }
+    appendAntigravityLog('認証セッションを開始します...');
+    startAntigravityStream('/api/setup/antigravity/login');
+}
+
+async function sendAntigravityInput(textOverride = null) {
+    const input = document.getElementById('antigravity-input-text');
+    const text = (textOverride ?? input?.value ?? '').trim();
+    if (!text) return;
+    try {
+        const res = await fetch(`${base}/api/setup/antigravity/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            appendAntigravityLog(`input error (${res.status}): ${body || res.statusText}`);
+            return;
+        }
+        appendAntigravityLog(`> ${text}`);
+        if (input && textOverride === null) input.value = '';
+    } catch (err) {
+        appendAntigravityLog(`input error: ${err?.message || err}`);
+    }
+}
+
+async function sendAntigravityKey(key) {
+    try {
+        const res = await fetch(`${base}/api/setup/antigravity/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            appendAntigravityLog(`key error (${res.status}): ${body || res.statusText}`);
+            return;
+        }
+        appendAntigravityLog(`[key:${key}]`);
+    } catch (err) {
+        appendAntigravityLog(`key error: ${err?.message || err}`);
+    }
+}
+
 async function renderSettingsForm() {
     if (!prefsData) return;
 
@@ -1223,6 +1453,7 @@ async function renderSettingsForm() {
         form.addEventListener('change', () => { isSettingsDirty = true; });
     }
     isSettingsDirty = false;
+    await refreshAntigravityStatus();
 }
 
 // ===========================
@@ -1279,11 +1510,16 @@ async function switchSettingsTab(tabName) {
     const tabIo = document.getElementById('settings-tab-io');
     const tabDevices = document.getElementById('settings-tab-devices');
     const tabAdvanced = document.getElementById('settings-tab-advanced');
+    const tabExperimental = document.getElementById('settings-tab-experimental');
 
     if (tabGeneral) tabGeneral.style.display = tabName === 'general' ? 'block' : 'none';
     if (tabIo) tabIo.style.display = tabName === 'io' ? 'block' : 'none';
     if (tabDevices) tabDevices.style.display = tabName === 'devices' ? 'block' : 'none';
     if (tabAdvanced) tabAdvanced.style.display = tabName === 'advanced' ? 'block' : 'none';
+    if (tabExperimental) tabExperimental.style.display = tabName === 'experimental' ? 'block' : 'none';
+    if (tabName === 'experimental') {
+        await refreshAntigravityStatus();
+    }
 }
 
 function initJsonEditor(initialValue) {

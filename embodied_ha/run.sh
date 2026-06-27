@@ -96,6 +96,15 @@ echo "[run] audio wav dir: ${EHA_AUDIO_WAV_DIR}"
 echo "[run] room graph: ${EHA_ROOM_GRAPH_FILE}"
 echo "[run] body location: ${EHA_BODY_LOCATION_FILE}"
 
+# --- Antigravity CLI（任意・ユーザー導入）---
+# Web UI から後で install / auth を分けて扱えるよう、永続ホームを先に決めておく。
+export EHA_ANTIGRAVITY_HOME="${EHA_ANTIGRAVITY_HOME:-/data/.agy}"
+export EHA_ANTIGRAVITY_BIN_DIR="${EHA_ANTIGRAVITY_BIN_DIR:-$EHA_ANTIGRAVITY_HOME/bin}"
+export EHA_ANTIGRAVITY_BIN="${EHA_ANTIGRAVITY_BIN:-$EHA_ANTIGRAVITY_BIN_DIR/agy}"
+mkdir -p "$EHA_ANTIGRAVITY_HOME" "$EHA_ANTIGRAVITY_BIN_DIR"
+echo "[run] Antigravity home: ${EHA_ANTIGRAVITY_HOME}"
+echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
+
 # --- Claude 設定ディレクトリ ---
 # デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。
 # アンインストール時に /data/ が消えても記憶・認証が /config/ 側に残る。

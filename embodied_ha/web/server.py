@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
-import json, os, subprocess, time, queue, threading, tempfile
+import json, os, subprocess, time, queue, threading, tempfile, sys
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -8,6 +8,12 @@ from urllib.parse import urlparse, parse_qs
 
 WEB_DIR    = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_DIR = os.path.dirname(WEB_DIR)  # repo root
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+try:
+    import antigravity_setup  # type: ignore
+except Exception:
+    antigravity_setup = None
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -183,6 +189,11 @@ HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 CLAUDE_CONFIG_DIR_PATH = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
 
+_ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
+_ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
+_ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
+_ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
+
 
 def is_authenticated() -> bool:
     # APIキー認証
@@ -195,6 +206,52 @@ def is_authenticated() -> bool:
         if os.path.exists(os.path.join(CLAUDE_CONFIG_DIR_PATH, fname)):
             return True
     return False
+
+
+def antigravity_status() -> dict:
+    if antigravity_setup is None:
+        return {
+            "installed": False,
+            "authenticated": False,
+            "installing": False,
+            "login_active": False,
+            "home_dir": os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/.agy"),
+            "bin_dir": os.environ.get("EHA_ANTIGRAVITY_BIN_DIR", ""),
+            "binary_path": os.environ.get("EHA_ANTIGRAVITY_BIN", ""),
+            "oauth_token_path": "",
+            "install_url": "https://antigravity.google/cli/install.sh",
+        }
+    state = antigravity_setup.state()
+    state["installing"] = _ANTIGRAVITY_INSTALL_LOCK.locked()
+    state["login_active"] = _ANTIGRAVITY_LOGIN_SESSION_LOCK.locked()
+    return state
+
+
+def _stop_antigravity_process(proc, master_fd=None, use_ctrl_d: bool = False):
+    """Antigravity の後始末。
+
+    login の PTY には Ctrl-D を 2 回送り、それでも残るなら kill する。
+    install など PTY のない処理は terminate -> kill の順で止める。
+    """
+    if use_ctrl_d and master_fd is not None:
+        for _ in range(2):
+            try:
+                os.write(master_fd, b"\x04")
+                time.sleep(0.1)
+            except OSError:
+                break
+
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 # --- SSE クライアント管理 ---
 _sse_clients: list = []
@@ -479,6 +536,267 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def _serve_setup_antigravity_install(self):
+        """Antigravity CLI を公式 install.sh からオンデマンド導入し、進捗を SSE 配信する。"""
+        import subprocess as _sp
+
+        if not _ANTIGRAVITY_INSTALL_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': 'Antigravity install is already running'}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        q: queue.Queue = queue.Queue(maxsize=200)
+        proc_box = {"proc": None}
+        stop_event = threading.Event()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def run_install():
+            proc = None
+            try:
+                if antigravity_setup is None:
+                    raise RuntimeError("antigravity helpers unavailable")
+                home_dir = antigravity_setup.home_dir()
+                bin_dir = antigravity_setup.bin_dir()
+                os.makedirs(home_dir, exist_ok=True)
+                os.makedirs(bin_dir, exist_ok=True)
+                script = antigravity_setup.fetch_install_script(timeout=60)
+                env = os.environ.copy()
+                env["HOME"] = home_dir
+                env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+                proc = _sp.Popen(
+                    ["bash", "-s", "--", "--dir", bin_dir],
+                    stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                    text=True, bufsize=1, env=env
+                )
+                proc_box["proc"] = proc
+                assert proc.stdin is not None and proc.stdout is not None
+                proc.stdin.write(script)
+                proc.stdin.close()
+                for line in proc.stdout:
+                    if stop_event.is_set():
+                        break
+                    line = line.rstrip("\n")
+                    if line:
+                        q.put(("line", line))
+                if not stop_event.is_set():
+                    rc = proc.wait()
+                    q.put(("done", rc))
+            except Exception as e:
+                if not stop_event.is_set():
+                    q.put(("error", str(e)))
+            finally:
+                _stop_antigravity_process(proc)
+                try:
+                    _ANTIGRAVITY_INSTALL_LOCK.release()
+                except Exception:
+                    pass
+
+        threading.Thread(target=run_install, daemon=True).start()
+
+        try:
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps({'code': data})}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    if stop_event.is_set():
+                        break
+                    self.wfile.write(b":" + b" ping" + b"\n\n")
+                    self.wfile.flush()
+        except Exception:
+            stop_event.set()
+            _stop_antigravity_process(proc_box["proc"])
+        finally:
+            stop_event.set()
+            _stop_antigravity_process(proc_box["proc"])
+    def _serve_setup_antigravity_login(self):
+        """Antigravity auth login を PTY で起動し、URL と TUI 出力を SSE 配信する。"""
+        import subprocess as _sp, pty, select, re as _re
+
+        if not _ANTIGRAVITY_LOGIN_SESSION_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': 'Antigravity login session is already active'}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        q: queue.Queue = queue.Queue(maxsize=200)
+        proc_box = {"proc": None, "master_fd": None}
+        stop_event = threading.Event()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def run_login():
+            master_fd = None
+            proc = None
+            try:
+                if antigravity_setup is None:
+                    raise RuntimeError("antigravity helpers unavailable")
+                if not antigravity_setup.is_installed():
+                    raise RuntimeError("Antigravity CLI is not installed")
+                master_fd, slave_fd = pty.openpty()
+                proc_box["master_fd"] = master_fd
+                with _ANTIGRAVITY_LOGIN_PTY_LOCK:
+                    _ANTIGRAVITY_LOGIN_PTY_FD[0] = master_fd
+
+                env = os.environ.copy()
+                env["HOME"] = antigravity_setup.home_dir()
+                env["TERM"] = "dumb"
+                proc = _sp.Popen(
+                    [antigravity_setup.binary_path(), "auth", "login"],
+                    stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+                    close_fds=True, env=env
+                )
+                proc_box["proc"] = proc
+                os.close(slave_fd)
+
+                ansi = _re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[0-9])")
+                url_re = _re.compile(r"https://\S+")
+                buf = ""
+                url_found = False
+                deadline = time.time() + 600
+
+                while time.time() < deadline and not stop_event.is_set():
+                    try:
+                        r, _, _ = select.select([master_fd], [], [], 0.5)
+                        if not r:
+                            if proc.poll() is not None:
+                                break
+                            if antigravity_setup.is_authenticated():
+                                _stop_antigravity_process(proc, master_fd=master_fd, use_ctrl_d=True)
+                                break
+                            continue
+
+                        raw = os.read(master_fd, 4096).decode("utf-8", errors="replace")
+                        clean = ansi.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
+                        buf += clean
+
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            if not url_found:
+                                m = url_re.search(line)
+                                if m:
+                                    q.put(("line", m.group(0)))
+                                    url_found = True
+                            if line.strip():
+                                q.put(("line", line))
+                    except (OSError, IOError):
+                        break
+                    if proc.poll() is not None:
+                        break
+
+                if not stop_event.is_set():
+                    rc = proc.poll()
+                    q.put(("done", rc if rc is not None else 0))
+            except Exception as e:
+                if not stop_event.is_set():
+                    q.put(("error", str(e)))
+            finally:
+                with _ANTIGRAVITY_LOGIN_PTY_LOCK:
+                    _ANTIGRAVITY_LOGIN_PTY_FD[0] = None
+                _stop_antigravity_process(proc, master_fd=master_fd, use_ctrl_d=True)
+                try:
+                    _ANTIGRAVITY_LOGIN_SESSION_LOCK.release()
+                except Exception:
+                    pass
+                if master_fd is not None:
+                    try:
+                        os.close(master_fd)
+                    except OSError:
+                        pass
+
+        threading.Thread(target=run_login, daemon=True).start()
+
+        try:
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps({'code': data})}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    if stop_event.is_set():
+                        break
+                    self.wfile.write(b":" + b" ping" + b"\n\n")
+                    self.wfile.flush()
+        except Exception:
+            stop_event.set()
+            _stop_antigravity_process(proc_box["proc"], master_fd=proc_box["master_fd"], use_ctrl_d=True)
+        finally:
+            stop_event.set()
+            _stop_antigravity_process(proc_box["proc"], master_fd=proc_box["master_fd"], use_ctrl_d=True)
+    def _serve_setup_antigravity_input(self, payload: dict):
+        with _ANTIGRAVITY_LOGIN_PTY_LOCK:
+            fd = _ANTIGRAVITY_LOGIN_PTY_FD[0]
+        if fd is None:
+            self.send_json({"error": "no active Antigravity login session"}, 400)
+            return
+        text = (payload.get("text") or "")
+        key = (payload.get("key") or "").strip().lower()
+        if text:
+            os.write(fd, text.encode("utf-8") + b"\r")
+            self.send_json({"ok": True})
+            return
+        keymap = {
+            "enter": b"\r",
+            "return": b"\r",
+            "tab": b"\t",
+            "esc": b"\x1b",
+            "escape": b"\x1b",
+            "up": b"\x1b[A",
+            "down": b"\x1b[B",
+            "right": b"\x1b[C",
+            "left": b"\x1b[D",
+            "space": b" ",
+            "ctrl_c": b"\x03",
+        }
+        if key not in keymap:
+            self.send_json({"error": "text or supported key is required"}, 400)
+            return
+        os.write(fd, keymap[key])
+        self.send_json({"ok": True})
+
     def send_json(self, obj, status: int = 200):
         data = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(status)
@@ -558,7 +876,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_error(500, str(e))
         elif path == "/api/setup/status":
-            self.send_json({"authenticated": is_authenticated()})
+            self.send_json({"authenticated": is_authenticated(), "antigravity": antigravity_status()})
+        elif path == "/api/setup/antigravity/status":
+            self.send_json(antigravity_status())
+        elif path == "/api/setup/antigravity/install":
+            self._serve_setup_antigravity_install()
+        elif path == "/api/setup/antigravity/login":
+            self._serve_setup_antigravity_login()
         elif path == "/api/setup/login":
             self._serve_setup_login()
         elif path == "/api/preferences":
@@ -713,6 +1037,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 os.write(fd, (code + "\r").encode())
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length))
+                if path.endswith("login-code") and isinstance(body, dict) and "text" not in body and "code" in body:
+                    body = {"text": body.get("code", "")}
+                self._serve_setup_antigravity_input(body if isinstance(body, dict) else {})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/send":
