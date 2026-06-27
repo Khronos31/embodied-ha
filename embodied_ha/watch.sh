@@ -340,6 +340,9 @@ anomaly_context = os.environ.get("ANOMALY_CONTEXT", "（特になし）")
 character     = os.environ.get("CHARACTER", "")
 resident      = os.environ.get("RESIDENT", "ユーザー")
 body_state    = os.environ.get("EHA_BODY_STATE", "") or "{}"
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+import body_state as _bs_mod
+body_narrative = _bs_mod.format_state_as_narrative(_bs_mod.normalize_state(json.loads(body_state)))
 body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 features_md   = os.environ.get("FEATURES_MD", "")
 features_presented = os.environ.get("FEATURES_PRESENTED", "")
@@ -396,8 +399,7 @@ context = f"""# あなた自身について
 【内なる衝動】
 {inner_voice}
 【身体状態】
-{body_state}
-- curiosity が高いほど細部を掘る。energy が低いほど短く。stress が高いほど静かに。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
+{body_narrative}
 - 理由をうまく言えないのに少し落ち着かない感覚があるなら、その感覚を尊重してよい。必要なら無理に説明せず、身体ごと見に行く・窓だけつなぐ・戻るという判断をしてよい。
 
 {body_location_context}

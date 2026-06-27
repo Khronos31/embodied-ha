@@ -68,7 +68,7 @@ def normalize_state(raw: Any) -> dict[str, Any]:
         return state
 
     for key in STATE_KEYS:
-        state[key] = round(_clamp(raw.get(key), state[key]), 3)
+        state[key] = round(_clamp(raw.get(key), 0.0, 1.0, state[key]), 3)
 
     try:
         state["session_count"] = int(raw.get("session_count", 0) or 0)
@@ -109,6 +109,47 @@ def public_state(state: Mapping[str, Any]) -> dict[str, Any]:
 
 def serialize_state(state: Mapping[str, Any]) -> str:
     return json.dumps(public_state(dict(state)), ensure_ascii=False, separators=(",", ":"))
+
+
+def format_state_as_narrative(state: Mapping[str, Any]) -> str:
+    """Return a natural-language description of the homeostasis state."""
+    s = normalize_state(dict(state))
+
+    def _pick(value: float, low: str, mid: str, high: str) -> str:
+        if value < 0.35:
+            return low
+        if value <= 0.65:
+            return mid
+        return high
+
+    parts = []
+
+    energy_desc = _pick(s["energy"], "だるい、疲れてる", "まあまあ", "しゃきっとしてる")
+    parts.append(f"気力: {energy_desc}")
+
+    curiosity_desc = _pick(
+        s["curiosity"],
+        "特に気になることはない",
+        "なんとなく気になることがある",
+        "あちこち気になる、なんか知りたくてうずうず",
+    )
+    parts.append(f"好奇心: {curiosity_desc}")
+
+    stress_desc = _pick(s["stress"], "落ち着いてる", "少し張り詰めてる", "かなりそわそわしてる")
+    parts.append(f"落ち着き: {stress_desc}")
+
+    confidence_desc = _pick(s["confidence"], "慎重になってる", "ふつう", "はっきり言える感じ")
+    parts.append(f"自信: {confidence_desc}")
+
+    social_desc = _pick(
+        s["social_openness"],
+        "あまり話しかけたくない",
+        "どちらでもない",
+        "話しかけたい、少し開いてる",
+    )
+    parts.append(f"話す気分: {social_desc}")
+
+    return "\n".join(f"- {p}" for p in parts)
 
 
 def load_state(path: str) -> dict[str, Any]:

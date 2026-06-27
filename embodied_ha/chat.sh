@@ -215,6 +215,9 @@ turn_taking_state = os.environ.get("TURN_TAKING_STATE", "")
 character       = os.environ.get("CHARACTER", "")
 resident        = os.environ.get("RESIDENT", "ユーザー")
 body_state      = os.environ.get("EHA_BODY_STATE", "") or "{}"
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+import body_state as _bs_mod
+body_narrative = _bs_mod.format_state_as_narrative(_bs_mod.normalize_state(json.loads(body_state)))
 body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "")
 active_desires_raw = os.environ.get("ACTIVE_DESIRES", "")
@@ -287,8 +290,7 @@ prompt = f"""# あなた自身について
 {inner_voice}
 
 # 身体状態
-{body_state}
-- curiosity が高いほど、少し踏み込んで考える。energy が低いほど、返事は短く省エネに。stress が高いほど、落ち着いて控えめに。confidence が高いほど、断定気味に。social_openness が高いほど、会話を開きやすくする。
+{body_narrative}
 
 {body_location_context}
 

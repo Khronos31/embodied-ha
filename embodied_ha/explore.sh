@@ -97,6 +97,18 @@ trap '_web_idle' EXIT
 
 COMMON_CHAR="$CHARACTER"
 BODY_STATE="${EHA_BODY_STATE:-{}}"
+BODY_NARRATIVE=$(BODY_STATE="$BODY_STATE" SCRIPT_DIR="$SCRIPT_DIR" python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+import body_state as bs
+
+raw = json.loads(os.environ.get("BODY_STATE") or "{}")
+print(bs.format_state_as_narrative(raw))
+PYEOF
+)
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
 ACTIVE_DESIRES_RAW="${ACTIVE_DESIRES:-}"
 INNER_VOICE=$(ACTIVE_DESIRES="$ACTIVE_DESIRES_RAW" python3 - <<'PYEOF'
@@ -222,9 +234,7 @@ SYS_PROMPT="${COMMON_CHAR}
 ${INNER_VOICE}
 
 # 身体状態
-${BODY_STATE}
-- curiosity が高いほど新規の掘り下げを優先。energy が低いほど短く省エネに。stress が高いほど落ち着いて。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
-- なぜか少し落ち着かないときは、その理由を言語化できなくてもよい。直接見に行く、聞きに行く、馴染みのある場所へ戻る、という判断を自然に選んでよい。
+${BODY_NARRATIVE}
 
 ${BODY_LOCATION_CONTEXT}
 
