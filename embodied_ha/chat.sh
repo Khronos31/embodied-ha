@@ -154,6 +154,28 @@ print(json.dumps(state, ensure_ascii=False, indent=2))
 # --- 在宅・部屋状況（応答先の決定に使う。sensorsマニフェストをTemplate APIで描画）---
 SENSORS=$(python3 "$SCRIPT_DIR/render-sensors.py" --context chat 2>/dev/null || echo "取得失敗")
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
+# 電脳体がカメラエンティティに投射中なら画像を事前取得
+PROJECTED_CAMERA_B64=""
+PROJECTED_CAMERA_SOURCE=""
+_PROJECTED_HOST=$(EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 -c "
+import json, os
+f = (os.environ.get('EHA_BODY_LOCATION_FILE') or
+     '/config/embodied-ha/body_location.json')
+try:
+    d = json.load(open(f, encoding='utf-8'))
+    h = (d.get('projected_host') or '').strip()
+    if h.startswith('camera.'):
+        print(h)
+except Exception:
+    pass
+" 2>/dev/null || true)
+if [ -n "$_PROJECTED_HOST" ]; then
+    PROJECTED_CAMERA_SOURCE="$_PROJECTED_HOST"
+    PROJECTED_CAMERA_B64=$(curl -sf --max-time 8 \
+        -H "Authorization: Bearer ${SUPERVISOR_TOKEN:-}" \
+        "http://supervisor/core/api/camera_proxy/$_PROJECTED_HOST" 2>/dev/null \
+        | base64 -w 0 2>/dev/null || true)
+fi
 
 # --- features.md（アドオンの機能一覧。会話の文脈が自然なら紹介してよい）---
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
@@ -189,7 +211,7 @@ PYEOF
 )"
 
 # --- Claude呼び出し ---
-RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" RECENT_CHAT_CONTEXT="$RECENT_CHAT_CONTEXT" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" ACTIVE_DESIRES="${ACTIVE_DESIRES:-}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" RECENT_CHAT_CONTEXT="$RECENT_CHAT_CONTEXT" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" PROJECTED_CAMERA_B64="$PROJECTED_CAMERA_B64" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" ACTIVE_DESIRES="${ACTIVE_DESIRES:-}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess, sys
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
@@ -220,6 +242,9 @@ import body_state as _bs_mod
 body_narrative = _bs_mod.format_state_as_narrative(_bs_mod.normalize_state(json.loads(body_state)))
 body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "")
+projected_cam_b64 = os.environ.get("PROJECTED_CAMERA_B64", "")
+projected_cam_source = os.environ.get("PROJECTED_CAMERA_SOURCE", "")
+projected_camera_note = (f"# 現在の視界（電脳体: {projected_cam_source}）\n今あなたが投射しているカメラの映像を受け取っています。" if projected_cam_source else "")
 active_desires_raw = os.environ.get("ACTIVE_DESIRES", "")
 
 active_desires = []
@@ -259,6 +284,8 @@ recent_chat_context_block = f"# 今日の会話（それ以前）\n{recent_chat_
 prompt = f"""# あなた自身について
 
 {character}
+
+{projected_camera_note}
 
 普段は家の様子を静かに見守ったり、自分から家の中を探索したりしていますが、今は{resident}さんから直接話しかけられています。
 このチャットに現れるのは{resident}さんだけです。

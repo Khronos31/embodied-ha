@@ -66,6 +66,28 @@ tlog "2c.loops list"
 
 # --- 2d. anomaly 検出（センサー急変 / 未解決ループ / ズレ）---
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
+# 電脳体がカメラエンティティに投射中なら画像を事前取得
+PROJECTED_CAMERA_B64=""
+PROJECTED_CAMERA_SOURCE=""
+_PROJECTED_HOST=$(EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 -c "
+import json, os
+f = (os.environ.get('EHA_BODY_LOCATION_FILE') or
+     '/config/embodied-ha/body_location.json')
+try:
+    d = json.load(open(f, encoding='utf-8'))
+    h = (d.get('projected_host') or '').strip()
+    if h.startswith('camera.'):
+        print(h)
+except Exception:
+    pass
+" 2>/dev/null || true)
+if [ -n "$_PROJECTED_HOST" ]; then
+    PROJECTED_CAMERA_SOURCE="$_PROJECTED_HOST"
+    PROJECTED_CAMERA_B64=$(curl -sf --max-time 8 \
+        -H "Authorization: Bearer ${SUPERVISOR_TOKEN:-}" \
+        "http://supervisor/core/api/camera_proxy/$_PROJECTED_HOST" 2>/dev/null \
+        | base64 -w 0 2>/dev/null || true)
+fi
 ANOMALY_CONTEXT=$(SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" SENSORS_DATA="$SENSORS" OPEN_LOOPS_JSON="$OPEN_LOOPS_JSON" TRIGGER_REASON="${TRIGGER_REASON:-定期実行}" python3 << 'PYEOF'
 import os
 import sys
@@ -198,7 +220,7 @@ if ctx:
         print(f"export {key}={shlex.quote(str(value))}")
 PYEOF
 )"
-RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
+RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" PROJECTED_CAMERA_B64="$PROJECTED_CAMERA_B64" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
 import base64, json, os, re, subprocess, sys, urllib.request, time
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
@@ -524,6 +546,11 @@ phase2_prompt = context + f"""
 }}"""
 
 content = []
+projected_cam_b64 = os.environ.get("PROJECTED_CAMERA_B64", "")
+projected_cam_source = os.environ.get("PROJECTED_CAMERA_SOURCE", "")
+if projected_cam_b64:
+    content.append({"type": "text", "text": f"# 現在の視界（電脳体: {projected_cam_source}）\n今あなたが投射しているカメラの映像です。"})
+    content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": projected_cam_b64}})
 for cam in selected:
     path = CAMERA_PATHS.get(cam)
     if path:

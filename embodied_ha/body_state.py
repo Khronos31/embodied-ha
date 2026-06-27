@@ -242,6 +242,12 @@ def advance_tick(
         embodiment_tension += remote_drift
         return_to_body_pressure += remote_drift * 0.8
 
+    # カメラへの投射が続くと視覚疲労が蓄積する
+    remote_host = _clean(current.get("remote_avatar_host", ""))
+    if remote_host.startswith("camera."):
+        visual_bump = min(0.015, 0.005 + elapsed_hours * 0.006)
+        return_to_body_pressure += visual_bump
+
     if reason and reason not in ("定期実行", "手動実行"):
         curiosity += 0.015
         stress += 0.010

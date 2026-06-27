@@ -110,6 +110,27 @@ print(bs.format_state_as_narrative(raw))
 PYEOF
 )
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
+PROJECTED_CAMERA_B64=""
+PROJECTED_CAMERA_SOURCE=""
+_PROJECTED_HOST=$(EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 -c "
+import json, os
+f = (os.environ.get('EHA_BODY_LOCATION_FILE') or
+     '/config/embodied-ha/body_location.json')
+try:
+    d = json.load(open(f, encoding='utf-8'))
+    h = (d.get('projected_host') or '').strip()
+    if h.startswith('camera.'):
+        print(h)
+except Exception:
+    pass
+" 2>/dev/null || true)
+if [ -n "$_PROJECTED_HOST" ]; then
+    PROJECTED_CAMERA_SOURCE="$_PROJECTED_HOST"
+    PROJECTED_CAMERA_B64=$(curl -sf --max-time 8 \
+        -H "Authorization: Bearer ${SUPERVISOR_TOKEN:-}" \
+        "http://supervisor/core/api/camera_proxy/$_PROJECTED_HOST" 2>/dev/null \
+        | base64 -w 0 2>/dev/null || true)
+fi
 ACTIVE_DESIRES_RAW="${ACTIVE_DESIRES:-}"
 INNER_VOICE=$(ACTIVE_DESIRES="$ACTIVE_DESIRES_RAW" python3 - <<'PYEOF'
 import json, os
@@ -218,6 +239,10 @@ if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
 fi
 
 FEATURES_NOTE=""
+PROJECTED_CAMERA_NOTE=""
+if [ -n "$PROJECTED_CAMERA_SOURCE" ]; then
+  PROJECTED_CAMERA_NOTE="【現在の視界】電脳体が ${PROJECTED_CAMERA_SOURCE} に投射中です。映像自体は watch.sh で確認済みです。"
+fi
 if [ -n "$FEATURES_MD" ]; then
   _presented_note=""
   [ -n "$FEATURES_PRESENTED" ] && _presented_note="既に伝えた機能: ${FEATURES_PRESENTED}（繰り返し紹介しなくてよい）
@@ -235,6 +260,8 @@ ${INNER_VOICE}
 
 # 身体状態
 ${BODY_NARRATIVE}
+
+${PROJECTED_CAMERA_NOTE}
 
 ${BODY_LOCATION_CONTEXT}
 

@@ -63,5 +63,13 @@
       "remote_wander",
       "remote_avatar"
     ]
+  },
+  "camera_visual_fatigue": {
+    "growth_rate": 0.008,
+    "priority": 1.05,
+    "prompt": "ずっとカメラの映像を見続けていた。少し目を離したい。",
+    "tags": [
+      "camera"
+    ]
   }
 }

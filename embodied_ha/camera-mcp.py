@@ -232,6 +232,26 @@ def main():
                         "isError": True
                     }})
                     continue
+                # projected_room が空なら物理体モード → カメラ使用不可
+                import json as _json_bl
+                _bl_path = (os.environ.get("EHA_BODY_LOCATION_FILE") or
+                            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "body_location.json"))
+                try:
+                    with open(_bl_path, encoding="utf-8") as _f:
+                        _bl = _json_bl.load(_f)
+                    _projected_room = (_bl.get("projected_room") or "").strip()
+                except Exception:
+                    _projected_room = "unknown"  # 読めない場合は通す（fail open）
+
+                if _projected_room == "":
+                    send({"jsonrpc": "2.0", "id": id_, "result": {
+                        "content": [{"type": "text", "text": (
+                            "物理体モードではカメラは使えません。"
+                            "カメラを見るには enter_cyberspace でカメラエンティティに投射してください。"
+                        )}],
+                        "isError": True
+                    }})
+                    continue
                 b64, url = fetch_image(source, args.ha_url, args.go2rtc_url)
                 if b64:
                     context = camera_context(source)

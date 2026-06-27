@@ -431,6 +431,7 @@ def decay_tick(
         is_return = _has_tag(cfg, "return_to_body")
         is_stretch = _has_tag(cfg, "stretch")
         is_remote_roam = _has_tag(cfg, "remote_wander")
+        is_camera_view = _has_tag(cfg, "camera")
 
         suppressed_until = _parse_ts(record.get("suppressed_until"))
         if record["state"] == "suppressed" and suppressed_until is not None and current_now < suppressed_until:
@@ -473,6 +474,15 @@ def decay_tick(
                     growth += max(0.0, 0.55 - stress) * 0.05
                 if curiosity is not None and curiosity <= 0.45:
                     growth += max(0.0, 0.45 - curiosity) * 0.04
+
+        if is_camera_view:
+            remote_host = _clean((body_state or {}).get("remote_avatar_host", ""))
+            if remote_host.startswith("camera."):
+                growth += 0.06 * tick_factor
+            elif record["state"] in {"active", "dormant"} and record["charge"] > 0.1:
+                record["state"] = "satisfied"
+                record["satisfaction"] = round(max(record["satisfaction"], 0.80), 3)
+                record["charge"] = round(min(record["charge"], 0.30), 3)
 
         if is_remote_roam:
             if remote_mode == "remote_avatar" or _recent_action_matches(body_state, mode="remote_avatar", now=current_now):
