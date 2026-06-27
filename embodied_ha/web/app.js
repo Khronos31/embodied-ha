@@ -20,6 +20,7 @@ let extraContextData = "";
 let characterName = 'Claude';
 let antigravitySetupState = null;
 let antigravitySetupSource = null;
+let antigravityAuthPollActive = false;
 
 function updateCharacterName(prefs) {
     characterName = ((prefs && prefs.character_name) || 'Claude').trim() || 'Claude';
@@ -1150,6 +1151,7 @@ async function loadSttProviders(currentProvider) {
     }
 }
 
+
 function setAntigravityLog(lines) {
     const logEl = document.getElementById('antigravity-log');
     if (logEl) logEl.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
@@ -1163,9 +1165,23 @@ function appendAntigravityLog(line) {
     logEl.textContent = current.slice(-120).join('\n');
     logEl.scrollTop = logEl.scrollHeight;
 }
+
+function clearAntigravityAuthUi() {
+    const container = document.getElementById('antigravity-auth-ui');
+    if (container) container.innerHTML = '';
+}
+
+function setAntigravityAuthStatus(message, kind = 'info') {
+    const statusEl = document.getElementById('antigravity-auth-status');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = `form-hint ${kind}`.trim();
+}
+
 function renderAntigravityStatus(data) {
     const statusEl = document.getElementById('antigravity-status-text');
     if (statusEl) {
+        statusEl.style.display = 'block';
         if (!data) {
             statusEl.textContent = '状態を取得できませんでした。';
         } else {
@@ -1184,8 +1200,6 @@ function renderAntigravityStatus(data) {
     const authBadge = document.getElementById('antigravity-status-authenticated');
     const homeDirEl = document.getElementById('antigravity-status-home');
     const binPathEl = document.getElementById('antigravity-status-bin');
-    const step1El = document.getElementById('antigravity-step-1');
-    const step2El = document.getElementById('antigravity-step-2');
 
     if (data) {
         if (installedBadge) {
@@ -1198,27 +1212,7 @@ function renderAntigravityStatus(data) {
         }
         if (homeDirEl) homeDirEl.textContent = data.home_dir || '(unknown)';
         if (binPathEl) binPathEl.textContent = data.binary_path || '(unknown)';
-
-        // Stepper state update
-        if (step1El && step2El) {
-            if (data.installed) {
-                step1El.classList.remove('active');
-                step1El.classList.add('completed');
-                step2El.classList.add('active');
-            } else {
-                step1El.classList.add('active');
-                step1El.classList.remove('completed');
-                step2El.classList.remove('active', 'completed');
-            }
-
-            if (data.authenticated) {
-                step2El.classList.remove('active');
-                step2El.classList.add('completed');
-            } else if (data.installed) {
-                step2El.classList.add('active');
-                step2El.classList.remove('completed');
-            }
-        }
+        if (data.authenticated) clearAntigravityAuthUi();
     } else {
         if (installedBadge) {
             installedBadge.textContent = '取得失敗';
@@ -1230,12 +1224,6 @@ function renderAntigravityStatus(data) {
         }
         if (homeDirEl) homeDirEl.textContent = '-';
         if (binPathEl) binPathEl.textContent = '-';
-
-        if (step1El && step2El) {
-            step1El.classList.add('active');
-            step1El.classList.remove('completed');
-            step2El.classList.remove('active', 'completed');
-        }
     }
 }
 
@@ -1254,10 +1242,16 @@ async function refreshAntigravityStatus() {
         } else if (data.authenticated) {
             appendAntigravityLog('Antigravity は認証済みです。');
         }
+        return data;
     } catch (err) {
         renderAntigravityStatus(null);
         appendAntigravityLog(`status error: ${err?.message || err}`);
+        return null;
     }
+}
+
+async function updateAntigravityStatus() {
+    return refreshAntigravityStatus();
 }
 
 function clearAntigravitySource() {
@@ -1328,13 +1322,130 @@ function startAntigravityInstallAndLogin() {
     startAntigravityInstall();
 }
 
+function showAntigravityUrlUi(url) {
+    const container = document.getElementById('antigravity-auth-ui');
+    if (!container) return;
+    const safeUrl = escapeHtml(url);
+    container.innerHTML = `
+        <div class="setup-choices" style="margin-top: 12px;">
+            <a href="${safeUrl}" target="_blank" class="setup-choice-btn"
+               style="text-decoration:none;text-align:center;display:flex;justify-content:center;margin-bottom:10px;">
+                🔗 認証ページを開く
+            </a>
+            <form class="setup-input-row" onsubmit="submitAntigravityCode(event)">
+                <input type="text" id="agy-code-input" class="setup-input"
+                       placeholder="ブラウザに表示されたコードを貼り付け..." autocomplete="off">
+                <button type="submit" class="setup-send-btn">送信</button>
+            </form>
+            <p class="form-hint" id="antigravity-auth-status" style="margin-top: 6px;">認証ページを開いて、表示されたコードを入力してください。</p>
+        </div>
+    `;
+    setTimeout(() => document.getElementById('agy-code-input')?.focus(), 50);
+}
+
+async function submitAntigravityCode(e) {
+    e.preventDefault();
+    const input = document.getElementById('agy-code-input');
+    const code = input?.value?.trim();
+    if (!code) return;
+    try {
+        const res = await fetch(`${base}/api/setup/antigravity/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ input: code + '\n' })
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            setAntigravityAuthStatus(body || `送信に失敗しました (${res.status})`, 'error');
+            return;
+        }
+        setAntigravityAuthStatus('コードを送信しました。認証完了を待っています...');
+        if (input) input.value = '';
+        pollAntigravityAuth();
+    } catch (err) {
+        setAntigravityAuthStatus(`送信エラー: ${err?.message || err}`, 'error');
+    }
+}
+
+async function pollAntigravityAuth() {
+    if (antigravityAuthPollActive) return;
+    antigravityAuthPollActive = true;
+    try {
+        while (true) {
+            await new Promise(r => setTimeout(r, 3000));
+            try {
+                const res = await fetch(`${base}/api/setup/antigravity/status`);
+                const data = await res.json();
+                antigravitySetupState = data;
+                renderAntigravityStatus(data);
+                if (data.authenticated) {
+                    clearAntigravityAuthUi();
+                    return;
+                }
+            } catch (_) {}
+        }
+    } finally {
+        antigravityAuthPollActive = false;
+    }
+}
+
 function startAntigravityLogin() {
     if (antigravitySetupState?.login_active) {
         appendAntigravityLog('Antigravity 認証セッションはすでに進行中です。');
         return;
     }
-    appendAntigravityLog('認証セッションを開始します...');
-    startAntigravityStream('/api/setup/antigravity/login');
+    clearAntigravitySource();
+    clearAntigravityAuthUi();
+    const container = document.getElementById('antigravity-auth-ui');
+    if (container) {
+        container.innerHTML = '<p class="form-hint" id="antigravity-auth-status">認証セッションを開始しています...</p>';
+    }
+
+    const source = new EventSource(`${base}/api/setup/antigravity/login`);
+    let gotUrl = false;
+    let finished = false;
+    antigravitySetupSource = source;
+
+    source.addEventListener('url', (e) => {
+        try {
+            const { url } = JSON.parse(e.data);
+            if (!url || gotUrl) return;
+            gotUrl = true;
+            showAntigravityUrlUi(url);
+        } catch (err) {
+            setAntigravityAuthStatus(`URL の解析に失敗しました: ${err?.message || err}`, 'error');
+        }
+    });
+
+    source.addEventListener('waiting_code', () => {
+        setAntigravityAuthStatus('コードの入力待ちです。ブラウザで表示されたコードを貼り付けて送信してください。');
+        setTimeout(() => document.getElementById('agy-code-input')?.focus(), 50);
+    });
+
+    source.addEventListener('done', () => {
+        finished = true;
+        source.close();
+        clearAntigravitySource();
+        clearAntigravityAuthUi();
+        updateAntigravityStatus();
+        pollAntigravityAuth();
+    });
+
+    source.addEventListener('error', (e) => {
+        if (finished) return;
+        source.close();
+        clearAntigravitySource();
+        let message = 'Antigravity 認証に失敗しました。';
+        if (e && typeof e.data === 'string' && e.data) {
+            try {
+                const payload = JSON.parse(e.data);
+                message = payload.error || payload.text || message;
+            } catch (_) {
+                message = e.data;
+            }
+        }
+        setAntigravityAuthStatus(message, 'error');
+    });
 }
 
 async function sendAntigravityInput(textOverride = null) {

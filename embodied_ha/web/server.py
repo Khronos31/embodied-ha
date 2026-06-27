@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
-import json, os, subprocess, time, queue, threading, tempfile, sys
+import json, os, subprocess, time, queue, threading, tempfile, sys, re, re
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -193,6 +193,7 @@ _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
+_ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://\S+")
 
 
 def is_authenticated() -> bool:
@@ -252,6 +253,43 @@ def _stop_antigravity_process(proc, master_fd=None, use_ctrl_d: bool = False):
                 proc.kill()
             except Exception:
                 pass
+
+
+
+def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Queue):
+    """Antigravity login TUI の 1 行を解釈して自動応答する。"""
+    line_lower = line.lower()
+
+    if not state.get("sent_method"):
+        if "google" in line_lower or ("1." in line and "oauth" in line_lower):
+            os.write(master_fd, b"1\n")
+            state["sent_method"] = True
+            return
+
+    if not state.get("url_found"):
+        m = _ANTIGRAVITY_LOGIN_URL_RE.search(line)
+        if m:
+            q.put(("url", {"url": m.group(0)}))
+            state["url_found"] = True
+        return
+
+    if not state.get("sent_code_wait"):
+        if "code" in line_lower or "authorization" in line_lower:
+            q.put(("waiting_code", {}))
+            state["sent_code_wait"] = True
+        return
+
+    if "color scheme" in line_lower:
+        os.write(master_fd, b"\n")
+        return
+
+    if "terms of service" in line_lower or "terms" in line_lower:
+        os.write(master_fd, b"\x1b[B\x1b[C\n")
+        return
+
+    if "trust" in line_lower:
+        os.write(master_fd, b"\n")
+        return
 
 # --- SSE クライアント管理 ---
 _sse_clients: list = []
@@ -632,8 +670,9 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"])
+
     def _serve_setup_antigravity_login(self):
-        """Antigravity auth login を PTY で起動し、URL と TUI 出力を SSE 配信する。"""
+        """Antigravity auth login を PTY で起動し、URL と完了状態だけを SSE 配信する。"""
         import subprocess as _sp, pty, select, re as _re
 
         if not _ANTIGRAVITY_LOGIN_SESSION_LOCK.acquire(blocking=False):
@@ -685,9 +724,8 @@ class Handler(BaseHTTPRequestHandler):
                 os.close(slave_fd)
 
                 ansi = _re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[0-9])")
-                url_re = _re.compile(r"https://\S+")
                 buf = ""
-                url_found = False
+                state = {"sent_method": False, "url_found": False, "sent_code_wait": False}
                 deadline = time.time() + 600
 
                 while time.time() < deadline and not stop_event.is_set():
@@ -702,18 +740,12 @@ class Handler(BaseHTTPRequestHandler):
                             continue
 
                         raw = os.read(master_fd, 4096).decode("utf-8", errors="replace")
-                        clean = ansi.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
+                        clean = ansi.sub("", raw).replace("\\r\\n", "\\n").replace("\\r", "\\n")
                         buf += clean
 
-                        while "\n" in buf:
-                            line, buf = buf.split("\n", 1)
-                            if not url_found:
-                                m = url_re.search(line)
-                                if m:
-                                    q.put(("line", m.group(0)))
-                                    url_found = True
-                            if line.strip():
-                                q.put(("line", line))
+                        while "\\n" in buf:
+                            line, buf = buf.split("\\n", 1)
+                            _antigravity_login_handle_line(line, state, master_fd, q)
                     except (OSError, IOError):
                         break
                     if proc.poll() is not None:
@@ -745,8 +777,10 @@ class Handler(BaseHTTPRequestHandler):
             while True:
                 try:
                     etype, data = q.get(timeout=2)
-                    if etype == "line":
-                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    if etype == "url":
+                        msg = f"event: url\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    elif etype == "waiting_code":
+                        msg = f"event: waiting_code\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
                     elif etype == "done":
                         msg = f"event: done\ndata: {json.dumps({'code': data})}\n\n"
                     else:
@@ -766,14 +800,21 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"], master_fd=proc_box["master_fd"], use_ctrl_d=True)
+
+
     def _serve_setup_antigravity_input(self, payload: dict):
         with _ANTIGRAVITY_LOGIN_PTY_LOCK:
             fd = _ANTIGRAVITY_LOGIN_PTY_FD[0]
         if fd is None:
             self.send_json({"error": "no active Antigravity login session"}, 400)
             return
+        input_text = payload.get("input")
         text = (payload.get("text") or "")
         key = (payload.get("key") or "").strip().lower()
+        if input_text is not None:
+            os.write(fd, str(input_text).encode("utf-8"))
+            self.send_json({"ok": True})
+            return
         if text:
             os.write(fd, text.encode("utf-8") + b"\r")
             self.send_json({"ok": True})

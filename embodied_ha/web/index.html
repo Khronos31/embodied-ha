@@ -333,6 +333,171 @@
                         </section>
                     </div>
 
+                        <!-- Section: Extra Context -->
+                        <section class="settings-section card">
+                            <h3>追加コンテキスト (extra_context.conf)</h3>
+                            <p class="section-desc">毎回のLLM実行時、システムプロンプトの直後に追加される動的なテキスト（コンテキスト）を出力するシェルコマンドを1行に1個記述します。</p>
+                            <div class="form-group">
+                                <textarea id="setting-extra-context" rows="6" class="code-textarea" placeholder="例: date '+今日は%Y年%m月%d日です'"></textarea>
+                            </div>
+                        </section>
+
+                        <!-- Section: Presence -->
+                        <section class="settings-section card">
+                            <h3>在宅判定 (presence)</h3>
+                            <p class="section-desc">居住者が在宅しているか判定するためのエンティティを設定します。</p>
+                            <div class="form-group">
+                                <label>在宅判定スイッチ (entity)</label>
+                                <select id="setting-presence-entity" class="ha-entity-select" data-domain="input_boolean,binary_sensor,device_tracker,person">
+                                    <option value="">(未選択 / ロード中...)</option>
+                                </select>
+                            </div>
+                        </section>
+
+                        <!-- Section: Policies -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>行動ポリシー (policies)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addPolicyRow()">ポリシーを追加</button>
+                            </div>
+                            <p class="section-desc">エージェントの行動指針やルールを箇条書きで設定します。</p>
+                            <div id="policies-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 2: Input / Output -->
+                    <div class="settings-tab-content" id="settings-tab-io" style="display:none;">
+                        <!-- Section: Cameras -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>カメラ (cameras)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addCameraRow()">カメラを追加</button>
+                            </div>
+                            <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
+                            <div id="cameras-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Audio Sources -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>音声ソース (audio_sources)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addAudioSourceRow()">ソースを追加</button>
+                            </div>
+                            <p class="section-desc">
+                                あかねが「聴く」ことができる音声ソースを定義します。
+                                RTSPストリームURL（go2rtc経由）またはUSBマイク直接録音（<code>alsa</code>）を指定します。
+                                デフォルトソース（最初の行）は省略時に使用されます。
+                            </p>
+                            <div id="audio-sources-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: STT -->
+                        <section class="settings-section card">
+                            <h3>音声認識 (STT)</h3>
+                            <p class="section-desc">
+                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
+                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
+                                空欄の場合は音量検出のみ行います（文字起こしなし）。
+                            </p>
+                            <div class="form-group">
+                                <label class="form-label">STTプロバイダー (stt_provider)</label>
+                                <div class="stt-select-wrapper">
+                                    <select id="setting-stt-provider" class="form-input stt-loading">
+                                        <option value=""></option>
+                                    </select>
+                                </div>
+                                <div class="stt-loading-indicator visible" id="stt-provider-loading">
+                                    <span class="stt-spinner"></span>
+                                    <span>プロバイダー一覧を読み込んでいます…</span>
+                                </div>
+                                <div class="stt-error-banner" id="stt-provider-error">
+                                    <span class="stt-error-icon">⚠️</span>
+                                    <span>プロバイダー一覧の取得に失敗しました。HAの接続を確認してください。</span>
+                                </div>
+                                <p class="form-hint">HA統合で利用可能なSTTプロバイダー。未設定の場合は音量のみ検出します。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">STT言語 (stt_language)</label>
+                                <div class="stt-select-wrapper">
+                                    <select id="setting-stt-language" class="form-input stt-loading">
+                                        <option value=""></option>
+                                    </select>
+                                </div>
+                                <div class="stt-loading-indicator visible" id="stt-language-loading">
+                                    <span class="stt-spinner"></span>
+                                    <span>言語一覧を読み込んでいます…</span>
+                                </div>
+                                <div class="stt-error-banner" id="stt-language-error">
+                                    <span class="stt-error-icon">⚠️</span>
+                                    <span>言語一覧の取得に失敗しました。STTプロバイダーを確認してください。</span>
+                                </div>
+                                <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">ウェイクワード (wake_words)</label>
+                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: あかね, ねえあかね" style="max-width:320px;">
+                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
+                            </div>
+                        </section>
+
+
+                        <!-- Section: Speakers -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>発話先スピーカー (speakers)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
+                            </div>
+                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるかを選択できます。</p>
+                            <div id="speakers-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 3: Devices & Sensors -->
+                    <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
+                        <!-- Section: Entities (操作できる家電) -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>操作できる家電 (entities)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addEntityRow()">家電を追加</button>
+                            </div>
+                            <p class="section-desc">「リビングの電気つけて」のような操作を頼まれたとき、呼び方から entity_id を引くための対応表です。エンティティを選ぶと名前が自動で入ります（編集可）。同名が複数あるものは備考に「要確認」が付くので、不要な行は削除してください。</p>
+                            <div id="entities-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+
+                        <!-- Section: Sensors -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>おもなデバイス (sensors)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addSensorGroup()">グループを追加</button>
+                            </div>
+                            <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
+                            <div id="sensors-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
+                    </div>
+
+                    <!-- Tab 4: Advanced JSON Settings -->
+                    <div class="settings-tab-content" id="settings-tab-advanced" style="display:none;">
+                        <section class="settings-section card">
+                            <h3>preferences.json の直接編集</h3>
+                            <p class="section-desc">アドオンの設定JSONを直接編集できます。保存前に文法チェックが行われます。</p>
+                            <div class="form-group">
+                                <textarea id="setting-json-editor" placeholder="設定JSONを読み込み中..."></textarea>
+                            </div>
+                        </section>
+                    </div>
+
                     <!-- Tab 5: Experimental Features -->
                     <div class="settings-tab-content" id="settings-tab-experimental" style="display:none;">
                         <section class="settings-section card experimental-card">
@@ -346,40 +511,21 @@
                                 <span class="experimental-badge-pill">実験中機能</span>
                             </div>
 
-                            <div class="experimental-desc-box">
+                            <div class="experimental-desc-box" id="antigravity-description-box" style="margin-bottom: 16px;">
                                 <p class="section-desc">
-                                    Claude Code が音声入力を直接扱えないあいだだけ使う、暫定の聴覚バックエンドです。
-                                    ここでは Antigravity を後から導入し、音声ファイルを渡して聞こえた内容や特徴を要約・記録させます。
-                                    Embodied HA の「音が知りたい」という欲求を保ったまま実験できます。
+                                    エージェントが「音を聴きたい」と決意したとき、次のセッションで Antigravity（Google の AI エージェント）が一時的にハーネスを担い、録音した音声ファイルの内容や雰囲気を要約・記録します。Claude Code が音声に対応したら即座に取り外せる設計です。
                                 </p>
-                                <ul class="section-desc" style="padding-left: 20px; margin-top: 8px;">
-                                    <li>人間が意識的に起動する前提です。勝手に常時乗り換える機能ではありません。</li>
-                                    <li>音声の解釈は外部ハーネス依存なので、返り値や確信度は参考値として扱います。</li>
-                                    <li>この機能は Claude Code の音声対応が来たら差し替え前提で、即撤収できる設計にしています。</li>
-                                </ul>
-                            </div>
-
-                            <!-- Alert Box for Risks -->
-                            <div class="experimental-warning-callout">
-                                <h4>
-                                    <svg style="width: 16px; height: 16px; fill: currentColor; display: inline-block; vertical-align: middle; margin-top: -2px;" viewBox="0 0 24 24">
-                                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-                                    </svg>
-                                    実験に伴うリスクと制限
-                                </h4>
-                                <ul>
-                                    <li>別ハーネスに載せるため、会話の進行感や人格の一貫性が少し変わる可能性があります。</li>
-                                    <li>インストール後は認証まで自動で進みますが、外部サービス側の規約やログ保存の影響を受けます。</li>
-                                    <li>あくまで暫定策なので、将来の Claude Code 音声対応に置き換える前提で使います。</li>
-                                </ul>
+                                <p class="section-desc" style="margin-top: 6px; color: var(--claude-text-sub); font-size: 12px;">
+                                    利用には Google アカウントへの認証が必要です。音声データは外部に送信されます。
+                                </p>
                             </div>
 
                             <!-- Status Dashboard -->
-                            <div class="antigravity-dashboard">
+                            <div class="antigravity-dashboard" style="margin-bottom: 20px;">
                                 <div class="dashboard-title">接続ステータス</div>
                                 <div class="dashboard-grid">
                                     <div class="dashboard-item">
-                                        <span class="dashboard-label">インストール状況</span>
+                                        <span class="dashboard-label">導入状況</span>
                                         <div class="dashboard-value">
                                             <span id="antigravity-status-installed" class="status-badge unknown">読み込み中...</span>
                                         </div>
@@ -391,7 +537,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="dashboard-details">
+                                <div class="dashboard-details" style="display: none;">
                                     <div class="dashboard-detail-row">
                                         <span class="dashboard-label">ユーザーホーム:</span>
                                         <span id="antigravity-status-home" class="dashboard-detail-val">-</span>
@@ -401,72 +547,15 @@
                                         <span id="antigravity-status-bin" class="dashboard-detail-val">-</span>
                                     </div>
                                 </div>
-                                <p class="form-hint" id="antigravity-status-text" style="display: none;">状態を読み込み中...</p>
                             </div>
 
-                            <!-- Stepper Connection Process -->
-                            <div class="stepper-flow">
-                                <!-- Step 1 -->
-                                <div class="stepper-step active" id="antigravity-step-1">
-                                    <div class="step-num">Step 1</div>
-                                    <h4 class="step-title">Antigravity CLI の導入</h4>
-                                    <p class="step-desc">アドオン環境に Antigravity CLI をインストールします。インストール完了後、自動的に Step 2 の認証プロセスが開始されます。</p>
-                                    <div class="btn-group" style="margin-top: 8px; flex-wrap: wrap; gap: 8px;">
-                                        <button type="button" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2);" onclick="startAntigravityInstall()">インストール</button>
-                                        <button type="button" class="btn btn-secondary btn-sm" onclick="refreshAntigravityStatus()">状態更新</button>
-                                    </div>
-                                </div>
-
-                                <!-- Step 2 -->
-                                <div class="stepper-step" id="antigravity-step-2">
-                                    <div class="step-num">Step 2</div>
-                                    <h4 class="step-title">認証セッションとTUI操作</h4>
-                                    <p class="step-desc">ブラウザで認証を行うためのコードを入力するか、バックグラウンドのTUIプロセスへ操作キーを送信します。</p>
-
-                                    <div class="form-group" style="margin-top: 12px; max-width: 500px;">
-                                        <label class="form-label" style="font-size: 12px; font-weight: 600;">認証コード / TUI入力</label>
-                                        <div class="setup-input-row">
-                                            <input type="text" id="antigravity-input-text" class="setup-input" placeholder="authorization code か TUI への入力">
-                                            <button type="button" class="setup-send-btn" onclick="sendAntigravityInput()">送信</button>
-                                        </div>
-                                        <p class="form-hint" style="margin-top: 4px; font-size: 11px;">認証コードの貼り付けや、Enter / 矢印キー送信に使います。</p>
-                                    </div>
-
-                                    <div class="form-group" style="margin-top: 16px;">
-                                        <label class="form-label" style="font-size: 12px; font-weight: 600; margin-bottom: 6px; display: block;">TUI制御キー (クリックで送信)</label>
-                                        <div class="tui-keys-container">
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('enter')">Enter ↵</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('tab')">Tab ⇥</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('esc')">Esc ⎋</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('up')">↑ Up</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('down')">↓ Down</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('left')">← Left</button>
-                                            <button type="button" class="kbd-btn" onclick="sendAntigravityKey('right')">→ Right</button>
-                                        </div>
-                                    </div>
-                                </div>
+                            <div class="btn-group" style="margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                                <button type="button" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2);" onclick="startAntigravityInstall()">インストール</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="refreshAntigravityStatus()">状態更新</button>
                             </div>
 
-                            <!-- Sleek Monospace Terminal Console -->
-                            <div class="form-group" style="margin-top: 24px;">
-                                <label class="form-label" style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">進行ログ</label>
-                                <div class="terminal-console">
-                                    <div class="terminal-header">
-                                        <div class="terminal-dots">
-                                            <span class="terminal-dot red"></span>
-                                            <span class="terminal-dot yellow"></span>
-                                            <span class="terminal-dot green"></span>
-                                        </div>
-                                        <div class="terminal-title">ANTIGRAVITY CONSOLE</div>
-                                        <div class="terminal-actions">
-                                            <button type="button" class="terminal-action-btn" onclick="setAntigravityLog([])">Clear</button>
-                                        </div>
-                                    </div>
-                                    <div class="terminal-body">
-                                        <pre id="antigravity-log" class="terminal-log"></pre>
-                                    </div>
-                                </div>
-                            </div>
+                            <div id="antigravity-auth-ui" style="margin-top: 16px;"></div>
+
                         </section>
                     </div>
 
