@@ -1357,7 +1357,7 @@ async function submitAntigravityCode(e) {
         const res = await fetch(`${base}/api/setup/antigravity/input`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: code + '\n' })
+            body: JSON.stringify({ text: code })
         });
         if (!res.ok) {
             const body = await res.text().catch(() => '');
