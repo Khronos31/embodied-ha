@@ -297,10 +297,13 @@ def run_chat(message, source="chat"):
         source = str(source or "chat").strip() or "chat"
         print(f"[daemon] chat start [{source}]: {message[:30]}", flush=True)
         try:
-            body_state_snapshot = tick_body_state("chat", f"会話:{message[:40]}")
+            body_before = _load_body_state()
+            active_desires, _ = tick_desires(body_before, "chat", f"会話:{message[:40]}", emit_active=True)
+            body_state_snapshot = tick_body_state("chat", f"会話:{message[:40]}", active_desires)
         except Exception as e:
             print(f"[daemon] body state tick error (chat): {e}", flush=True)
             body_state_snapshot = _load_body_state()
+            active_desires = []
         env = {
             **os.environ,
             "CHAT_MESSAGE": message,
@@ -308,6 +311,8 @@ def run_chat(message, source="chat"):
             "PATH": ENV_PATH,
             "EHA_BODY_STATE": _body_state_json(body_state_snapshot),
         }
+        if active_desires:
+            env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
             proc = subprocess.run(["bash", CHAT_SH], env=env, timeout=CHAT_TIMEOUT)
             success = proc.returncode == 0
@@ -382,7 +387,7 @@ def mqtt_listen(topic, handler, label):
         time.sleep(5)
 
 
-def run_explore(body_state_snapshot=None, anomaly_state_snapshot=None):
+def run_explore(body_state_snapshot=None, anomaly_state_snapshot=None, active_desires=None):
     if not _explore_lock.acquire(blocking=False):
         print("[daemon] explore already running, skip", flush=True)
         return
@@ -413,6 +418,8 @@ def run_explore(body_state_snapshot=None, anomaly_state_snapshot=None):
             "ANOMALY_CONTEXT": anomaly_state.format_context_block(anomaly_state_snapshot),
             "ANOMALY_URGENCY": str(anomaly_state.compute_explore_urgency(anomaly_state_snapshot)),
         }
+        if active_desires:
+            env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
             proc = subprocess.run(["bash", EXPLORE_SH], env=env, timeout=EXPLORE_TIMEOUT)
             success = proc.returncode == 0
@@ -497,13 +504,17 @@ def explore_scheduler():
             except Exception as e:
                 print(f"[daemon] anomaly state load error (explore scheduler): {e}", flush=True)
                 anomaly_snapshot = anomaly_state.normalize_state(None)
-            _, desire_pressure = tick_desires(body_snapshot, "explore", reason, emit_active=False)
+            active_desires, desire_pressure = tick_desires(body_snapshot, "explore", reason, emit_active=True)
             anomaly_urgency = anomaly_state.compute_explore_urgency(anomaly_snapshot)
             chance = run_chance(schedule, body_snapshot, "explore", desire_pressure, anomaly_urgency=anomaly_urgency)
             if chance >= 100 or random.randint(1, 100) <= chance:
                 threading.Thread(
                     target=run_explore,
-                    kwargs={"body_state_snapshot": body_snapshot, "anomaly_state_snapshot": anomaly_snapshot},
+                    kwargs={
+                        "body_state_snapshot": body_snapshot,
+                        "anomaly_state_snapshot": anomaly_snapshot,
+                        "active_desires": active_desires,
+                    },
                     daemon=True,
                 ).start()
             else:

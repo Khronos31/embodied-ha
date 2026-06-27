@@ -98,6 +98,21 @@ trap '_web_idle' EXIT
 COMMON_CHAR="$CHARACTER"
 BODY_STATE="${EHA_BODY_STATE:-{}}"
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
+ACTIVE_DESIRES_RAW="${ACTIVE_DESIRES:-}"
+INNER_VOICE=$(ACTIVE_DESIRES="$ACTIVE_DESIRES_RAW" python3 - <<'PYEOF'
+import json, os
+
+raw = os.environ.get("ACTIVE_DESIRES", "")
+items = []
+if raw:
+    try:
+        items = json.loads(raw)
+    except Exception:
+        items = []
+lines = [f"- {item}" for item in items if str(item).strip()]
+print("\n".join(lines) if lines else "（特になし）")
+PYEOF
+)
 
 # モードごとに使う MCP サーバー（空なら MCP なし）。case 内で上書き。
 MCP_SERVERS=""
@@ -200,6 +215,9 @@ ${_presented_note}${FEATURES_MD}
 fi
 
 SYS_PROMPT="${COMMON_CHAR}
+
+# 内なる衝動
+${INNER_VOICE}
 
 # 身体状態
 ${BODY_STATE}

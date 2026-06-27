@@ -167,7 +167,7 @@ PYEOF
 fi
 
 # --- Claude呼び出し ---
-RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" ACTIVE_DESIRES="${ACTIVE_DESIRES:-}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess, sys
 
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
@@ -193,6 +193,17 @@ resident        = os.environ.get("RESIDENT", "ユーザー")
 body_state      = os.environ.get("EHA_BODY_STATE", "") or "{}"
 body_location_context = os.environ.get("BODY_LOCATION_CONTEXT", "")
 recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "")
+active_desires_raw = os.environ.get("ACTIVE_DESIRES", "")
+
+active_desires = []
+if active_desires_raw:
+    try:
+        active_desires = json.loads(active_desires_raw)
+    except Exception:
+        active_desires = []
+
+inner_voice_parts = [f"- {d}" for d in active_desires if str(d).strip()]
+inner_voice = "\n".join(inner_voice_parts) if inner_voice_parts else "（特になし）"
 
 entity_table_block = f"""# 操作できる家電（エンティティ対応表）
 頼まれたら、以下のエンティティを ha_call_service ツールで操作できます。
@@ -245,6 +256,9 @@ prompt = f"""# あなた自身について
 # 今のあなたの気分
 直前の観察での気分は「{current_mood}」でした。その気分の続きとして会話に入ってかまいません。
 （無理に演じる必要はないですが、ついさっきまで家を見ていた自分の延長として話してください）
+
+# 内なる衝動
+{inner_voice}
 
 # 身体状態
 {body_state}
