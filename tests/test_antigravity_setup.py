@@ -67,6 +67,50 @@ class AntigravitySetupTests(unittest.TestCase):
                 self.assertEqual(state["binary_path"], str(binary))
                 self.assertEqual(state["oauth_token_path"], str(token_path))
 
+    def test_uninstall_deletes_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            bin_dir = home / "bin"
+            bin_dir.mkdir(parents=True)
+            binary = bin_dir / "agy"
+            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.chmod(0o755)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_ANTIGRAVITY_HOME": str(home),
+                    "EHA_ANTIGRAVITY_BIN_DIR": str(bin_dir),
+                },
+                clear=False,
+            ):
+                self.assertTrue(antigravity_setup.is_installed())
+                self.assertTrue(antigravity_setup.uninstall())
+                self.assertFalse(antigravity_setup.is_installed())
+                self.assertFalse(antigravity_setup.uninstall())
+
+    def test_clear_auth_deletes_token_and_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            token_path = home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text("token", encoding="utf-8")
+            marker_path = home / ".gemini" / "eha-auth-ok"
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text("ok", encoding="utf-8")
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_ANTIGRAVITY_HOME": str(home),
+                },
+                clear=False,
+            ):
+                self.assertTrue(antigravity_setup.is_authenticated())
+                self.assertTrue(antigravity_setup.clear_auth())
+                self.assertFalse(antigravity_setup.is_authenticated())
+                self.assertFalse(antigravity_setup.clear_auth())
+
 
 if __name__ == "__main__":
     unittest.main()

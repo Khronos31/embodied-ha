@@ -1203,6 +1203,9 @@ function renderAntigravityStatus(data) {
 
     const installBtn = document.getElementById('antigravity-install-btn');
     const loginBtn = document.getElementById('antigravity-login-btn');
+    const uninstallBtn = document.getElementById('antigravity-uninstall-btn');
+    const clearAuthBtn = document.getElementById('antigravity-clear-auth-btn');
+    const dangerZone = document.getElementById('antigravity-danger-zone');
 
     if (data) {
         if (installedBadge) {
@@ -1217,6 +1220,13 @@ function renderAntigravityStatus(data) {
         if (binPathEl) binPathEl.textContent = data.binary_path || '(unknown)';
         if (installBtn) installBtn.style.display = data.installed ? 'none' : '';
         if (loginBtn) loginBtn.style.display = (data.installed && !data.authenticated) ? '' : 'none';
+
+        const showUninstall = !!data.installed;
+        const showClearAuth = !!data.authenticated;
+        if (uninstallBtn) uninstallBtn.style.display = showUninstall ? '' : 'none';
+        if (clearAuthBtn) clearAuthBtn.style.display = showClearAuth ? '' : 'none';
+        if (dangerZone) dangerZone.style.display = (showUninstall || showClearAuth) ? '' : 'none';
+
         if (data.authenticated) clearAntigravityAuthUi();
     } else {
         if (installedBadge) {
@@ -1229,6 +1239,9 @@ function renderAntigravityStatus(data) {
         }
         if (homeDirEl) homeDirEl.textContent = '-';
         if (binPathEl) binPathEl.textContent = '-';
+        if (uninstallBtn) uninstallBtn.style.display = 'none';
+        if (clearAuthBtn) clearAuthBtn.style.display = 'none';
+        if (dangerZone) dangerZone.style.display = 'none';
     }
 }
 
@@ -1327,25 +1340,73 @@ function startAntigravityInstallAndLogin() {
     startAntigravityInstall();
 }
 
+async function antigravityUninstall() {
+    if (!confirm('agy をアンインストールします。よろしいですか？')) return;
+    try {
+        appendAntigravityLog('アンインストールを開始します...');
+        const res = await fetch(`${base}/api/setup/antigravity/uninstall`, {
+            method: 'POST'
+        });
+        if (res.ok) {
+            appendAntigravityLog('アンインストール完了');
+            await refreshAntigravityStatus();
+        } else {
+            const body = await res.text();
+            appendAntigravityLog('エラー: ' + (body || `アンインストールに失敗しました (${res.status})`));
+        }
+    } catch (err) {
+        appendAntigravityLog('エラー: ' + (err?.message || err));
+    }
+}
+
+async function antigravityClearAuth() {
+    if (!confirm('認証情報を削除します。再認証が必要になります。よろしいですか？')) return;
+    try {
+        appendAntigravityLog('認証情報を削除しています...');
+        const res = await fetch(`${base}/api/setup/antigravity/clear-auth`, {
+            method: 'POST'
+        });
+        if (res.ok) {
+            appendAntigravityLog('認証情報を削除しました');
+            await refreshAntigravityStatus();
+        } else {
+            const body = await res.text();
+            appendAntigravityLog('エラー: ' + (body || `認証情報の削除に失敗しました (${res.status})`));
+        }
+    } catch (err) {
+        appendAntigravityLog('エラー: ' + (err?.message || err));
+    }
+}
+
 function showAntigravityUrlUi(url) {
     const container = document.getElementById('antigravity-auth-ui');
     if (!container) return;
     const safeUrl = escapeHtml(url);
+    // NOTE: #antigravity-auth-ui is inside <form id="settings-form">.
+    // Nesting <form> inside <form> is invalid HTML — browsers ignore the inner form
+    // and its submit button ends up submitting the outer settings form.
+    // Use <div> + type="button" and wire up via addEventListener instead.
     container.innerHTML = `
         <div class="setup-choices" style="margin-top: 12px;">
             <a href="${safeUrl}" target="_blank" class="setup-choice-btn"
                style="text-decoration:none;text-align:center;display:flex;justify-content:center;margin-bottom:10px;">
                 🔗 認証ページを開く
             </a>
-            <form class="setup-input-row" onsubmit="submitAntigravityCode(event)">
+            <div class="setup-input-row">
                 <input type="text" id="agy-code-input" class="setup-input"
                        placeholder="ブラウザに表示されたコードを貼り付け..." autocomplete="off">
-                <button type="submit" class="setup-send-btn">送信</button>
-            </form>
+                <button type="button" id="agy-code-submit-btn" class="setup-send-btn">送信</button>
+            </div>
             <p class="form-hint" id="antigravity-auth-status" style="margin-top: 6px;">認証ページを開いて、表示されたコードを入力してください。</p>
         </div>
     `;
-    setTimeout(() => document.getElementById('agy-code-input')?.focus(), 50);
+    const btn = document.getElementById('agy-code-submit-btn');
+    if (btn) btn.addEventListener('click', submitAntigravityCode);
+    const inp = document.getElementById('agy-code-input');
+    if (inp) {
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAntigravityCode(e); });
+        setTimeout(() => inp.focus(), 50);
+    }
 }
 
 async function submitAntigravityCode(e) {

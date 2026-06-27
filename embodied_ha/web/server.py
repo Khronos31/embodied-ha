@@ -1158,6 +1158,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._serve_setup_antigravity_input(body if isinstance(body, dict) else {})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/antigravity/uninstall":
+            try:
+                if antigravity_setup is None:
+                    self.send_json({"error": "antigravity helpers unavailable"}, 500)
+                    return
+                result = antigravity_setup.uninstall()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/antigravity/clear-auth":
+            try:
+                if antigravity_setup is None:
+                    self.send_json({"error": "antigravity helpers unavailable"}, 500)
+                    return
+                result = antigravity_setup.clear_auth()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
         elif path == "/api/send":
             length = int(self.headers.get("Content-Length", 0))
             try:

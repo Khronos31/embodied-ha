@@ -49,6 +49,19 @@ def is_agy_bin(path: str | None) -> bool:
     return os.path.basename(path or "") == "agy"
 
 
+def _remove_file(path: str, removed_files: list[str]) -> None:
+    if os.path.exists(path):
+        os.remove(path)
+        removed_files.append(path)
+
+
+def _remove_dir_if_empty(path: str) -> None:
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
 def agy_prompt_text(content_blocks) -> str:
     parts = []
     for blk in content_blocks:
@@ -111,3 +124,22 @@ def state() -> dict:
         "oauth_token_path": oauth_token_path(),
         "install_url": install_script_url(),
     }
+
+
+def clear_auth() -> dict:
+    removed_files = []
+    _remove_file(auth_marker_path(), removed_files)
+    _remove_file(oauth_token_path(), removed_files)
+    _remove_dir_if_empty(os.path.join(home_dir(), ".gemini", "antigravity-cli"))
+    return {"removed_files": removed_files}
+
+
+def uninstall() -> dict:
+    removed_files = []
+    _remove_file(binary_path(), removed_files)
+    _remove_dir_if_empty(bin_dir())
+    _remove_file(auth_marker_path(), removed_files)
+    _remove_file(oauth_token_path(), removed_files)
+    _remove_dir_if_empty(os.path.join(home_dir(), ".gemini", "antigravity-cli"))
+    return {"removed_files": removed_files}
+

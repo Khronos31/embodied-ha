@@ -1155,6 +1155,15 @@ select.ha-entity-select {
     background-color: #15803d;
 }
 
+.btn-danger {
+    background-color: #dc2626;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #b91c1c;
+}
+
 .btn-sm {
     padding: 6px 12px;
     font-size: 12px;
