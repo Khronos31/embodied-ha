@@ -256,13 +256,36 @@ def _stop_antigravity_process(proc, master_fd=None, use_ctrl_d: bool = False):
 
 
 
+def _respond_terminal_queries(raw: bytes, master_fd: int):
+    """ターミナルケーパビリティクエリに応答してアプリが待機状態にならないようにする。"""
+    import re as _re
+    # DECRQM query: \x1b[?<mode>$p → not recognized response
+    for m in _re.finditer(rb'\x1b\[\?(\d+)\$p', raw):
+        try:
+            os.write(master_fd, b'\x1b[?' + m.group(1) + b';0$y')
+        except OSError:
+            pass
+    # Kitty keyboard protocol query: \x1b[?u → no enhancements
+    if rb'\x1b[?u' in raw:
+        try:
+            os.write(master_fd, b'\x1b[?0u')
+        except OSError:
+            pass
+    # Primary device attributes: \x1b[c or \x1b[0c → VT100
+    if rb'\x1b[c' in raw or rb'\x1b[0c' in raw:
+        try:
+            os.write(master_fd, b'\x1b[?1;0c')
+        except OSError:
+            pass
+
+
 def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Queue):
     """Antigravity login TUI の 1 行を解釈して自動応答する。"""
     line_lower = line.lower()
 
     if not state.get("sent_method"):
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
-            os.write(master_fd, b"1\n")
+            os.write(master_fd, b"\r")
             state["sent_method"] = True
             return
 
@@ -280,15 +303,23 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
         return
 
     if "color scheme" in line_lower:
-        os.write(master_fd, b"\n")
+        os.write(master_fd, b"\r")
         return
 
     if "terms of service" in line_lower or "terms" in line_lower:
-        os.write(master_fd, b"\x1b[B\x1b[C\n")
+        os.write(master_fd, b"\x1b[B\x1b[C\r")
         return
 
-    if "trust" in line_lower:
-        os.write(master_fd, b"\n")
+    if "trust" in line_lower and not state.get("auth_done"):
+        os.write(master_fd, b"\r")
+        state["auth_done"] = True
+        if antigravity_setup is not None:
+            try:
+                marker = antigravity_setup.auth_marker_path()
+                os.makedirs(os.path.dirname(marker), exist_ok=True)
+                open(marker, "w").close()
+            except Exception:
+                pass
         return
 
 # --- SSE クライアント管理 ---
@@ -708,15 +739,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not antigravity_setup.is_installed():
                     raise RuntimeError("Antigravity CLI is not installed")
                 master_fd, slave_fd = pty.openpty()
+                import fcntl as _fcntl, termios as _termios, struct as _struct
+                _fcntl.ioctl(master_fd, _termios.TIOCSWINSZ, _struct.pack('HHHH', 24, 80, 0, 0))
                 proc_box["master_fd"] = master_fd
                 with _ANTIGRAVITY_LOGIN_PTY_LOCK:
                     _ANTIGRAVITY_LOGIN_PTY_FD[0] = master_fd
 
                 env = os.environ.copy()
                 env["HOME"] = antigravity_setup.home_dir()
-                env["TERM"] = "dumb"
+                env["TERM"] = "xterm-256color"
                 proc = _sp.Popen(
-                    [antigravity_setup.binary_path(), "auth", "login"],
+                    [antigravity_setup.binary_path()],
                     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
                     close_fds=True, env=env
                 )
@@ -734,12 +767,14 @@ class Handler(BaseHTTPRequestHandler):
                         if not r:
                             if proc.poll() is not None:
                                 break
-                            if antigravity_setup.is_authenticated():
+                            if state.get("auth_done") or antigravity_setup.is_authenticated():
                                 _stop_antigravity_process(proc, master_fd=master_fd, use_ctrl_d=True)
                                 break
                             continue
 
-                        raw = os.read(master_fd, 4096).decode("utf-8", errors="replace")
+                        raw_bytes = os.read(master_fd, 4096)
+                        _respond_terminal_queries(raw_bytes, master_fd)
+                        raw = raw_bytes.decode("utf-8", errors="replace")
                         clean = ansi.sub("", raw).replace("\r\n", "\n").replace("\r", "\n")
                         buf += clean
 

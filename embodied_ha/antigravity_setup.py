@@ -37,8 +37,12 @@ def is_installed() -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
 
 
+def auth_marker_path() -> str:
+    return os.path.join(home_dir(), ".gemini", "eha-auth-ok")
+
+
 def is_authenticated() -> bool:
-    return os.path.exists(oauth_token_path())
+    return os.path.exists(oauth_token_path()) or os.path.exists(auth_marker_path())
 
 
 def is_agy_bin(path: str | None) -> bool:
