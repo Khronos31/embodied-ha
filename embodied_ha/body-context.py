@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import heapq
-import json
 import os
 from typing import Any
 
@@ -12,6 +11,7 @@ from state_utils import clean, read_json
 DEFAULT_DATA_DIR = "/config/embodied-ha"
 DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
+DEFAULT_BODY_STATE_FILE = "/config/embodied-ha/body_state.json"
 
 
 def data_dir() -> str:
@@ -26,8 +26,17 @@ def body_location_path() -> str:
     return clean(os.environ.get("EHA_BODY_LOCATION_FILE")) or os.path.join(data_dir(), "body_location.json") or DEFAULT_BODY_LOCATION_FILE
 
 
+def body_state_path() -> str:
+    return clean(os.environ.get("EHA_BODY_STATE_FILE")) or os.path.join(data_dir(), "body_state.json") or DEFAULT_BODY_STATE_FILE
+
+
 def load_graph() -> dict[str, Any]:
     value = read_json(room_graph_path(), {})
+    return value if isinstance(value, dict) else {}
+
+
+def load_body_state() -> dict[str, Any]:
+    value = read_json(body_state_path(), {})
     return value if isinstance(value, dict) else {}
 
 
@@ -79,9 +88,13 @@ def load_location(graph: dict[str, Any]) -> dict[str, Any]:
     state = value if isinstance(value, dict) else {}
     current = resolve_room(state.get("current_room"), graph) or initial_room(graph)
     previous = resolve_room(state.get("previous_room"), graph)
+    projected = resolve_room(state.get("projected_room"), graph)
     return {
         "current_room": current,
         "previous_room": previous,
+        "projected_room": projected,
+        "projected_host": clean(state.get("projected_host")) or "",
+        "projection_updated_at": clean(state.get("projection_updated_at")) or None,
         "updated_at": clean(state.get("updated_at")) or None,
         "last_move_cost": state.get("last_move_cost"),
         "last_move_path": state.get("last_move_path") if isinstance(state.get("last_move_path"), list) else [],
@@ -135,15 +148,29 @@ def format_body_context(limit: int = 5) -> str:
         return "# 身体位置\n部屋グラフが未設定です。必要なら get_room_graph で確認してください。"
 
     state = load_location(graph)
+    body_state = load_body_state()
     current = state["current_room"]
+    projected = state.get("projected_room")
+    physical_host = clean(body_state.get("physical_anchor_host"))
+    current_host = clean(body_state.get("current_device_host"))
+    projected_host = state.get("projected_host") or clean(body_state.get("remote_avatar_host"))
     lines = [
         "# 身体位置",
-        f"現在位置: {room_label(current, graph)} (`{current}`)",
+        f"物理体の位置: {room_label(current, graph)} (`{current}`)",
     ]
+    if physical_host:
+        lines.append(f"物理体の足場デバイス: `{physical_host}`")
+    if projected:
+        lines.append(f"電脳体の位置: {room_label(projected, graph)} (`{projected}`)")
+        if projected_host:
+            lines.append(f"電脳体が見ているデバイス: `{projected_host}`")
+        lines.append("感覚の足場は少し離れている。必要なら return_to_body で戻ってよい。")
+    else:
+        lines.append("電脳体の位置: なし（物理体と同じ場所にいる）")
     if state.get("previous_room"):
-        lines.append(f"直前の位置: {room_label(state['previous_room'], graph)} (`{state['previous_room']}`)")
+        lines.append(f"直前の物理移動: {room_label(state['previous_room'], graph)} (`{state['previous_room']}`) から来た")
     if state.get("last_move_cost") is not None:
-        lines.append(f"直前の移動コスト: {state['last_move_cost']}")
+        lines.append(f"直前の物理移動コスト: {state['last_move_cost']}")
 
     costs = shortest_costs(current, graph)
     nearby = [
@@ -153,11 +180,11 @@ def format_body_context(limit: int = 5) -> str:
     ][: max(0, limit)]
     if nearby:
         cost_text = " / ".join(f"{room_label(room_id, graph)}:{cost:g}" for room_id, cost in nearby)
-        lines.append(f"近い移動先: {cost_text}")
+        lines.append(f"物理体から近い移動先: {cost_text}")
 
     lines.extend([
-        "感覚の扱い: 現在位置と同じ部屋で見聞きしたものは direct。別室のカメラ・音声・HA状態確認は remote / home_assistant として扱う。",
-        "別室へ直接見に行く必要があると感じたら move_to、迷ったら estimate_move_cost を使う。",
+        "感覚の扱い: 物理体と同じ部屋で見聞きしたものは direct。別室の窓につないで見聞きしたものは remote_avatar。HA状態確認は home_assistant。",
+        "別室へ身体ごと行くなら move_to。今の部屋に身体を残したまま別室を見るなら project_to。落ち着く場所に戻るなら return_to_body。迷ったら estimate_move_cost を使う。",
     ])
     return "\n".join(lines)
 

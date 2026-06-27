@@ -103,6 +103,7 @@ class BodyStateTests(unittest.TestCase):
         self.assertIn("confidence", payload)
         self.assertNotIn("embodiment_tension", payload)
         self.assertNotIn("remote_room", payload)
+        self.assertNotIn("physical_anchor_host", payload)
 
     def test_remote_avatar_action_and_tick_create_small_drift(self):
         initial = body_state.normalize_state(None)
@@ -118,6 +119,7 @@ class BodyStateTests(unittest.TestCase):
         self.assertLess(after_action["confidence"], initial["confidence"])
         self.assertEqual(after_action["remote_mode"], "remote_avatar")
         self.assertEqual(after_action["remote_avatar_host"], "camera.washroom")
+        self.assertEqual(after_action["physical_anchor_host"], "")
 
         drifted = body_state.advance_tick(
             after_action,
@@ -142,9 +144,23 @@ class BodyStateTests(unittest.TestCase):
         self.assertEqual(settled["remote_mode"], "")
         self.assertEqual(settled["remote_room"], "")
         self.assertEqual(settled["current_device_host"], "alsa://default")
+        self.assertEqual(settled["physical_anchor_host"], "alsa://default")
         self.assertLess(settled["stress"], remote["stress"])
         self.assertGreater(settled["confidence"], remote["confidence"])
 
+
+    def test_physical_move_clears_physical_anchor_host(self):
+        state = body_state.normalize_state({
+            "physical_anchor_host": "alsa://study",
+            "current_device_host": "alsa://study",
+            "remote_avatar_host": "camera.kitchen",
+            "remote_mode": "remote_avatar",
+            "remote_room": "kitchen",
+        })
+        moved = body_state.apply_action_effect(state, action_mode="physical_move", action_cost=2.0, target_room="living_room", move_cost=2.0)
+        self.assertEqual(moved["current_device_host"], "")
+        self.assertEqual(moved["physical_anchor_host"], "")
+        self.assertEqual(moved["remote_avatar_host"], "")
 
 if __name__ == "__main__":
     unittest.main()

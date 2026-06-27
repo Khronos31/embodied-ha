@@ -241,12 +241,56 @@ print(d.get("host",""), d.get("port", 1883), d.get("username",""), d.get("passwo
     _pub -t "homeassistant/text/embodied_ha_chat/config" -m \
         '{"name":"Embodied HA チャット入力","unique_id":"embodied_ha_chat","command_topic":"embodied_ha/chat/set","state_topic":"embodied_ha/chat/state","icon":"mdi:chat","max":500}'
 
+    CHARACTER_LABEL=$(python3 - <<'PYEOF'
+import json, os
+path = os.environ.get("EHA_PREFS_FILE", "")
+name = "Claude"
+try:
+    with open(path, encoding="utf-8") as f:
+        prefs = json.load(f)
+    if isinstance(prefs, dict) and isinstance(prefs.get("character_name"), str) and prefs.get("character_name").strip():
+        name = prefs.get("character_name").strip()
+except Exception:
+    pass
+print(name)
+PYEOF
+)
+    export CHARACTER_LABEL
+
     # 観察トリガーボタン
     _pub -t "homeassistant/button/embodied_ha_observe/config" -m \
         '{"name":"Embodied HA 観察","unique_id":"embodied_ha_observe","command_topic":"embodied_ha/observe/trigger","icon":"mdi:eye","payload_press":"OBSERVE"}'
 
+    _pub -t "homeassistant/sensor/embodied_ha_body_physical_room/config" -m \
+        "$(python3 - <<'PYEOF'
+import json, os
+name = os.environ.get('CHARACTER_LABEL', 'Claude')
+payload = {
+  'name': f'Embodied HA {name}の身体がある場所',
+  'unique_id': 'embodied_ha_body_physical_room',
+  'state_topic': 'embodied_ha/body/physical_room/state',
+  'icon': 'mdi:map-marker',
+}
+print(json.dumps(payload, ensure_ascii=False))
+PYEOF
+)"
+
+    _pub -t "homeassistant/sensor/embodied_ha_body_current_place/config" -m \
+        "$(python3 - <<'PYEOF'
+import json, os
+name = os.environ.get('CHARACTER_LABEL', 'Claude')
+payload = {
+  'name': f'Embodied HA {name}のいる場所',
+  'unique_id': 'embodied_ha_body_current_place',
+  'state_topic': 'embodied_ha/body/current_place/state',
+  'icon': 'mdi:radar',
+}
+print(json.dumps(payload, ensure_ascii=False))
+PYEOF
+)"
+
     export MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASS
-    echo "[run] MQTT discovery 完了（5 エンティティ登録）"
+    echo "[run] MQTT discovery 完了（7 エンティティ登録）"
 else
     echo "[run] 警告: MQTT 未取得（services:mqtt 未提供または MQTT 統合未登録）。チャット/観察トリガー・状態publishが無効になります（MQTT統合・Mosquitto を導入してください）。"
 fi

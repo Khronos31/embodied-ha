@@ -355,7 +355,7 @@ context = f"""# あなた自身について
 【身体状態】
 {body_state}
 - curiosity が高いほど細部を掘る。energy が低いほど短く。stress が高いほど静かに。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
-- 理由をうまく言えないのに少し落ち着かない感覚があるなら、その感覚を尊重してよい。必要なら無理に説明せず、直接その場を見る・聞く・戻るという判断をしてよい。
+- 理由をうまく言えないのに少し落ち着かない感覚があるなら、その感覚を尊重してよい。必要なら無理に説明せず、身体ごと見に行く・窓だけつなぐ・戻るという判断をしてよい。
 
 {body_location_context}
 【気にかけていること（やりかけ・約束。関係する変化があれば speak で触れてよい）】
@@ -508,7 +508,7 @@ if _sd:
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
-        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
+        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                     "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"

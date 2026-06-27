@@ -10,6 +10,7 @@ from __future__ import annotations
 import heapq
 import json
 import os
+import subprocess
 import threading
 from typing import Any
 
@@ -110,6 +111,7 @@ def load_location_state(graph: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(state, dict):
         state = {}
     current = resolve_room(state.get("current_room"), graph) or initial_room(graph)
+    projected = resolve_room(state.get("projected_room"), graph)
     return {
         "current_room": current,
         "display_name": _room_label(current, graph),
@@ -117,6 +119,10 @@ def load_location_state(graph: dict[str, Any] | None = None) -> dict[str, Any]:
         "previous_room": resolve_room(state.get("previous_room"), graph),
         "last_move_cost": state.get("last_move_cost"),
         "last_move_path": state.get("last_move_path") if isinstance(state.get("last_move_path"), list) else [],
+        "projected_room": projected,
+        "projected_display_name": _room_label(projected, graph) if projected else None,
+        "projection_updated_at": clean(state.get("projection_updated_at")) or None,
+        "projected_host": clean(state.get("projected_host")) or "",
         "source": clean(state.get("source")) or "alsa://default",
     }
 
@@ -184,18 +190,55 @@ def append_move_log(entry: dict[str, Any]) -> None:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+
+
+def publish_body_presence(state: dict[str, Any]) -> None:
+    mqtt_host = clean(os.environ.get("MQTT_HOST"))
+    if not mqtt_host:
+        return
+    mqtt_port = clean(os.environ.get("MQTT_PORT")) or "1883"
+    mqtt_user = clean(os.environ.get("MQTT_USER"))
+    mqtt_pass = clean(os.environ.get("MQTT_PASS"))
+    physical_room = clean(state.get("current_room"))
+    projected_host = clean(state.get("projected_host"))
+    current_place = projected_host or "身体の中"
+    base = ["mosquitto_pub", "-h", mqtt_host, "-p", mqtt_port]
+    if mqtt_user:
+        base.extend(["-u", mqtt_user])
+    if mqtt_pass:
+        base.extend(["-P", mqtt_pass])
+    for topic, payload in (
+        ("embodied_ha/body/physical_room/state", physical_room),
+        ("embodied_ha/body/current_place/state", current_place),
+    ):
+        try:
+            subprocess.run(base + ["-r", "-t", topic, "-m", payload], capture_output=True, text=True, timeout=5)
+        except Exception:
+            pass
+
+
 def get_location(args: dict[str, Any]):
     graph = load_room_graph()
     state = load_location_state(graph)
     current = state["current_room"]
+    projected = state.get("projected_room")
+    presence_mode = "remote_avatar" if projected else "direct"
     payload = {
         "current_room": current,
         "display_name": _room_label(current, graph),
+        "physical_room": current,
+        "physical_display_name": _room_label(current, graph),
+        "presence_mode": presence_mode,
+        "active_room": projected or current,
+        "active_display_name": _room_label(projected or current, graph),
+        "projected_room": projected,
+        "projected_display_name": state.get("projected_display_name"),
+        "projected_host": state.get("projected_host"),
         "updated_at": state.get("updated_at"),
         "previous_room": state.get("previous_room"),
         "last_move_cost": state.get("last_move_cost"),
         "last_move_path": state.get("last_move_path"),
-        "sensory_origin_hint": "direct",
+        "sensory_origin_hint": "remote_avatar" if projected else "direct",
         "available_rooms": [
             {"room": room_id, "display_name": _room_label(room_id, graph)}
             for room_id in rooms(graph)
@@ -254,11 +297,16 @@ def move_to(args: dict[str, Any]):
         "updated_at": timestamp,
         "last_move_cost": cost,
         "last_move_path": path,
+        "projected_room": None,
+        "projected_display_name": None,
+        "projection_updated_at": None,
+        "projected_host": "",
         "source": clean(args.get("source")) or "body-mcp",
     }
     if reason:
         new_state["reason"] = reason
     save_location_state(new_state)
+    publish_body_presence(new_state)
     event = {
         "timestamp": timestamp,
         "kind": "body_move",
@@ -280,6 +328,120 @@ def move_to(args: dict[str, Any]):
             action_cost=event.get("action_cost"),
             target_room=target,
             move_cost=cost,
+        )
+    except Exception:
+        pass
+    return _json_text({"state": new_state, "event": event})
+
+
+def project_to(args: dict[str, Any]):
+    graph = load_room_graph()
+    target = resolve_room(args.get("room") or args.get("to") or args.get("to_room"), graph)
+    if not target:
+        return _json_text({
+            "error": "unknown target room",
+            "room": args.get("room") or args.get("to") or args.get("to_room"),
+            "available_rooms": list(rooms(graph).keys()),
+        }), True
+    state = load_location_state(graph)
+    body_room = state["current_room"]
+    was_remote = bool(state.get("projected_room"))
+    cost, path = shortest_path(body_room, target, graph)
+    if cost is None:
+        return _json_text({"error": "no path", "from": body_room, "to": target}), True
+    timestamp = now().isoformat(timespec="seconds")
+    reason = clean(args.get("reason")) or None
+    host = clean(args.get("host")) or clean(args.get("source")) or f"room://{target}"
+    new_state = {
+        **state,
+        "current_room": body_room,
+        "display_name": _room_label(body_room, graph),
+        "projected_room": target,
+        "projected_display_name": _room_label(target, graph),
+        "projection_updated_at": timestamp,
+        "projected_host": host,
+        "updated_at": timestamp,
+        "source": clean(args.get("source")) or "body-mcp",
+    }
+    if reason:
+        new_state["reason"] = reason
+    save_location_state(new_state)
+    publish_body_presence(new_state)
+    action_cost = 0.0 if was_remote else 0.35
+    event = {
+        "timestamp": timestamp,
+        "kind": "body_project",
+        "body_room": body_room,
+        "body_display_name": _room_label(body_room, graph),
+        "to": target,
+        "to_display_name": _room_label(target, graph),
+        "target_host": host,
+        "cost": cost,
+        "path": path,
+        "path_display": _format_path(path, graph),
+        "reason": reason,
+        "projection_mode": "remote_move" if was_remote else "enter_remote",
+        "sensory_origin_after_project": "remote_avatar",
+        "action_mode": "remote_avatar",
+        "action_cost": action_cost,
+        "target_room": target,
+    }
+    append_move_log(event)
+    try:
+        apply_action_to_body_state(
+            action_mode="remote_avatar",
+            action_cost=event.get("action_cost"),
+            target_room=target,
+            target_host=host,
+            move_cost=cost,
+        )
+    except Exception:
+        pass
+    return _json_text({"state": new_state, "event": event})
+
+
+def return_to_body(args: dict[str, Any]):
+    graph = load_room_graph()
+    state = load_location_state(graph)
+    current = state["current_room"]
+    timestamp = now().isoformat(timespec="seconds")
+    reason = clean(args.get("reason")) or None
+    host = clean(args.get("host")) or clean(state.get("source")) or "alsa://default"
+    new_state = {
+        **state,
+        "current_room": current,
+        "display_name": _room_label(current, graph),
+        "projected_room": None,
+        "projected_display_name": None,
+        "projection_updated_at": timestamp,
+        "projected_host": "",
+        "updated_at": timestamp,
+        "source": clean(args.get("source")) or "body-mcp",
+    }
+    if reason:
+        new_state["reason"] = reason
+    save_location_state(new_state)
+    publish_body_presence(new_state)
+    event = {
+        "timestamp": timestamp,
+        "kind": "body_return",
+        "to": current,
+        "to_display_name": _room_label(current, graph),
+        "target_host": host,
+        "reason": reason,
+        "sensory_origin_after_return": "direct",
+        "action_mode": "direct_in_room",
+        "action_cost": 0.05,
+        "target_room": current,
+    }
+    append_move_log(event)
+    try:
+        apply_action_to_body_state(
+            action_mode="direct_in_room",
+            action_cost=event.get("action_cost"),
+            target_room=current,
+            target_host=host,
+            move_cost=0.0,
         )
     except Exception:
         pass
@@ -310,7 +472,7 @@ TOOL_GET_LOCATION = {
 
 TOOL_MOVE_TO = {
     "name": "move_to",
-    "description": "部屋グラフ上であかねの現在位置を移動し、移動コストと経路を記録する。",
+    "description": "部屋グラフ上で物理体そのものを移動し、移動コストと経路を記録する。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -318,6 +480,32 @@ TOOL_MOVE_TO = {
             "reason": {"type": "string", "description": "移動する理由。任意"},
         },
         "required": ["room"],
+    },
+}
+
+TOOL_PROJECT_TO = {
+    "name": "project_to",
+    "description": "物理体は今の部屋に残したまま、別の部屋の窓へ電脳体をつなぎ、遠隔確認として記録する。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "room": {"type": "string", "description": "投射先の room id または別名"},
+            "host": {"type": "string", "description": "使うデバイスや窓の識別子。例: camera.living_room"},
+            "reason": {"type": "string", "description": "投射する理由。任意"},
+        },
+        "required": ["room"],
+    },
+}
+
+TOOL_RETURN_TO_BODY = {
+    "name": "return_to_body",
+    "description": "別室への投射をやめて、物理体のいる部屋に感覚の足場を戻す。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "host": {"type": "string", "description": "戻った先のデバイス識別子。例: alsa://default"},
+            "reason": {"type": "string", "description": "戻る理由。任意"},
+        },
     },
 }
 
@@ -350,6 +538,8 @@ if __name__ == "__main__":
     serve("body-mcp", "1.0", {
         "get_location": {"spec": TOOL_GET_LOCATION, "handler": get_location},
         "move_to": {"spec": TOOL_MOVE_TO, "handler": move_to},
+        "project_to": {"spec": TOOL_PROJECT_TO, "handler": project_to},
+        "return_to_body": {"spec": TOOL_RETURN_TO_BODY, "handler": return_to_body},
         "estimate_move_cost": {"spec": TOOL_ESTIMATE_MOVE_COST, "handler": estimate_move_cost},
         "get_room_graph": {"spec": TOOL_GET_ROOM_GRAPH, "handler": get_room_graph},
     })
