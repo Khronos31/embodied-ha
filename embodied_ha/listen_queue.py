@@ -29,8 +29,12 @@ def queue_request_path() -> str:
     return clean(os.environ.get("EHA_NEXT_LISTEN_REQUEST_FILE")) or os.path.join(_data_dir(), "runtime", "next_listen_request.json")
 
 
-def queue_log_path() -> str:
+def next_listen_log_path() -> str:
     return clean(os.environ.get("EHA_NEXT_LISTEN_LOG_FILE")) or os.path.join(_data_dir(), "log", "next_listen_log.jsonl")
+
+
+def queue_log_path() -> str:
+    return next_listen_log_path()
 
 
 def active_listen_log_path() -> str:
@@ -63,6 +67,67 @@ def audio_session_model() -> str | None:
     return model or None
 
 
+def _cooldown_sessions() -> int:
+    """セッション数ベースのクールダウン（デフォルト3）。"""
+    return max(1, int(os.environ.get("EHA_LISTEN_QUEUE_COOLDOWN_SESSIONS", "3") or "3"))
+
+
+def _current_session_count() -> int:
+    """body_state.json から現在の session_count を返す。読めなければ 0。"""
+    try:
+        import body_state as _bs
+
+        return int(_bs.read_body_state().get("session_count", 0))
+    except Exception:
+        return 0
+
+
+def _last_queue_session_count() -> int | None:
+    """next_listen_log.jsonl の最後の action=queue エントリから session_count を返す。なければ None。"""
+    path = next_listen_log_path()
+    if not os.path.exists(path):
+        return None
+    last = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                    if d.get("action") == "queue":
+                        last = d
+                except Exception:
+                    pass
+    except Exception:
+        return None
+    if last is None:
+        return None
+    sc = last.get("session_count")
+    return int(sc) if sc is not None else None
+
+
+def check_listen_queue_cooldown() -> tuple[bool, str]:
+    """
+    キューを入れてよいか確認する。
+    Returns (ok, reason): ok=True なら許可、False なら reason にメッセージ。
+    """
+    cooldown = _cooldown_sessions()
+    last_sc = _last_queue_session_count()
+    if last_sc is None:
+        return True, ""
+    current_sc = _current_session_count()
+    elapsed = current_sc - last_sc
+    if elapsed < cooldown:
+        remaining = cooldown - elapsed
+        return False, (
+            f"クールダウン中：前回の音声セッションからまだ {elapsed} セッションしか経っていません。"
+            f"あと {remaining} セッション後に使えます。"
+        )
+    return True, ""
+
+
 def _write_json_atomic(path: str, payload: dict) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.tmp-{uuid.uuid4().hex}"
@@ -86,6 +151,7 @@ def queue_next_listen_request(payload: dict) -> str:
     request["duration"] = max(1, int(request.get("duration") or 5))
     request["transcribe"] = bool(request.get("transcribe", False))
     request["mode"] = clean(request.get("mode")) or "unknown"
+    request["session_count"] = _current_session_count()
     request.setdefault("file_path", "")
     request.setdefault("reason", "")
     request.setdefault("note", "")
@@ -267,6 +333,14 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
     try:
         record_request_to_wav(request, wav_path)
         append_active_listen_result(entry)
+        try:
+            import body_state as _bs
+
+            _state = _bs.read_body_state()
+            _state = _bs.on_audio_session(_state)
+            _bs.write_body_state(_state)
+        except Exception:
+            pass
         return {
             'RECENT_AUDITORY_INPUT': wav_path,
             'EHA_SESSION_BIN': default_audio_session_bin(),

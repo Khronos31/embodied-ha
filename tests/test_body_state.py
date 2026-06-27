@@ -66,6 +66,14 @@ class BodyStateTests(unittest.TestCase):
         self.assertLess(after["energy"], state["energy"])
         self.assertLess(after["curiosity"], state["curiosity"])
         self.assertEqual(after["last_result"], "success")
+        self.assertEqual(after["session_count"], state["session_count"] + 1)
+
+    def test_audio_session_cost_updates_energy_and_stress(self):
+        state = body_state.normalize_state({"energy": 0.9, "stress": 0.5})
+        after = body_state.on_audio_session(state)
+        self.assertEqual(after["energy"], 0.82)
+        self.assertEqual(after["stress"], 0.53)
+        self.assertEqual(after["last_event"], "audio_session")
 
     def test_compute_run_chance_reflects_state(self):
         calm = {

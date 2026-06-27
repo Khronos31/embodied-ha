@@ -42,6 +42,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "stress": 0.24,
     "confidence": 0.56,
     "social_openness": 0.50,
+    "session_count": 0,
     "embodiment_tension": 0.0,
     "return_to_body_pressure": 0.0,
     "remote_mode": "",
@@ -70,6 +71,11 @@ def normalize_state(raw: Any) -> dict[str, Any]:
 
     for key in STATE_KEYS:
         state[key] = round(_clamp(raw.get(key), state[key]), 3)
+
+    try:
+        state["session_count"] = int(raw.get("session_count", 0) or 0)
+    except Exception:
+        state["session_count"] = 0
 
     for key in PRIVATE_FLOAT_KEYS:
         state[key] = round(_clamp(raw.get(key), 0.0, 1.0, state[key]), 3)
@@ -124,6 +130,18 @@ def save_state(path: str, state: Mapping[str, Any]) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(normalize_state(dict(state)), f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
+
+def body_state_path() -> str:
+    return _clean(os.environ.get("EHA_BODY_STATE_FILE")) or os.path.join(os.path.dirname(__file__), "..", "body_state.json")
+
+
+def read_body_state() -> dict[str, Any]:
+    return load_state(body_state_path())
+
+
+def write_body_state(state: Mapping[str, Any]) -> None:
+    save_state(body_state_path(), state)
 
 
 def _elapsed_hours(state: Mapping[str, Any], now: _dt.datetime) -> float:
@@ -209,6 +227,20 @@ def advance_tick(
     return current
 
 
+def on_audio_session(
+    state: Mapping[str, Any],
+    *,
+    now: _dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Apply energy/stress cost for a queued listen audio session."""
+    current = normalize_state(dict(state))
+    current["energy"] = round(_clamp(current["energy"] - 0.08), 3)
+    current["stress"] = round(_clamp(current["stress"] + 0.03), 3)
+    current["updated_at"] = (now or _now()).isoformat(timespec="seconds")
+    current["last_event"] = "audio_session"
+    return current
+
+
 def apply_feedback(
     state: Mapping[str, Any],
     *,
@@ -285,6 +317,7 @@ def apply_feedback(
     current["last_loop"] = loop_name
     current["last_event"] = "success" if success else "failure"
     current["last_result"] = "success" if success else "failure"
+    current["session_count"] = current.get("session_count", 0) + 1
     return current
 
 

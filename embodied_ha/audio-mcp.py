@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
-from listen_queue import queue_next_listen_request
+from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, now, parse_ts
@@ -545,6 +545,9 @@ def transcribe_audio(path: str) -> str | None:
 
 
 def queue_next_listen(args: dict):
+    ok, reason = check_listen_queue_cooldown()
+    if not ok:
+        return [text(json.dumps({"queued": False, "error": reason}, ensure_ascii=False))], False
     source = normalize_source_uri(args.get("source") or default_listen_source())
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
