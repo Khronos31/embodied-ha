@@ -445,6 +445,7 @@ phase2_prompt = context + f"""
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。見たい対象が画角外にありそうなら、少し動かしてから camera_get で再確認してよい。
 - listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false で、文字が必要なときだけ true にする。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。結果は active_listen_log に残る。
+内なる衝動に「身体がこわばる」「ストレッチしたい」感じがあるなら move_to を優先し、「自由に飛び回りたい」「別の窓を覗きたい」感じがあるなら project_to を優先してよい。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
 - record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。音も意味があるときだけ audio_context を添える。音は毎回記録しない。
@@ -687,7 +688,7 @@ PYEOF
 
 # --- 8. TTS発火（部屋別ルーティング）---
 
-_speak_boundary_json=$(SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "${EHA_BODY_STATE:-{}}"     --sociality-log-dir "$LOG_DIR"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_speak_boundary_json=$(env SENSORS_DATA="$SENSORS" RESIDENT="$RESIDENT"   python3 "$SCRIPT_DIR/boundary.py" --json     --mode watch --intent speak --hour "$HOUR"     --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE"     --person "$RESIDENT" --body-state-json "${EHA_BODY_STATE:-{}}"     --sociality-log-dir "$LOG_DIR"     --metadata-json "$(python3 -c "import json, os; print(json.dumps({'room': os.environ.get('SPEAK_ROOM', '')}, ensure_ascii=False))")"   2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_speak_allowed" != "True" ]; then
   if [ -n "$SPEAK" ]; then
@@ -713,5 +714,5 @@ LAST_DAYBOOK=""
 
 if [ "$LAST_DAYBOOK" != "$TODAY" ] && [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
   echo "[DAYBOOK] 前日分を要約中..."
-  CONSOLIDATE_MEMORY=1 LOG_FILE="$LOG_FILE" MEMORY_FILE="$MEMORY_FILE" TODAY="$TODAY" DAYBOOK_MARKER="$DAYBOOK_MARKER" LAST_DAYBOOK="$LAST_DAYBOOK" CHARACTER="$CHARACTER" RESIDENT="${RESIDENT:-ユーザー}" SCRIPT_DIR="$SCRIPT_DIR" python3 "$SCRIPT_DIR/daybook_rollup.py" || true
+  env CONSOLIDATE_MEMORY=1 LOG_FILE="$LOG_FILE" MEMORY_FILE="$MEMORY_FILE" TODAY="$TODAY" DAYBOOK_MARKER="$DAYBOOK_MARKER" LAST_DAYBOOK="$LAST_DAYBOOK" CHARACTER="$CHARACTER" RESIDENT="${RESIDENT:-ユーザー}" SCRIPT_DIR="$SCRIPT_DIR"     python3 "$SCRIPT_DIR/daybook_rollup.py" || true
 fi
