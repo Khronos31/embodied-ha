@@ -85,9 +85,9 @@ class AntigravitySetupTests(unittest.TestCase):
                 clear=False,
             ):
                 self.assertTrue(antigravity_setup.is_installed())
-                self.assertTrue(antigravity_setup.uninstall())
+                self.assertTrue(antigravity_setup.uninstall()["removed_files"])
                 self.assertFalse(antigravity_setup.is_installed())
-                self.assertFalse(antigravity_setup.uninstall())
+                self.assertEqual(antigravity_setup.uninstall()["removed_files"], [])
 
     def test_clear_auth_deletes_token_and_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,9 +107,9 @@ class AntigravitySetupTests(unittest.TestCase):
                 clear=False,
             ):
                 self.assertTrue(antigravity_setup.is_authenticated())
-                self.assertTrue(antigravity_setup.clear_auth())
+                self.assertTrue(antigravity_setup.clear_auth()["removed_files"])
                 self.assertFalse(antigravity_setup.is_authenticated())
-                self.assertFalse(antigravity_setup.clear_auth())
+                self.assertEqual(antigravity_setup.clear_auth()["removed_files"], [])
 
 
 if __name__ == "__main__":

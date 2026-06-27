@@ -202,6 +202,7 @@ RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMO
 import base64, json, os, re, subprocess, sys, urllib.request, time
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from antigravity_setup import agy_prompt_text, extract_agy_result
 def _ptime(label):
     if os.environ.get("EHA_TIMING") == "1":
         now = time.perf_counter()
@@ -265,13 +266,7 @@ def call_claude(content_blocks, model="sonnet", allowed_tools=None, mcp_config=N
     is_agy = os.path.basename(backend_bin) == "agy"
 
     if is_agy:
-        parts = []
-        for blk in content_blocks:
-            if blk.get("type") == "text":
-                parts.append(blk["text"])
-            elif blk.get("type") == "image":
-                parts.append("[カメラ画像]")
-        prompt_text = "\n".join(parts) + "\nJSON:\n"
+        prompt_text = agy_prompt_text(content_blocks)
 
         cmd = [backend_bin]
         if backend_model:
@@ -288,9 +283,9 @@ def call_claude(content_blocks, model="sonnet", allowed_tools=None, mcp_config=N
             cwd="/tmp/embodied-ha",
             env=agy_env,
         )
-        raw = r.stdout.strip()
-        m = re.search(r'\{.*\}', raw, re.DOTALL)
-        return m.group(0) if m else raw
+        if r.returncode != 0:
+            print(f"[watch][agy] stderr: {r.stderr.strip()}", file=sys.stderr)
+        return extract_agy_result(r.stdout)
 
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": content_blocks}})
     cmd = [backend_bin, "-p", "--model", backend_model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]

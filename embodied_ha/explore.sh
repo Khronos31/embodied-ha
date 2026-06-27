@@ -272,6 +272,7 @@ RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$A
 import json, os, re, subprocess, sys
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from antigravity_setup import extract_agy_result
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 env = {**os.environ,
        "EHA_ACTOR": "explore",
@@ -306,9 +307,9 @@ if is_agy:
         cwd="/tmp/embodied-ha",
         env=agy_env,
     )
-    raw = r.stdout.strip()
-    m = re.search(r'\{.*\}', raw, re.DOTALL)
-    print(m.group(0) if m else raw)
+    if r.returncode != 0:
+        print(f"[explore][agy] stderr: {r.stderr.strip()}", file=sys.stderr)
+    print(extract_agy_result(r.stdout))
 else:
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
 
