@@ -23,6 +23,7 @@ STATE_VERSION = 1
 ACTIVATION_THRESHOLD = 0.6
 SATISFIED_DORMANT_THRESHOLD = 0.35
 ACTIVE_DORMANT_THRESHOLD = 0.42
+RECENT_ACTION_WINDOW_SECONDS = 20 * 60
 
 VALID_STATES = {"active", "satisfied", "dormant", "suppressed"}
 RUNTIME_RECORD_KEYS = {
@@ -115,6 +116,29 @@ def _curiosity(body_state: Mapping[str, Any] | None) -> float | None:
     except Exception:
         return None
 
+
+
+
+def _recent_action_matches(
+    body_state: Mapping[str, Any] | None,
+    *,
+    mode: str,
+    now: _dt.datetime | None = None,
+    within_seconds: int = RECENT_ACTION_WINDOW_SECONDS,
+) -> bool:
+    if not isinstance(body_state, Mapping):
+        return False
+    if _clean(body_state.get("last_action_mode")) != _clean(mode):
+        return False
+    ts = _parse_ts(body_state.get("last_action_at"))
+    if ts is None:
+        return False
+    current_now = now or _now()
+    try:
+        delta = (current_now - ts).total_seconds()
+    except Exception:
+        return False
+    return 0.0 <= delta <= max(0, within_seconds)
 
 def _body_scalar(body_state: Mapping[str, Any] | None, key: str, default: float = 0.5) -> float:
     if not isinstance(body_state, Mapping):
@@ -399,7 +423,6 @@ def decay_tick(
     energy = _body_scalar(body_state, "energy", 0.65)
     return_to_body_pressure = _body_scalar(body_state, "return_to_body_pressure", 0.0)
     remote_mode = _clean((body_state or {}).get("remote_mode")) if isinstance(body_state, Mapping) else ""
-    last_action_mode = _clean((body_state or {}).get("last_action_mode")) if isinstance(body_state, Mapping) else ""
 
     for name, record in current["desires"].items():
         cfg = catalog.get(name, {})
@@ -437,7 +460,7 @@ def decay_tick(
                 record["charge"] = round(min(record["charge"], 0.24), 3)
 
         if is_stretch:
-            if last_action_mode == "physical_move":
+            if _recent_action_matches(body_state, mode="physical_move", now=current_now):
                 record["state"] = "satisfied"
                 record["satisfaction"] = round(max(record["satisfaction"], 0.68), 3)
                 record["charge"] = round(min(record["charge"], 0.22), 3)
@@ -452,7 +475,7 @@ def decay_tick(
                     growth += max(0.0, 0.45 - curiosity) * 0.04
 
         if is_remote_roam:
-            if remote_mode == "remote_avatar" or last_action_mode == "remote_avatar":
+            if remote_mode == "remote_avatar" or _recent_action_matches(body_state, mode="remote_avatar", now=current_now):
                 record["state"] = "satisfied"
                 record["satisfaction"] = round(max(record["satisfaction"], 0.66), 3)
                 record["charge"] = round(min(record["charge"], 0.20), 3)

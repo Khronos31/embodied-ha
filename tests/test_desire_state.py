@@ -229,6 +229,82 @@ class DesireStateTests(unittest.TestCase):
             low["desires"]["want_to_roam_remotely"]["charge"],
         )
 
+    def test_recent_physical_move_only_temporarily_satisfies_stretch(self):
+        catalog = self._catalog()
+        base = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
+        state = desire_state.normalize_state(None, catalog)
+        state["desires"]["want_to_stretch"]["state"] = "active"
+        state["desires"]["want_to_stretch"]["charge"] = 0.8
+
+        fresh = desire_state.decay_tick(
+            copy.deepcopy(state),
+            catalog=catalog,
+            body_state={
+                "curiosity": 0.3,
+                "energy": 0.8,
+                "stress": 0.2,
+                "remote_mode": "",
+                "last_action_mode": "physical_move",
+                "last_action_at": base.isoformat(timespec="seconds"),
+            },
+            now=base + timedelta(minutes=5),
+        )
+        stale = desire_state.decay_tick(
+            copy.deepcopy(state),
+            catalog=catalog,
+            body_state={
+                "curiosity": 0.3,
+                "energy": 0.8,
+                "stress": 0.2,
+                "remote_mode": "",
+                "last_action_mode": "physical_move",
+                "last_action_at": base.isoformat(timespec="seconds"),
+            },
+            now=base + timedelta(minutes=30),
+        )
+
+        self.assertEqual(fresh["desires"]["want_to_stretch"]["state"], "satisfied")
+        self.assertNotEqual(stale["desires"]["want_to_stretch"]["state"], "satisfied")
+
+    def test_recent_remote_project_only_temporarily_satisfies_remote_roam(self):
+        catalog = self._catalog()
+        base = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
+        state = desire_state.normalize_state(None, catalog)
+        state["desires"]["want_to_roam_remotely"]["state"] = "active"
+        state["desires"]["want_to_roam_remotely"]["charge"] = 0.8
+
+        fresh = desire_state.decay_tick(
+            copy.deepcopy(state),
+            catalog=catalog,
+            body_state={
+                "curiosity": 0.9,
+                "energy": 0.7,
+                "stress": 0.2,
+                "remote_mode": "",
+                "last_action_mode": "remote_avatar",
+                "last_action_at": base.isoformat(timespec="seconds"),
+                "return_to_body_pressure": 0.1,
+            },
+            now=base + timedelta(minutes=5),
+        )
+        stale = desire_state.decay_tick(
+            copy.deepcopy(state),
+            catalog=catalog,
+            body_state={
+                "curiosity": 0.9,
+                "energy": 0.7,
+                "stress": 0.2,
+                "remote_mode": "",
+                "last_action_mode": "remote_avatar",
+                "last_action_at": base.isoformat(timespec="seconds"),
+                "return_to_body_pressure": 0.1,
+            },
+            now=base + timedelta(minutes=30),
+        )
+
+        self.assertEqual(fresh["desires"]["want_to_roam_remotely"]["state"], "satisfied")
+        self.assertNotEqual(stale["desires"]["want_to_roam_remotely"]["state"], "satisfied")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -442,6 +442,7 @@ phase2_prompt = context + f"""
 読み取り（必要なときだけ）:
 - ha_get … センサー欄に無い個別エンティティの現在値・履歴を読む（気になったときだけ）
 - get_sensors … 主要センサーをまとめて取り直す
+- get_location / move_to / project_to / return_to_body / estimate_move_cost … 物理体の部屋と今つないでいる窓を確認する。身体ごと近くへ行くなら move_to、今の部屋に身体を残したまま別の窓を覗くなら project_to、戻るなら return_to_body。
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。見たい対象が画角外にありそうなら、少し動かしてから camera_get で再確認してよい。
 - listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false で、文字が必要なときだけ true にする。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。結果は active_listen_log に残る。

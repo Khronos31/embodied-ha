@@ -53,6 +53,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "physical_anchor_host": "",
     "remote_avatar_host": "",
     "last_action_mode": "",
+    "last_action_at": "",
     "last_action_cost": 0.0,
     "last_target_room": "",
     "updated_at": "",
@@ -85,6 +86,7 @@ def normalize_state(raw: Any) -> dict[str, Any]:
         "physical_anchor_host",
         "remote_avatar_host",
         "last_action_mode",
+        "last_action_at",
         "last_target_room",
     ):
         state[key] = _clean(raw.get(key))
@@ -312,6 +314,7 @@ def apply_action_effect(
     return_pressure = current["return_to_body_pressure"]
 
     current["last_action_mode"] = mode
+    current["last_action_at"] = current_now.isoformat(timespec="seconds")
     current["last_action_cost"] = round(cost, 3)
     current["last_target_room"] = target
 
