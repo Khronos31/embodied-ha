@@ -48,12 +48,12 @@ class BodyContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)
             body_state_path = Path(tmpdir) / "body_state.json"
-            body_state_path.write_text(json.dumps({"physical_anchor_host": "alsa://study"}, ensure_ascii=False), encoding="utf-8")
+            body_state_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(Path(tmpdir) / "missing.json"), "EHA_BODY_STATE_FILE": str(body_state_path)}, clear=False):
                 output = self.body_context.format_body_context()
         self.assertIn("# 身体位置", output)
         self.assertIn("物理体の位置: スタディ (`study`)", output)
-        self.assertIn("物理体の足場デバイス: `alsa://study`", output)
+        self.assertNotIn("足場デバイス", output)
         self.assertIn("電脳体の位置: なし", output)
         self.assertIn("リビング:2", output)
         self.assertIn("project_to", output)
@@ -65,11 +65,11 @@ class BodyContextTests(unittest.TestCase):
             state_path = Path(tmpdir) / "body_location.json"
             body_state_path = Path(tmpdir) / "body_state.json"
             state_path.write_text(json.dumps({"current_room": "居間", "previous_room": "study", "last_move_cost": 2}, ensure_ascii=False), encoding="utf-8")
-            body_state_path.write_text(json.dumps({"physical_anchor_host": "alsa://living_room"}, ensure_ascii=False), encoding="utf-8")
+            body_state_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(state_path), "EHA_BODY_STATE_FILE": str(body_state_path)}, clear=False):
                 output = self.body_context.format_body_context()
         self.assertIn("物理体の位置: リビング (`living_room`)", output)
-        self.assertIn("物理体の足場デバイス: `alsa://living_room`", output)
+        self.assertNotIn("足場デバイス", output)
         self.assertIn("直前の物理移動: スタディ (`study`) から来た", output)
         self.assertIn("直前の物理移動コスト: 2", output)
 
@@ -83,7 +83,7 @@ class BodyContextTests(unittest.TestCase):
                 "projected_room": "kitchen",
                 "projected_host": "camera.kitchen"
             }, ensure_ascii=False), encoding="utf-8")
-            body_state_path.write_text(json.dumps({"physical_anchor_host": "alsa://study", "remote_avatar_host": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
+            body_state_path.write_text(json.dumps({"remote_avatar_host": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {
                 "EHA_ROOM_GRAPH_FILE": str(graph_path),
                 "EHA_BODY_LOCATION_FILE": str(state_path),
@@ -91,7 +91,7 @@ class BodyContextTests(unittest.TestCase):
             }, clear=False):
                 output = self.body_context.format_body_context()
         self.assertIn("物理体の位置: スタディ (`study`)", output)
-        self.assertIn("物理体の足場デバイス: `alsa://study`", output)
+        self.assertNotIn("足場デバイス", output)
         self.assertIn("電脳体の位置: 台所 (`kitchen`)", output)
         self.assertIn("電脳体が見ているデバイス: `camera.kitchen`", output)
         self.assertIn("return_to_body", output)

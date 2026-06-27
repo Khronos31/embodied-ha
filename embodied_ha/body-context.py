@@ -151,15 +151,11 @@ def format_body_context(limit: int = 5) -> str:
     body_state = load_body_state()
     current = state["current_room"]
     projected = state.get("projected_room")
-    physical_host = clean(body_state.get("physical_anchor_host"))
-    current_host = clean(body_state.get("current_device_host"))
     projected_host = state.get("projected_host") or clean(body_state.get("remote_avatar_host"))
     lines = [
         "# 身体位置",
         f"物理体の位置: {room_label(current, graph)} (`{current}`)",
     ]
-    if physical_host:
-        lines.append(f"物理体の足場デバイス: `{physical_host}`")
     if projected:
         lines.append(f"電脳体の位置: {room_label(projected, graph)} (`{projected}`)")
         if projected_host:

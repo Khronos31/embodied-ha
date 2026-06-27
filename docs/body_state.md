@@ -42,8 +42,6 @@ Claude には見せず、内部処理のみに使用するフィールド。
 | `remote_since` | string | 電脳体モードに入った時刻（ISO 8601） |
 | `remote_updated_at` | string | 最後にリモート状態が更新された時刻 |
 | `remote_move_cost` | float | 現在位置までの移動コストの累積 |
-| `current_device_host` | string | 現在アクティブなデバイスホスト |
-| `physical_anchor_host` | string | 物理的なアンカーデバイスのホスト |
 | `remote_avatar_host` | string | 電脳体投影先のホスト |
 | `last_action_mode` | string | 最後に実行したアクションのモード |
 | `last_action_at` | string | 最後にアクションを実行した時刻 |

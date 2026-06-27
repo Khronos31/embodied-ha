@@ -50,8 +50,6 @@ DEFAULT_STATE: dict[str, Any] = {
     "remote_since": "",
     "remote_updated_at": "",
     "remote_move_cost": 0.0,
-    "current_device_host": "",
-    "physical_anchor_host": "",
     "remote_avatar_host": "",
     "last_action_mode": "",
     "last_action_at": "",
@@ -88,8 +86,6 @@ def normalize_state(raw: Any) -> dict[str, Any]:
         "remote_room",
         "remote_since",
         "remote_updated_at",
-        "current_device_host",
-        "physical_anchor_host",
         "remote_avatar_host",
         "last_action_mode",
         "last_action_at",
@@ -378,7 +374,6 @@ def apply_action_effect(
         current["remote_updated_at"] = current_now.isoformat(timespec="seconds")
         current["remote_move_cost"] = round(distance, 3)
         current["remote_avatar_host"] = host
-        current["current_device_host"] = host
     elif mode == "physical_move":
         stress -= 0.012
         confidence += 0.010
@@ -390,8 +385,6 @@ def apply_action_effect(
         current["remote_updated_at"] = ""
         current["remote_move_cost"] = 0.0
         current["remote_avatar_host"] = ""
-        current["current_device_host"] = ""
-        current["physical_anchor_host"] = ""
     elif mode == "direct_in_room":
         stress -= 0.007
         confidence += 0.006
@@ -403,8 +396,6 @@ def apply_action_effect(
         current["remote_updated_at"] = ""
         current["remote_move_cost"] = 0.0
         current["remote_avatar_host"] = ""
-        current["current_device_host"] = host
-        current["physical_anchor_host"] = host
 
     current["stress"] = round(_clamp(stress), 3)
     current["confidence"] = round(_clamp(confidence), 3)
