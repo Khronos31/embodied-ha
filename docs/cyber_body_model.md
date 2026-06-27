@@ -160,5 +160,3 @@ curiosity_factor = max(0.2, 1.0 - curiosity)
 ## 今後の課題（未実装）
 
 - `projection_targets` をWeb UIから追加・削除できるフロー
-- `enter_cyberspace` の侵入許可をデバイス側が返せる仕組み（例: Astrolabeが「今は受け入れない」と拒否）
-- 物理体と電脳体が別々に感覚を持つ「分離知覚」モード（現状は片方のみ）
