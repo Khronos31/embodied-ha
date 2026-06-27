@@ -1605,6 +1605,8 @@ async function renderSettingsForm() {
         }
     }
 
+    renderProjectionTargetList(prefsData.projection_targets || []);
+
     initDropdownOptions('setting-presence-entity', 'input_boolean,binary_sensor,device_tracker,person', prefsData.presence?.entity);
 
     const policiesList = document.getElementById('policies-list');
@@ -1821,6 +1823,16 @@ function serializeFormToPrefs() {
         }
     });
 
+    const projection_targets = [];
+    document.querySelectorAll('.projection-target-item').forEach(card => {
+        const displayName = card.querySelector('.pt-display-name')?.value?.trim();
+        const id = card.querySelector('.pt-id')?.value?.trim();
+        const room = card.querySelector('.pt-room')?.value?.trim() || null;
+        if (displayName && id) {
+            projection_targets.push({ id, display_name: displayName, room: room || null });
+        }
+    });
+
     const audio_sources = getAudioSourcesFromUI();
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
     const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
@@ -1838,7 +1850,8 @@ function serializeFormToPrefs() {
         entities,
         presence,
         policies,
-        sensors
+        sensors,
+        projection_targets
     };
 }
 
@@ -1894,6 +1907,155 @@ function esc(s) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+async function getRoomGraphData() {
+    if (window.roomGraphData && typeof window.roomGraphData === 'object') {
+        return window.roomGraphData;
+    }
+    if (window.roomGraphDataPromise) {
+        return window.roomGraphDataPromise;
+    }
+
+    window.roomGraphDataPromise = fetch('/api/body/rooms')
+        .then(r => {
+            if (!r.ok) {
+                throw new Error(`room graph request failed: ${r.status}`);
+            }
+            return r.json();
+        })
+        .then(data => {
+            window.roomGraphData = data && typeof data === 'object' ? data : {};
+            return window.roomGraphData;
+        })
+        .catch(err => {
+            console.warn('[Settings] room graph fetch failed, falling back to text input', err);
+            window.roomGraphData = null;
+            return null;
+        });
+
+    return window.roomGraphDataPromise;
+}
+
+function populateRoomSelect(selectEl, selectedRoom) {
+    if (!selectEl) return;
+    const fallbackToText = () => {
+        if (selectEl.dataset.fallbackInput === 'true') return;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = `${selectEl.className} pt-room`;
+        input.placeholder = '例: study';
+        input.value = selectedRoom || '';
+        input.dataset.fallbackInput = 'true';
+        selectEl.replaceWith(input);
+    };
+
+    const applyRooms = data => {
+        const rooms = data?.rooms || {};
+        const entries = Object.entries(rooms);
+        if (!entries.length) {
+            fallbackToText();
+            return;
+        }
+
+        selectEl.innerHTML = '<option value="">指定なし（モバイル等）</option>';
+        entries.forEach(([roomId, roomInfo]) => {
+            const opt = document.createElement('option');
+            opt.value = roomId;
+            opt.textContent = roomInfo?.display_name || roomId;
+            if (roomId === selectedRoom) opt.selected = true;
+            selectEl.appendChild(opt);
+        });
+
+        if (!selectedRoom) {
+            selectEl.value = '';
+        } else if (!Array.from(selectEl.options).some(opt => opt.value === selectedRoom)) {
+            fallbackToText();
+        }
+    };
+
+    if (window.roomGraphData && typeof window.roomGraphData === 'object') {
+        applyRooms(window.roomGraphData);
+        return;
+    }
+
+    getRoomGraphData().then(data => {
+        if (data) {
+            applyRooms(data);
+        } else {
+            fallbackToText();
+        }
+    });
+}
+
+function renderProjectionTargetList(targets) {
+    const listEl = document.getElementById('projection-targets-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (Array.isArray(targets)) {
+        targets.forEach(t => addProjectionTargetRow(t));
+    }
+}
+
+function addProjectionTargetRow(target = {}) {
+    const listEl = document.getElementById('projection-targets-list');
+    if (!listEl) return;
+    const card = document.createElement('div');
+    card.className = 'setting-item-card projection-target-item';
+
+    const id = target.id || '';
+    const displayName = target.display_name || '';
+    const room = target.room || '';
+
+    card.innerHTML = `
+        <div class="setting-item-header">
+            <span class="setting-item-title">外部デバイス</span>
+            <button type="button" class="btn-remove" onclick="this.closest('.projection-target-item').remove()">
+                ✕ 削除
+            </button>
+        </div>
+        <div class="config-grid-3">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>表示名 (display_name)</label>
+                <input type="text" class="pt-display-name form-input" placeholder="例: Astrolabe（スタディ）" value="${esc(displayName)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>ID (id)</label>
+                <input type="text" class="pt-id form-input" placeholder="external://device_name" value="${esc(id)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>設置部屋 (room)</label>
+                <select class="pt-room form-input">
+                    <option value="">指定なし（モバイル等）</option>
+                </select>
+            </div>
+        </div>
+    `;
+
+    listEl.appendChild(card);
+
+    const nameInput = card.querySelector('.pt-display-name');
+    const idInput = card.querySelector('.pt-id');
+    if (!id) {
+        idInput.dataset.autoGenerated = 'true';
+    } else {
+        idInput.dataset.autoGenerated = 'false';
+    }
+    nameInput.addEventListener('input', () => {
+        if (!idInput.value || idInput.dataset.autoGenerated === 'true') {
+            const slug = nameInput.value
+                .toLowerCase()
+                .replace(/[^\w぀-鿿]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            idInput.value = slug ? `external://${slug}` : '';
+            idInput.dataset.autoGenerated = 'true';
+        }
+    });
+    idInput.addEventListener('input', () => {
+        idInput.dataset.autoGenerated = 'false';
+    });
+
+    const roomSelect = card.querySelector('.pt-room');
+    populateRoomSelect(roomSelect, room);
+}
 function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
     const speakersList = document.getElementById('speakers-list');
     const card = document.createElement('div');

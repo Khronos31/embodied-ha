@@ -320,6 +320,22 @@
                                 <!-- Dynamically generated -->
                             </div>
                         </section>
+
+                        <!-- Section: Projection Targets (電脳体の投射先デバイス) -->
+                        <section class="settings-section card">
+                            <div class="section-header">
+                                <h3>電脳体の投射先デバイス (projection_targets)</h3>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="addProjectionTargetRow()">デバイスを追加</button>
+                            </div>
+                            <p class="section-desc">
+                                電脳体として侵入できる HA 管理外のデバイスを登録します。
+                                ID は <code>external://</code> で始まる識別子で、表示名と設置部屋を設定します。
+                                スマートフォンなど持ち歩くデバイスは部屋を「指定なし」にしてください。
+                            </p>
+                            <div id="projection-targets-list" class="settings-list">
+                                <!-- Dynamically generated -->
+                            </div>
+                        </section>
                     </div>
 
                     <!-- Tab 4: Advanced JSON Settings -->
