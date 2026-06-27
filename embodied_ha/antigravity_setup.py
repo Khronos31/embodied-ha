@@ -11,7 +11,7 @@ BIN_ENV = "EHA_ANTIGRAVITY_BIN"
 
 
 def home_dir() -> str:
-    return os.environ.get(HOME_ENV, "/data/.agy")
+    return os.environ.get(HOME_ENV, "/data/")
 
 
 def bin_dir() -> str:

@@ -166,10 +166,27 @@ PYEOF
 )
 fi
 
+eval "$(
+SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+import os, shlex, sys
+
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from listen_queue import prepare_queued_listen_session
+
+ctx = prepare_queued_listen_session("chat")
+if ctx:
+    for key, value in ctx.items():
+        if value is None:
+            continue
+        print(f"export {key}={shlex.quote(str(value))}")
+PYEOF
+)"
+
 # --- Claude呼び出し ---
 RESPONSE=$(USER_MSG="$USER_MSG" RECENT_ACTIVITY="$RECENT_ACTIVITY" CURRENT_MOOD="$CURRENT_MOOD" LONG_MEMORY="$LONG_MEMORY" CHAT_HISTORY="$CHAT_HISTORY" SENSORS="$SENSORS" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" ENTITY_TABLE="$ENTITY_TABLE" EXTRA_CONTEXT="$EXTRA_CONTEXT" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" PENDING_PROPOSAL="$PENDING_PROPOSAL" OPEN_LOOPS="$OPEN_LOOPS" TURN_TAKING_STATE="$TURN_TAKING_STATE" CHARACTER="$CHARACTER" RECENT_AUDITORY_INPUT="$RECENT_AUDITORY_INPUT" ACTIVE_DESIRES="${ACTIVE_DESIRES:-}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import json, os, subprocess, sys
 
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 CLAUDE_ENV = {**os.environ,
               "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
@@ -238,7 +255,7 @@ prompt = f"""# あなた自身について
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）、短時間の音声確認（listen）、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（project_to / return_to_body）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、リビングカメラの撮影（camera_get）・パン/チルト操作（camera_ptz: left/right/up/down は「カメラが映す向き」で指定）、短時間の音声確認（listen）と次のセッション予約（queue_next_listen）、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（project_to / return_to_body）
 - **今の自分にはできない**: ファイルへの書き込み・設定ファイルの編集・コードの実装。ファイルの読み取り（Read）はできる。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 
@@ -391,7 +408,7 @@ if _sd:
                 "mcp__sociality__record_consent,mcp__sociality__should_interrupt,"
                 "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
-                "mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
+                "mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                 "mcp__http__http_get,mcp__http__http_post,"
                 "Read",
                 "--mcp-config", _mcp_path]
@@ -426,6 +443,11 @@ if not result_text.strip():
 print(result_text)
 PYEOF
 )
+
+
+if [ -n "${EHA_QUEUED_LISTEN_FILE:-}" ]; then
+  rm -f "$EHA_QUEUED_LISTEN_FILE" 2>/dev/null || true
+fi
 
 # --- JSON抽出 ---
 PARSED_FILE="$TMP_DIR/chat_parsed.json"

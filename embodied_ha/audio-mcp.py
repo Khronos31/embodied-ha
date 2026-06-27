@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
+from listen_queue import queue_next_listen_request
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, now, parse_ts
@@ -246,7 +247,47 @@ def build_listen_spec() -> dict:
 TOOL_LISTEN = build_listen_spec()
 
 
+TOOL_QUEUE_NEXT_LISTEN = {
+    "name": "queue_next_listen",
+    "description": (
+        "次のセッションで音を聴く予定を保存する。"
+        "今この場で録音するのではなく、次回の chat/watch/explore で "
+        "一時ファイルを作って解析するための予約だけを残す。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "上記ソースのいずれか。省略時はデフォルト",
+            },
+            "duration": {
+                "type": "integer",
+                "description": "次回録音秒数。デフォルト 5、最大 30",
+            },
+            "transcribe": {
+                "type": "boolean",
+                "description": "次回の解析で文字起こしを行うか。デフォルト false",
+            },
+            "mode": {
+                "type": "string",
+                "description": "予約元のモード（chat/watch/explore など）",
+            },
+            "reason": {
+                "type": "string",
+                "description": "なぜ次回聴きたいのかの短い説明",
+            },
+            "note": {
+                "type": "string",
+                "description": "補足メモ",
+            },
+        },
+    },
+}
+
+
 TOOL_READ_AUDIO_LOG = {
+
     "name": "read_audio_log",
     "description": "最近の常時STT生ログを読む。VAD/STTの成功・失敗・スキップ診断を含む。",
     "inputSchema": {
@@ -503,6 +544,26 @@ def transcribe_audio(path: str) -> str | None:
     return transcribe_via_local(path)
 
 
+def queue_next_listen(args: dict):
+    source = normalize_source_uri(args.get("source") or default_listen_source())
+    duration = normalize_duration(args.get("duration"))
+    transcribe_arg = args.get("transcribe", False)
+    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    request = {
+        "timestamp": now().isoformat(timespec="seconds"),
+        "request_id": uuid.uuid4().hex,
+        "source": source,
+        "source_label": label_for_source(source),
+        "duration": duration,
+        "transcribe": transcribe,
+        "mode": clean(args.get("mode")) or (clean(os.environ.get("EHA_ACTOR")) or "unknown"),
+        "reason": clean(args.get("reason")),
+        "note": clean(args.get("note")),
+    }
+    path = queue_next_listen_request(request)
+    return [text(json.dumps({"queued": True, "request_path": path, "request": request}, ensure_ascii=False))], True
+
+
 def read_audio_log(args: dict):
     return read_jsonl_log(AUDIO_LOG_FILE, args)
 
@@ -737,6 +798,7 @@ def listen(args: dict):
 if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
+        "queue_next_listen": {"spec": TOOL_QUEUE_NEXT_LISTEN, "handler": queue_next_listen},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
         "read_heard_audio_log": {"spec": TOOL_READ_HEARD_AUDIO_LOG, "handler": read_heard_audio_log},
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},

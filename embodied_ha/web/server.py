@@ -215,7 +215,7 @@ def antigravity_status() -> dict:
             "authenticated": False,
             "installing": False,
             "login_active": False,
-            "home_dir": os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/.agy"),
+            "home_dir": os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/"),
             "bin_dir": os.environ.get("EHA_ANTIGRAVITY_BIN_DIR", ""),
             "binary_path": os.environ.get("EHA_ANTIGRAVITY_BIN", ""),
             "oauth_token_path": "",

@@ -140,6 +140,7 @@ case "$MODE" in
 - camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。画角外にありそうなら、camera_get の前に少し振って確認してよい。自分のいる部屋から直接見に行くか、遠隔で首を振るかを body_location / sensory_origin / move_cost で意識する。
 - listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
+- queue_next_listen … 今は聴かず、次のセッションで音を取得したいときに予約だけ残す。
 - read_heard_audio_log … 常時STTで聞こえた最近の発話ログを読む。
 - read_active_listen_log … 自分から listen で聞きに行った最近のログを読む。
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
@@ -156,7 +157,7 @@ case "$MODE" in
 3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら project_to を自然に選んでよい。無理に両方は使わない。
 4. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 5. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
     MCP_SERVERS="sensors ha camera audio body memory sociality http"
     ;;
   reflect)
@@ -253,10 +254,25 @@ ${OPEN_LOOPS}
 では、始めてください。"
 
 # --- Claude エージェント起動（モードに応じた MCP ツールを許可）---
-RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-（特になし）}" ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
-import json, os, subprocess
+eval "$(
+SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+import os, shlex, sys
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from listen_queue import prepare_queued_listen_session
 
-CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
+ctx = prepare_queued_listen_session("explore")
+if ctx:
+    for key, value in ctx.items():
+        if value is None:
+            continue
+        print(f"export {key}={shlex.quote(str(value))}")
+PYEOF
+)"
+RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-（特になし）}" ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+import json, os, subprocess, sys
+
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 env = {**os.environ,
        "EHA_ACTOR": "explore",
        "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
@@ -266,10 +282,14 @@ sys_prompt  = os.environ["SYS_PROMPT"]
 user_prompt = os.environ["USER_PROMPT"]
 mode        = os.environ.get("MODE", "explore")
 script_dir  = os.environ.get("SCRIPT_DIR", "")
+recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "").strip()
+if recent_auditory_input:
+    user_prompt = f"【いま聞こえた音】\n{recent_auditory_input}\n\n{user_prompt}"
 
 msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
 
-cmd = [CLAUDE, "-p", "--model", "sonnet",
+session_model = os.environ.get("EHA_SESSION_MODEL", "sonnet")
+cmd = [CLAUDE, "-p", "--model", session_model,
        "--input-format", "stream-json",
        "--output-format", "stream-json",
        "--verbose",
@@ -306,6 +326,16 @@ for line in r.stdout.splitlines():
     except: pass
 PYEOF
 )
+
+
+if [ -n "${EHA_QUEUED_LISTEN_FILE:-}" ]; then
+  rm -f "$EHA_QUEUED_LISTEN_FILE" 2>/dev/null || true
+fi
+
+if [[ "$RESPONSE" == __QUEUED_LISTEN__* ]]; then
+  printf "%s\n" "${RESPONSE#__QUEUED_LISTEN__}"
+  exit 0
+fi
 
 # --- JSON抽出 ---
 PARSED_FILE="$TMP_DIR/explore_parsed.json"

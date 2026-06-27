@@ -15,12 +15,12 @@ import antigravity_setup  # noqa: E402
 class AntigravitySetupTests(unittest.TestCase):
     def test_default_paths_use_data_home(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            self.assertEqual(antigravity_setup.home_dir(), "/data/.agy")
-            self.assertEqual(antigravity_setup.bin_dir(), "/data/.agy/bin")
-            self.assertEqual(antigravity_setup.binary_path(), "/data/.agy/bin/agy")
+            self.assertEqual(antigravity_setup.home_dir(), "/data/")
+            self.assertEqual(antigravity_setup.bin_dir(), "/data/bin")
+            self.assertEqual(antigravity_setup.binary_path(), "/data/bin/agy")
             self.assertEqual(
                 antigravity_setup.oauth_token_path(),
-                "/data/.agy/.gemini/antigravity-cli/antigravity-oauth-token",
+                "/data/.gemini/antigravity-cli/antigravity-oauth-token",
             )
 
     def test_env_overrides_are_respected(self):

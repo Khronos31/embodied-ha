@@ -184,9 +184,24 @@ fi
 tlog "4d.直近の会話"
 
 # --- 4. Claude呼び出し（2フェーズ: カメラ選択 → 観察）---
-RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
-import base64, json, os, subprocess, urllib.request, time
+eval "$(
+SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+import os, shlex, sys
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from listen_queue import prepare_queued_listen_session
 
+ctx = prepare_queued_listen_session("watch")
+if ctx:
+    for key, value in ctx.items():
+        if value is None:
+            continue
+        print(f"export {key}={shlex.quote(str(value))}")
+PYEOF
+)"
+RESPONSE=$(SENSORS_DATA="$SENSORS" PREV_DATA="$PREV_LOG" LONG_MEMORY="$LONG_MEMORY" URGES_DATA="$URGES" CHAT_DATA="$RECENT_CHAT" OPEN_LOOPS_DATA="$OPEN_LOOPS" HOUR="$HOUR" RECENT_MOTION_DATA="$RECENT_MOTION" ANOMALY_CONTEXT="$ANOMALY_CONTEXT" BODY_LOCATION_CONTEXT="$BODY_LOCATION_CONTEXT" CHARACTER="$CHARACTER" FEATURES_MD="$FEATURES_MD" FEATURES_PRESENTED="$FEATURES_PRESENTED" EXTRA_CONTEXT="$EXTRA_CONTEXT" SCRIPT_DIR="$SCRIPT_DIR" EHA_TIMING="${EHA_TIMING:-0}" EHA_TIMING_LOG="${_timing_log:-/dev/stderr}" python3 << 'PYEOF'
+import base64, json, os, subprocess, sys, urllib.request, time
+
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 def _ptime(label):
     if os.environ.get("EHA_TIMING") == "1":
         now = time.perf_counter()
@@ -242,10 +257,13 @@ def fetch_cameras(names):
     for p in procs.values():
         p.wait()
 
-def call_claude(content_blocks, model="sonnet", allowed_tools=None, mcp_config=None):
+def call_claude(content_blocks, model="sonnet", allowed_tools=None, mcp_config=None, backend_bin=None, backend_model=None):
     import sys
+
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": content_blocks}})
-    cmd = [CLAUDE, "-p", "--model", model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+    backend_bin = backend_bin or CLAUDE
+    backend_model = backend_model or model
+    cmd = [backend_bin, "-p", "--model", backend_model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
     if mcp_config:
@@ -386,6 +404,13 @@ if extra_context.strip():
 【追加コンテキスト】
 {extra_context.strip()}"""
 
+recent_auditory_input = os.environ.get("RECENT_AUDITORY_INPUT", "").strip()
+if recent_auditory_input:
+    context += f"""
+
+【いま聞こえた音】
+{recent_auditory_input}"""
+
 # --- Phase 1: どのカメラを見るか判断 ---
 # カメラ選択に必要な情報だけを渡す（長期記憶・git・観察履歴は不要）。
 # フルcontextを渡すと入力が肥大しhaikuが極端に遅くなるため、ここはスリムに保つ。
@@ -446,6 +471,7 @@ phase2_prompt = context + f"""
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。見たい対象が画角外にありそうなら、少し動かしてから camera_get で再確認してよい。
 - listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false で、文字が必要なときだけ true にする。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。結果は active_listen_log に残る。
+- queue_next_listen … 今は聴かず、次のセッションで音を取得したいときに予約だけ残す。
 内なる衝動に「身体がこわばる」「ストレッチしたい」感じがあるなら move_to を優先し、「自由に飛び回りたい」「別の窓を覗きたい」感じがあるなら project_to を優先してよい。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
@@ -510,7 +536,7 @@ if _sd:
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
-        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
+        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                     "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
@@ -521,12 +547,22 @@ if _sd:
     else:
         _mcp_path = None
 
-_resp = call_claude(content, allowed_tools=_allowed, mcp_config=_mcp_path)
+_resp = call_claude(content, allowed_tools=_allowed, mcp_config=_mcp_path, backend_bin=os.environ.get("EHA_SESSION_BIN") or CLAUDE, backend_model=os.environ.get("EHA_SESSION_MODEL", "sonnet"))
 _ptime("phase2(sonnet)観察")
 print(_resp)
 PYEOF
 )
 tlog "5.Claude呼び出し(全体)"
+
+if [ -n "${EHA_QUEUED_LISTEN_FILE:-}" ]; then
+  rm -f "$EHA_QUEUED_LISTEN_FILE" 2>/dev/null || true
+fi
+
+if [[ "$RESPONSE" == __QUEUED_LISTEN__* ]]; then
+  printf "%s\n" "${RESPONSE#__QUEUED_LISTEN__}"
+  exit 0
+fi
+
 
 # --- 5. JSON抽出・パース（tempファイル経由で確実に）---
 PARSED_FILE="$TMP_DIR/parsed.json"
