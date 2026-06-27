@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, now, parse_ts
@@ -615,6 +616,9 @@ def build_audio_context(entry: dict) -> dict:
         "access_mode": entry.get("access_mode"),
         "move_cost": entry.get("move_cost"),
         "move_path": entry.get("move_path"),
+        "action_mode": entry.get("action_mode"),
+        "action_cost": entry.get("action_cost"),
+        "target_host": entry.get("target_host"),
         "log_ref": {
             "file": active_listen_log_name(),
             "timestamp": entry.get("timestamp"),
@@ -657,6 +661,7 @@ def listen(args: dict):
             "duration_sec": duration,
             "transcribe_requested": transcribe,
             **sensory,
+            **action_fields_for_sensory(sensory, host=source),
         }
 
     # 未登録でも rtsp:// / alsa:// / tcp:// なら直接使用する
@@ -708,6 +713,16 @@ def listen(args: dict):
             payload["stt_provider"] = load_stt_provider()
             payload["stt_language"] = load_stt_language()
             payload["transcript"] = transcribe_audio(tmp_path)
+        try:
+            apply_action_to_body_state(
+                action_mode=payload.get("action_mode"),
+                action_cost=payload.get("action_cost"),
+                target_room=payload.get("source_room"),
+                target_host=payload.get("target_host"),
+                move_cost=payload.get("move_cost"),
+            )
+        except Exception:
+            pass
         record_active_listen(payload, source)
         payload["audio_context"] = build_audio_context(payload)
         return [text(json.dumps(payload, ensure_ascii=False))]

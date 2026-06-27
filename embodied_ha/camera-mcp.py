@@ -12,6 +12,7 @@ source の形式で自動判別:
 """
 import sys, json, base64, subprocess, os, argparse, datetime
 
+from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from sensory_origin import classify_sensory_origin
 
 
@@ -131,6 +132,7 @@ def camera_context(source):
         modality="visual",
     )
     context.update(sensory)
+    context.update(action_fields_for_sensory(sensory, host=source))
     return context
 
 
@@ -233,6 +235,16 @@ def main():
                 b64, url = fetch_image(source, args.ha_url, args.go2rtc_url)
                 if b64:
                     context = camera_context(source)
+                    try:
+                        apply_action_to_body_state(
+                            action_mode=context.get("action_mode"),
+                            action_cost=context.get("action_cost"),
+                            target_room=context.get("source_room"),
+                            target_host=context.get("target_host"),
+                            move_cost=context.get("move_cost"),
+                        )
+                    except Exception:
+                        pass
                     send({"jsonrpc": "2.0", "id": id_, "result": {
                         "content": [
                             {"type": "text", "text": json.dumps({"camera_context": context}, ensure_ascii=False)},

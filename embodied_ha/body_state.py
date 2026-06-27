@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Homeostasis state helpers for embodied-ha.
 
-This module keeps the homeostasis vector small and testable:
+This module keeps the public homeostasis vector small and testable:
 curiosity / energy / stress / confidence / social_openness.
+
+It also stores a few private embodiment fields used for remote-presence drift
+and return-to-body pressure. Those private fields are intentionally omitted
+from the prompt-facing serialized JSON so the model only feels the resulting
+stress/confidence shifts instead of being told the reason directly.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from typing import Any, Mapping
 
 from state_utils import clamp as _clamp
 from state_utils import clean as _clean
+from state_utils import coerce_float as _coerce_float
 from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
 
@@ -25,12 +31,29 @@ STATE_KEYS = (
     "social_openness",
 )
 
+PRIVATE_FLOAT_KEYS = (
+    "embodiment_tension",
+    "return_to_body_pressure",
+)
+
 DEFAULT_STATE: dict[str, Any] = {
     "curiosity": 0.52,
     "energy": 0.68,
     "stress": 0.24,
     "confidence": 0.56,
     "social_openness": 0.50,
+    "embodiment_tension": 0.0,
+    "return_to_body_pressure": 0.0,
+    "remote_mode": "",
+    "remote_room": "",
+    "remote_since": "",
+    "remote_updated_at": "",
+    "remote_move_cost": 0.0,
+    "current_device_host": "",
+    "remote_avatar_host": "",
+    "last_action_mode": "",
+    "last_action_cost": 0.0,
+    "last_target_room": "",
     "updated_at": "",
     "last_loop": "",
     "last_event": "",
@@ -46,14 +69,40 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     for key in STATE_KEYS:
         state[key] = round(_clamp(raw.get(key), state[key]), 3)
 
+    for key in PRIVATE_FLOAT_KEYS:
+        state[key] = round(_clamp(raw.get(key), 0.0, 1.0, state[key]), 3)
+
+    state["remote_move_cost"] = round(max(0.0, _coerce_float(raw.get("remote_move_cost"), state["remote_move_cost"])), 3)
+    state["last_action_cost"] = round(max(0.0, _coerce_float(raw.get("last_action_cost"), state["last_action_cost"])), 3)
+
+    for key in (
+        "remote_mode",
+        "remote_room",
+        "remote_since",
+        "remote_updated_at",
+        "current_device_host",
+        "remote_avatar_host",
+        "last_action_mode",
+        "last_target_room",
+    ):
+        state[key] = _clean(raw.get(key))
+
     for key in ("updated_at", "last_loop", "last_event", "last_result"):
         state[key] = _clean(raw.get(key))
 
     return state
 
 
+def public_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    current = normalize_state(dict(state))
+    result = {key: current[key] for key in STATE_KEYS}
+    for key in ("updated_at", "last_loop", "last_event", "last_result"):
+        result[key] = current.get(key)
+    return result
+
+
 def serialize_state(state: Mapping[str, Any]) -> str:
-    return json.dumps(normalize_state(dict(state)), ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(public_state(dict(state)), ensure_ascii=False, separators=(",", ":"))
 
 
 def load_state(path: str) -> dict[str, Any]:
@@ -110,12 +159,25 @@ def advance_tick(
     stress = current["stress"]
     confidence = current["confidence"]
     social_openness = current["social_openness"]
+    embodiment_tension = current["embodiment_tension"]
+    return_to_body_pressure = current["return_to_body_pressure"]
 
     curiosity += 0.01 + min(0.06, elapsed_hours * 0.012) + min(0.03, desire_count * 0.004)
     energy += (0.66 - energy) * min(0.18, 0.04 + elapsed_hours * 0.02)
     stress += (0.22 - stress) * min(0.16, 0.03 + elapsed_hours * 0.02)
     confidence += (0.58 - confidence) * min(0.10, 0.02 + elapsed_hours * 0.01)
     social_openness += (0.50 - social_openness) * min(0.08, 0.02 + elapsed_hours * 0.01)
+    embodiment_tension += (0.0 - embodiment_tension) * min(0.24, 0.06 + elapsed_hours * 0.05)
+    return_to_body_pressure += (0.0 - return_to_body_pressure) * min(0.16, 0.04 + elapsed_hours * 0.03)
+
+    if current.get("remote_mode") == "remote_avatar":
+        distance = max(0.0, current.get("remote_move_cost", 0.0))
+        distance_factor = max(0.15, min(1.0, distance / 3.0))
+        remote_drift = min(0.024, elapsed_hours * 0.016 * distance_factor)
+        stress += remote_drift * 0.7
+        confidence -= remote_drift * 0.55
+        embodiment_tension += remote_drift
+        return_to_body_pressure += remote_drift * 0.8
 
     if reason and reason not in ("定期実行", "手動実行"):
         curiosity += 0.015
@@ -134,6 +196,8 @@ def advance_tick(
     current["stress"] = round(_clamp(stress), 3)
     current["confidence"] = round(_clamp(confidence), 3)
     current["social_openness"] = round(_clamp(social_openness), 3)
+    current["embodiment_tension"] = round(_clamp(embodiment_tension), 3)
+    current["return_to_body_pressure"] = round(_clamp(return_to_body_pressure), 3)
     current["updated_at"] = current_now.isoformat(timespec="seconds")
     current["last_loop"] = loop_name
     current["last_event"] = reason or "tick"
@@ -217,6 +281,86 @@ def apply_feedback(
     current["last_loop"] = loop_name
     current["last_event"] = "success" if success else "failure"
     current["last_result"] = "success" if success else "failure"
+    return current
+
+
+def apply_action_effect(
+    state: Mapping[str, Any],
+    *,
+    action_mode: str,
+    action_cost: float | None = None,
+    target_room: str = "",
+    target_host: str = "",
+    move_cost: float | None = None,
+    now: _dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Apply a small embodied state change after direct/remote/move actions."""
+
+    current = normalize_state(dict(state))
+    current_now = now or _now()
+    mode = _clean(action_mode)
+    target = _clean(target_room)
+    host = _clean(target_host)
+    cost = max(0.0, _coerce_float(action_cost, 0.0))
+    distance = max(0.0, _coerce_float(move_cost, cost))
+
+    stress = current["stress"]
+    confidence = current["confidence"]
+    tension = current["embodiment_tension"]
+    return_pressure = current["return_to_body_pressure"]
+
+    current["last_action_mode"] = mode
+    current["last_action_cost"] = round(cost, 3)
+    current["last_target_room"] = target
+
+    if mode == "remote_avatar":
+        bump = min(0.028, 0.004 + min(0.018, distance * 0.006))
+        stress += bump * 0.65
+        confidence -= bump * 0.50
+        tension += bump
+        return_pressure += bump * 0.85
+        if target and target != current.get("remote_room"):
+            current["remote_since"] = current_now.isoformat(timespec="seconds")
+        elif not _clean(current.get("remote_since")):
+            current["remote_since"] = current_now.isoformat(timespec="seconds")
+        current["remote_mode"] = mode
+        current["remote_room"] = target
+        current["remote_updated_at"] = current_now.isoformat(timespec="seconds")
+        current["remote_move_cost"] = round(distance, 3)
+        current["remote_avatar_host"] = host
+        current["current_device_host"] = host
+    elif mode == "physical_move":
+        stress -= 0.012
+        confidence += 0.010
+        tension -= 0.090
+        return_pressure -= 0.100
+        current["remote_mode"] = ""
+        current["remote_room"] = ""
+        current["remote_since"] = ""
+        current["remote_updated_at"] = ""
+        current["remote_move_cost"] = 0.0
+        current["remote_avatar_host"] = ""
+        current["current_device_host"] = ""
+    elif mode == "direct_in_room":
+        stress -= 0.007
+        confidence += 0.006
+        tension -= 0.060
+        return_pressure -= 0.070
+        current["remote_mode"] = ""
+        current["remote_room"] = ""
+        current["remote_since"] = ""
+        current["remote_updated_at"] = ""
+        current["remote_move_cost"] = 0.0
+        current["remote_avatar_host"] = ""
+        current["current_device_host"] = host
+
+    current["stress"] = round(_clamp(stress), 3)
+    current["confidence"] = round(_clamp(confidence), 3)
+    current["embodiment_tension"] = round(_clamp(tension), 3)
+    current["return_to_body_pressure"] = round(_clamp(return_pressure), 3)
+    current["updated_at"] = current_now.isoformat(timespec="seconds")
+    current["last_event"] = mode or "action"
+    current["last_result"] = "action"
     return current
 
 

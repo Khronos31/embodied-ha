@@ -1,4 +1,5 @@
 import json
+import datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +90,60 @@ class BodyStateTests(unittest.TestCase):
         self.assertTrue(line.startswith("[body_state]"))
         self.assertIn("curiosity=", line)
         self.assertIn("reason=定期実行", line)
+
+    def test_serialize_state_hides_private_embodiment_fields(self):
+        state = body_state.normalize_state({
+            "confidence": 0.5,
+            "embodiment_tension": 0.4,
+            "return_to_body_pressure": 0.3,
+            "remote_mode": "remote_avatar",
+            "remote_room": "washroom",
+        })
+        payload = json.loads(body_state.serialize_state(state))
+        self.assertIn("confidence", payload)
+        self.assertNotIn("embodiment_tension", payload)
+        self.assertNotIn("remote_room", payload)
+
+    def test_remote_avatar_action_and_tick_create_small_drift(self):
+        initial = body_state.normalize_state(None)
+        after_action = body_state.apply_action_effect(
+            initial,
+            action_mode="remote_avatar",
+            action_cost=0.45,
+            target_room="washroom",
+            target_host="camera.washroom",
+            move_cost=3.0,
+        )
+        self.assertGreater(after_action["stress"], initial["stress"])
+        self.assertLess(after_action["confidence"], initial["confidence"])
+        self.assertEqual(after_action["remote_mode"], "remote_avatar")
+        self.assertEqual(after_action["remote_avatar_host"], "camera.washroom")
+
+        drifted = body_state.advance_tick(
+            after_action,
+            loop_name="watch",
+            trigger_reason="定期実行",
+            now=body_state._now() + datetime.timedelta(minutes=30),
+        )
+        self.assertGreaterEqual(drifted["embodiment_tension"], after_action["embodiment_tension"])
+        self.assertGreaterEqual(drifted["return_to_body_pressure"], after_action["return_to_body_pressure"])
+
+    def test_direct_in_room_clears_remote_presence_and_settles(self):
+        remote = body_state.normalize_state({
+            "stress": 0.35,
+            "confidence": 0.50,
+            "embodiment_tension": 0.4,
+            "return_to_body_pressure": 0.5,
+            "remote_mode": "remote_avatar",
+            "remote_room": "washroom",
+            "remote_move_cost": 3.0,
+        })
+        settled = body_state.apply_action_effect(remote, action_mode="direct_in_room", action_cost=0.05, target_room="study", target_host="alsa://default")
+        self.assertEqual(settled["remote_mode"], "")
+        self.assertEqual(settled["remote_room"], "")
+        self.assertEqual(settled["current_device_host"], "alsa://default")
+        self.assertLess(settled["stress"], remote["stress"])
+        self.assertGreater(settled["confidence"], remote["confidence"])
 
 
 if __name__ == "__main__":

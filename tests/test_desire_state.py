@@ -28,6 +28,11 @@ class DesireStateTests(unittest.TestCase):
                 "growth_rate": 0.025,
                 "prompt": "少し振り返りたい。",
             },
+            "return_to_body": {
+                "growth_rate": 0.0,
+                "prompt": "なんとなく落ち着く場所に戻りたい。",
+                "tags": ["embodiment", "return_to_body"],
+            },
         }
 
     def test_load_state_returns_catalog_defaults_for_missing_file(self):
@@ -153,6 +158,18 @@ class DesireStateTests(unittest.TestCase):
             self.assertTrue(dst.exists())
             loaded = json.loads(dst.read_text(encoding="utf-8"))
             self.assertEqual(loaded["check_weather"]["prompt"], "外の天気を確認したい。")
+
+    def test_return_to_body_pressure_activates_embodiment_desire(self):
+        catalog = self._catalog()
+        state = desire_state.normalize_state(None, catalog)
+        state = desire_state.decay_tick(
+            state,
+            catalog=catalog,
+            body_state={"return_to_body_pressure": 0.9, "remote_mode": "remote_avatar", "stress": 0.2, "energy": 0.7},
+            now=datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(state["desires"]["return_to_body"]["state"], "active")
+        self.assertGreater(desire_state.compute_pressure(state, catalog=catalog, body_state={"return_to_body_pressure": 0.9}), 0.0)
 
 
 if __name__ == "__main__":

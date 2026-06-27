@@ -100,6 +100,13 @@ def _is_exploration_desire(name: str, cfg: Mapping[str, Any] | None = None) -> b
     return any(hint in text for hint in EXPLORATION_HINTS)
 
 
+def _has_tag(cfg: Mapping[str, Any] | None, tag: str) -> bool:
+    needle = _clean(tag).lower()
+    if not needle:
+        return False
+    return needle in {item.lower() for item in _normalize_tags((cfg or {}).get("tags"))}
+
+
 def _curiosity(body_state: Mapping[str, Any] | None) -> float | None:
     if not isinstance(body_state, Mapping):
         return None
@@ -390,11 +397,14 @@ def decay_tick(
     curiosity = _curiosity(body_state)
     stress = _body_scalar(body_state, "stress", 0.25)
     energy = _body_scalar(body_state, "energy", 0.65)
+    return_to_body_pressure = _body_scalar(body_state, "return_to_body_pressure", 0.0)
+    remote_mode = _clean((body_state or {}).get("remote_mode")) if isinstance(body_state, Mapping) else ""
 
     for name, record in current["desires"].items():
         cfg = catalog.get(name, {})
         growth_rate = max(0.0, _coerce_float(cfg.get("growth_rate"), 0.0))
         is_exploration = _is_exploration_desire(name, cfg)
+        is_return = _has_tag(cfg, "return_to_body")
 
         suppressed_until = _parse_ts(record.get("suppressed_until"))
         if record["state"] == "suppressed" and suppressed_until is not None and current_now < suppressed_until:
@@ -413,6 +423,15 @@ def decay_tick(
                 growth += (curiosity - 0.55) * 0.30
         elif curiosity is not None and curiosity >= 0.8:
             growth += (curiosity - 0.8) * 0.05
+
+        if is_return:
+            growth += return_to_body_pressure * 0.75
+            if remote_mode == "remote_avatar":
+                growth += 0.05 * tick_factor
+            elif return_to_body_pressure <= 0.08 and record["state"] in {"active", "dormant"}:
+                record["state"] = "satisfied"
+                record["satisfaction"] = round(max(record["satisfaction"], 0.72), 3)
+                record["charge"] = round(min(record["charge"], 0.24), 3)
 
         if stress >= 0.7:
             growth -= min(0.06, (stress - 0.7) * 0.18)
@@ -516,6 +535,7 @@ def compute_pressure(
         return 0.0
 
     curiosity = _curiosity(body_state)
+    return_to_body_pressure = _body_scalar(body_state, "return_to_body_pressure", 0.0)
     total = 0.0
     count = 0
     for name, record in current["desires"].items():
@@ -533,6 +553,8 @@ def compute_pressure(
 
         if curiosity is not None and _is_exploration_desire(name, cfg):
             score += max(0.0, curiosity - 0.55) * 0.22
+        if _has_tag(cfg, "return_to_body"):
+            score += return_to_body_pressure * 0.45
 
         total += score
         count += 1

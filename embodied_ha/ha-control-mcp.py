@@ -14,6 +14,7 @@ import json
 import subprocess
 import datetime
 
+from embodied_action import action_fields_for_control, apply_action_to_body_state
 from mcp_lib import serve, text, log
 
 HA_URL = os.environ["HA_URL"].rstrip("/")
@@ -31,7 +32,7 @@ def _token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
 
 
-def _record(domain, service, entity_id, data, ok):
+def _record(domain, service, entity_id, data, ok, extra=None):
     """全操作を actions.jsonl に追記（事後報告の監査証跡）。"""
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -41,6 +42,8 @@ def _record(domain, service, entity_id, data, ok):
             "domain": domain, "service": service,
             "entity_id": entity_id, "data": data, "ok": ok,
         }
+        if isinstance(extra, dict):
+            rec.update(extra)
         with open(ACTIONS_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
@@ -62,6 +65,7 @@ def ha_call_service(args):
         return [text(f"不完全: service と entity_id が必要です（domain={domain} "
                      f"service={service} entity_id={entity_id}）")], True
 
+    action_fields = action_fields_for_control(entity_id, domain, service)
     payload = dict(data) if entity_optional else {"entity_id": entity_id, **data}
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "10", "-X", "POST",
@@ -72,9 +76,19 @@ def ha_call_service(args):
         capture_output=True, text=True
     )
     ok = r.returncode == 0
-    _record(domain, service, entity_id, data, ok)
+    _record(domain, service, entity_id, data, ok, action_fields)
     if not ok:
         return [text(f"操作失敗: {domain}.{service} {entity_id}（returncode={r.returncode}）")], True
+    try:
+        apply_action_to_body_state(
+            action_mode=action_fields.get("action_mode"),
+            action_cost=action_fields.get("action_cost"),
+            target_room=action_fields.get("target_room"),
+            target_host=action_fields.get("target_host"),
+            move_cost=action_fields.get("move_cost"),
+        )
+    except Exception:
+        pass
     log(f"[ha-control] {ACTOR}: {domain}.{service} {entity_id} {data} OK")
     return [text(f"実行しました: {domain}.{service} {entity_id} {data}")]
 

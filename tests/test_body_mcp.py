@@ -99,6 +99,8 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(state["current_room"], "living_room")
         self.assertEqual(rows[0]["kind"], "body_move")
         self.assertEqual(rows[0]["reason"], "テレビを見る")
+        self.assertEqual(rows[0]["action_mode"], "physical_move")
+        self.assertEqual(rows[0]["action_cost"], 2.0)
 
     def test_unknown_room_returns_error_tuple(self):
         with tempfile.TemporaryDirectory() as tmpdir:

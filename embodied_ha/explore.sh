@@ -204,6 +204,7 @@ SYS_PROMPT="${COMMON_CHAR}
 # 身体状態
 ${BODY_STATE}
 - curiosity が高いほど新規の掘り下げを優先。energy が低いほど短く省エネに。stress が高いほど落ち着いて。confidence が高いほど断定気味。social_openness が高いほど少し積極的に。
+- なぜか少し落ち着かないときは、その理由を言語化できなくてもよい。直接見に行く、聞きに行く、馴染みのある場所へ戻る、という判断を自然に選んでよい。
 
 ${BODY_LOCATION_CONTEXT}
 

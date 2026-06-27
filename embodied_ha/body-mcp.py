@@ -13,6 +13,7 @@ import os
 import threading
 from typing import Any
 
+from embodied_action import action_fields_for_move, apply_action_to_body_state
 from mcp_lib import serve, text
 from state_utils import clean, now, read_json, write_json
 
@@ -271,7 +272,17 @@ def move_to(args: dict[str, Any]):
         "reason": reason,
         "sensory_origin_after_move": "direct",
     }
+    event.update(action_fields_for_move(target, cost))
     append_move_log(event)
+    try:
+        apply_action_to_body_state(
+            action_mode=event.get("action_mode"),
+            action_cost=event.get("action_cost"),
+            target_room=target,
+            move_cost=cost,
+        )
+    except Exception:
+        pass
     return _json_text({"state": new_state, "event": event})
 
 

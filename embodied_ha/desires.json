@@ -27,6 +27,12 @@
     "growth_rate": 0.02,
     "prompt": "最近聞こえた音や、自分から聞きに行った音の記録を少し振り返りたい。"
   },
+  "return_to_body": {
+    "growth_rate": 0.0,
+    "priority": 1.1,
+    "prompt": "なんとなく落ち着く場所に戻りたい。少し足場を確かめたい。",
+    "tags": ["embodiment", "return_to_body"]
+  },
   "want_to_reflect": {
     "growth_rate": 0.025,
     "prompt": "最近の観察記録が積み重なってきた気がする。少し振り返りたい。"
