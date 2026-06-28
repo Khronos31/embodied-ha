@@ -12,6 +12,9 @@ DEFAULT_DATA_DIR = "/config/embodied-ha"
 DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
 DEFAULT_BODY_STATE_FILE = "/config/embodied-ha/body_state.json"
+DEFAULT_CALIB_FILE = "/config/embodied-ha/calibration/audio_calibration.json"
+
+_CALIB_INVALID_THRESHOLD = -200.0  # これ以下は音声トラックなし（-270 dB = 無音）
 
 
 def data_dir() -> str:
@@ -141,6 +144,44 @@ def shortest_costs(start: str, graph: dict[str, Any]) -> dict[str, float]:
     return best
 
 
+def calib_path() -> str:
+    return clean(os.environ.get("EHA_CALIB_FILE")) or os.path.join(
+        clean(os.environ.get("EHA_CALIB_DIR")) or os.path.join(data_dir(), "calibration"),
+        "audio_calibration.json",
+    )
+
+
+def hearing_attenuation(body_room: str, graph: dict[str, Any]) -> list[tuple[str, float]]:
+    """現在地の最強ノードを基準に各部屋の相対減衰（dB）を返す。[(room_id, delta_db), ...]"""
+    calib = read_json(calib_path(), {})
+    if not isinstance(calib, dict) or body_room not in calib:
+        return []
+
+    # 現在地で有効な値を持つノードの中で最強のものを基準ノードとして選ぶ
+    current_sources = calib[body_room].get("sources", {})
+    ref_node, ref_db = None, None
+    for node, v in current_sources.items():
+        db = v.get("tone_db")
+        if isinstance(db, (int, float)) and db > _CALIB_INVALID_THRESHOLD:
+            if ref_db is None or db > ref_db:
+                ref_node, ref_db = node, db
+    if ref_node is None:
+        return []
+
+    # 他の部屋での同ノードの値を参照して減衰を計算
+    room_map = rooms(graph)
+    result = []
+    for room_id, room_data in calib.items():
+        if room_id == body_room or room_id not in room_map:
+            continue
+        v = room_data.get("sources", {}).get(ref_node, {})
+        db = v.get("tone_db")
+        if isinstance(db, (int, float)) and db > _CALIB_INVALID_THRESHOLD:
+            result.append((room_id, round(db - ref_db, 1)))
+
+    return sorted(result, key=lambda x: x[1], reverse=True)
+
+
 def format_body_context(limit: int = 5) -> str:
     graph = load_graph()
     room_map = rooms(graph)
@@ -176,6 +217,14 @@ def format_body_context(limit: int = 5) -> str:
             cost_text = " / ".join(f"{room_label(room_id, graph)}({cost:g})" for room_id, cost in nearby)
             lines.append(f"近くへ移動: {cost_text}")
         lines.append("電脳空間に入るなら enter_cyberspace、身体ごと移動なら move_to。")
+        attn = hearing_attenuation(current, graph)
+        if attn:
+            lines.append("# 聴覚（距離減衰）")
+            lines.append(f"- {body_room_name}（自室）: 基準")
+            for room_id, delta in attn:
+                label = room_label(room_id, graph)
+                note = "（ほぼ聞こえない）" if delta < -40 else ""
+                lines.append(f"- {label}: {delta:+.0f} dB{note}")
 
     if state.get("previous_room"):
         lines.append(f"直前の物理移動: {room_label(state['previous_room'], graph)} (`{state['previous_room']}`) から来た")
