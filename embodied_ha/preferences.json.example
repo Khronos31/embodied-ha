@@ -63,26 +63,46 @@
     }
   ],
 
-  "speakers": {
-    "study": {
+  "speakers": [
+    {
+      "room": "study",
+      "label": "書斎（Nest Mini）",
       "type": "tts",
       "tts_entity": "tts.home_assistant_cloud",
-      "media_player": "media_player.your_tts_media_player"
+      "media_player": "media_player.your_tts_media_player",
+      "note": ""
     },
-    "living": {
+    {
+      "room": "living",
+      "label": "リビング（Alexa）",
       "type": "notify",
-      "entity": "notify.living_alexa_speak"
+      "entity": "notify.living_alexa_speak",
+      "note": ""
     },
-    "bedroom": {
+    {
+      "room": "bedroom",
+      "label": "寝室（Alexa）",
       "type": "notify",
-      "entity": "notify.bedroom_alexa_speak"
+      "entity": "notify.bedroom_alexa_speak",
+      "note": ""
     },
-    "away": {
+    {
+      "room": "away",
+      "label": "外出先（スマホ）",
       "type": "notify",
       "entity": "notify.mobile_app_your_phone",
-      "title": "Embodied HA"
+      "title": "Embodied HA",
+      "note": ""
+    },
+    {
+      "room": "kitchen",
+      "label": "台所（VoiceS3R）",
+      "type": "tcp",
+      "host": "192.168.1.xxx",
+      "port": 3334,
+      "note": "VoiceS3R スピーカー。raw mono s16le 16kHz を TCP で push。tts_provider は最上位の tts_provider を継承。"
     }
-  },
+  ],
 
   "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
   "entities": [
