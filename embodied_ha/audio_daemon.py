@@ -1555,7 +1555,7 @@ def build_auditory_event(
 
 def should_trigger_wake_word(text_value: str, wake_words: list[str]) -> bool:
     lowered = clean(text_value).lower()
-    return bool(lowered) and any(word in lowered for word in wake_words)
+    return bool(lowered) and any(lowered.startswith(word) for word in wake_words)
 
 
 def post_wake_message(text_value: str) -> None:
