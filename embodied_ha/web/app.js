@@ -1579,9 +1579,13 @@ async function renderSettingsForm() {
 
     const speakersList = document.getElementById('speakers-list');
     speakersList.innerHTML = '';
-    if (prefsData.speakers) {
-        Object.entries(prefsData.speakers).forEach(([roomName, config]) => {
-            createSpeakerCard(roomName, config);
+    const spk = prefsData.speakers;
+    if (Array.isArray(spk)) {
+        spk.forEach(item => createSpeakerCard(item));
+    } else if (spk && typeof spk === 'object') {
+        // 旧辞書形式の後方互換読み込み
+        Object.entries(spk).forEach(([roomName, config]) => {
+            createSpeakerCard({ room: roomName, ...config });
         });
     }
 
@@ -1722,24 +1726,31 @@ function initJsonEditor(initialValue) {
 }
 
 function serializeFormToPrefs() {
-    const speakers = {};
+    const speakers = [];
     const speakerCards = document.querySelectorAll('.speaker-item');
     speakerCards.forEach(card => {
-        const roomName = card.querySelector('.speaker-room-name').value.trim();
-        if (!roomName) return;
+        const room = card.querySelector('.speaker-room-name').value.trim();
+        const label = card.querySelector('.speaker-label').value.trim();
+        const note = card.querySelector('.speaker-note').value.trim();
         const type = card.querySelector('.speaker-type').value;
-        
+        if (!room) return;
+
+        const item = { room, label, type, note };
+
         if (type === 'tts') {
-            const tts_entity = card.querySelector('.speaker-tts-entity').value;
-            const media_player = card.querySelector('.speaker-media-player').value;
-            speakers[roomName] = { type, tts_entity, media_player };
-        } else {
-            const entity = card.querySelector('.speaker-notify-entity').value;
+            item.tts_entity = card.querySelector('.speaker-tts-entity').value;
+            item.media_player = card.querySelector('.speaker-media-player').value;
+        } else if (type === 'notify') {
+            item.entity = card.querySelector('.speaker-notify-entity').value;
             const title = card.querySelector('.speaker-notify-title').value.trim();
-            const config = { type, entity };
-            if (title) config.title = title;
-            speakers[roomName] = config;
+            if (title) item.title = title;
+        } else if (type === 'tcp') {
+            item.host = card.querySelector('.speaker-tcp-host').value.trim();
+            const portVal = card.querySelector('.speaker-tcp-port').value.trim();
+            item.port = portVal ? parseInt(portVal, 10) : 3334;
         }
+
+        speakers.push(item);
     });
 
     const cameras = [];
@@ -2076,18 +2087,19 @@ function addProjectionTargetRow(target = {}) {
     const roomSelect = card.querySelector('.pt-room');
     populateRoomSelect(roomSelect, room);
 }
-function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
+function createSpeakerCard(item = {}) {
     const speakersList = document.getElementById('speakers-list');
     const card = document.createElement('div');
     card.className = 'setting-item-card speaker-item';
 
-    const type = config.type || 'tts';
+    const roomName = item.room || '';
+    const label = item.label || '';
+    const note = item.note || '';
+    const type = item.type || 'tts';
 
     card.innerHTML = `
         <div class="setting-item-header">
-            <div class="form-group" style="margin-bottom:0; flex:1; max-width:240px;">
-                <input type="text" class="speaker-room-name form-input" placeholder="部屋名 (例: study)" value="${esc(roomName)}" style="font-weight:600;">
-            </div>
+            <span class="setting-item-title" style="font-weight:600;">スピーカー設定</span>
             <div class="speaker-actions" style="display:flex; align-items:center; gap:8px;">
                 <span class="speak-test-status" style="font-size:12px; font-weight:500;"></span>
                 <button type="button" class="btn btn-secondary btn-sm btn-speak-test" onclick="handleSpeakTest(this)">
@@ -2099,9 +2111,25 @@ function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
             </div>
         </div>
         
+        <div class="config-grid-3" style="margin-bottom: 12px;">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>部屋名 (room)</label>
+                <input type="text" class="speaker-room-name form-input" placeholder="部屋名 (例: study)" value="${esc(roomName)}" style="font-weight:600;">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>表示名 (label)</label>
+                <input type="text" class="speaker-label form-input" placeholder="例: 書斎（Nest Mini）" value="${esc(label)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>メモ (note)</label>
+                <input type="text" class="speaker-note form-input" placeholder="メモ" value="${esc(note)}">
+            </div>
+        </div>
+        
         <div class="type-selector">
             <button type="button" class="type-btn ${type === 'tts' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tts')">TTS (音声合成)</button>
             <button type="button" class="type-btn ${type === 'notify' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'notify')">Notify (通知発話)</button>
+            <button type="button" class="type-btn ${type === 'tcp' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tcp')">TCP (PCM Push)</button>
             <input type="hidden" class="speaker-type" value="${esc(type)}">
         </div>
 
@@ -2129,7 +2157,21 @@ function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>通知タイトル (title - 任意)</label>
-                <input type="text" class="speaker-notify-title form-input" placeholder="Embodied HA" value="${esc(config.title)}">
+                <input type="text" class="speaker-notify-title form-input" placeholder="Embodied HA" value="${esc(item.title || '')}">
+            </div>
+        </div>
+
+        <div class="speaker-fields-tcp config-grid-2" style="display: ${type === 'tcp' ? 'grid' : 'none'};">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>ホスト (host)</label>
+                <input type="text" class="speaker-tcp-host form-input" placeholder="192.168.1.xxx" value="${esc(item.host || '')}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>ポート (port)</label>
+                <input type="number" class="speaker-tcp-port form-input" placeholder="3334" min="1" max="65535" value="${esc(String(item.port || 3334))}">
+            </div>
+            <div style="grid-column: span 2; font-size:12px; color:var(--claude-text-sub); margin-top:4px;">
+                raw mono s16le 16kHz PCM を TCP で push します。tts_provider はグローバル設定から継承されます。
             </div>
         </div>
     `;
@@ -2140,9 +2182,9 @@ function createSpeakerCard(roomName = '', config = { type: 'tts' }) {
     const selectMp = card.querySelector('.speaker-media-player');
     const selectNotify = card.querySelector('.speaker-notify-entity');
 
-    initDropdownOptions(selectTts, 'tts', config.tts_entity);
-    initDropdownOptions(selectMp, 'media_player', config.media_player);
-    initDropdownOptions(selectNotify, 'notify', config.entity);
+    initDropdownOptions(selectTts, 'tts', item.tts_entity);
+    initDropdownOptions(selectMp, 'media_player', item.media_player);
+    initDropdownOptions(selectNotify, 'notify', item.entity);
 }
 
 function toggleSpeakerType(btn, targetType) {
@@ -2154,10 +2196,11 @@ function toggleSpeakerType(btn, targetType) {
     card.querySelector('.speaker-type').value = targetType;
     card.querySelector('.speaker-fields-tts').style.display = targetType === 'tts' ? 'grid' : 'none';
     card.querySelector('.speaker-fields-notify').style.display = targetType === 'notify' ? 'grid' : 'none';
+    card.querySelector('.speaker-fields-tcp').style.display = targetType === 'tcp' ? 'grid' : 'none';
 }
 
 function addSpeakerRow() {
-    createSpeakerCard('', { type: 'tts' });
+    createSpeakerCard({ type: 'tts' });
 }
 
 function createCameraCard(cam = { source: '', label: '', note: '' }) {
@@ -2597,7 +2640,9 @@ async function handleSaveSettings(e) {
         nextPrefs = serializeFormToPrefs();
     }
 
-    if (Object.keys(nextPrefs.speakers || {}).length === 0) {
+    const spk = nextPrefs.speakers;
+    const hasSpeakers = Array.isArray(spk) ? spk.length > 0 : Object.keys(spk || {}).length > 0;
+    if (!hasSpeakers) {
         showSaveStatus('スピーカーが1つも登録されていません。', 'error');
         return;
     }
