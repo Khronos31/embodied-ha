@@ -3,6 +3,7 @@ import json
 import math
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,6 +29,7 @@ class AudioDaemonTests(unittest.TestCase):
     def setUp(self):
         self.audio_daemon = load_audio_daemon_module()
         self.audio_daemon._non_speech_cache.clear()
+        self.audio_daemon._TRANSCRIPT_DEDUP_CACHE.clear()
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
@@ -809,6 +811,75 @@ class AudioDaemonTests(unittest.TestCase):
 
             rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         self.assertEqual([row["transcript"] for row in rows], ["old tv", "new desk"])
+
+
+    def test_claim_transcript_primary_first_source_is_primary(self):
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333"))
+
+    def test_claim_transcript_primary_duplicate_from_different_source_suppressed(self):
+        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
+        self.assertFalse(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.157:3333"))
+
+    def test_claim_transcript_primary_same_source_always_primary(self):
+        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
+        # 同一ソースの再発話は必ず通る
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333"))
+
+    def test_claim_transcript_primary_expired_window_allows_other_source(self):
+        key = "ねえあかね"
+        past_ts = time.monotonic() - self.audio_daemon.TRANSCRIPT_DEDUP_WINDOW_SECONDS - 1.0
+        self.audio_daemon._TRANSCRIPT_DEDUP_CACHE[key] = ("tcp://192.168.1.156:3333", past_ts)
+        # ウィンドウ期限切れなら別ソースも primary になれる
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.157:3333"))
+
+    def test_claim_transcript_primary_different_texts_are_independent(self):
+        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
+        # 別テキストは独立して primary になれる
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("こんにちは", "tcp://192.168.1.157:3333"))
+
+    def test_process_segment_deduplicates_cross_source_transcript(self):
+        config_a = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.156:3333", "リビング1", 24, True, room="living")
+        config_b = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.157:3333", "リビング2", 24, True, room="living")
+        logged_entries: list[dict] = []
+        auditory_events: list[dict] = []
+        wake_posts: list[str] = []
+        audio_bytes = b"\x00\x01" * int(self.audio_daemon.SAMPLE_RATE)
+
+        def capture_log(entry, retention_hours, source_label):
+            logged_entries.append(entry)
+
+        def capture_event(entry, retention_hours=None, source_label=None):
+            auditory_events.append(entry)
+
+        with mock.patch.object(self.audio_daemon, "write_wav"), \
+             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="ねえあかね"), \
+             mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_log), \
+             mock.patch.object(self.audio_daemon, "append_auditory_event", side_effect=capture_event), \
+             mock.patch.object(self.audio_daemon, "post_wake_message", side_effect=wake_posts.append), \
+             mock.patch.object(self.audio_daemon, "update_current_room_from_audio_source"):
+            self.audio_daemon.process_segment(
+                config_a, audio_bytes, "stt.provider", "ja-JP", "token",
+                ["ねえあかね"],
+                diagnostics={"vad_mode": "silero", "speech_ratio": 0.8, "peak_db": -20.0, "mean_db": -30.0},
+            )
+            self.audio_daemon.process_segment(
+                config_b, audio_bytes, "stt.provider", "ja-JP", "token",
+                ["ねえあかね"],
+                diagnostics={"vad_mode": "silero", "speech_ratio": 0.8, "peak_db": -21.0, "mean_db": -31.0},
+            )
+
+        # 両ソースとも audio_log には書かれる（診断用）
+        self.assertEqual(len(logged_entries), 2)
+        # 1件目（リビング1）: primary
+        self.assertNotIn("deduplicated", logged_entries[0])
+        self.assertEqual(logged_entries[0]["text"], "ねえあかね")
+        # 2件目（リビング2）: deduplicated フラグあり
+        self.assertTrue(logged_entries[1].get("deduplicated"))
+        # auditory_events は 1件のみ（リビング1）
+        self.assertEqual(len(auditory_events), 1)
+        self.assertEqual(auditory_events[0]["source"], "リビング1")
+        # ウェイクワード POST も 1回のみ
+        self.assertEqual(len(wake_posts), 1)
 
 
 if __name__ == "__main__":

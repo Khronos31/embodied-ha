@@ -62,6 +62,9 @@ _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
 _non_speech_cache: dict[tuple, float] = {}
+TRANSCRIPT_DEDUP_WINDOW_SECONDS = 5.0
+_TRANSCRIPT_DEDUP_CACHE: dict[str, tuple[str, float]] = {}
+_TRANSCRIPT_DEDUP_LOCK = threading.Lock()
 
 MOTION_CLASSES = {"motion", "occupancy", "presence"}
 MOTION_ACTIVE_STATES = {"on", "open", "occupied", "detected", "home"}
@@ -1310,6 +1313,26 @@ def _should_suppress_non_speech(features: dict, now_ts: float) -> bool:
     return False
 
 
+def _claim_transcript_primary(text_value: str, source: str) -> bool:
+    """Returns True if this source is the first to produce this transcript within the dedup window.
+    Same-source re-utterances always return True to allow genuine repetitions through."""
+    key = " ".join(text_value.strip().lower().split())
+    if not key:
+        return True
+    now_ts = time.monotonic()
+    with _TRANSCRIPT_DEDUP_LOCK:
+        stale = [k for k, (_, ts) in _TRANSCRIPT_DEDUP_CACHE.items() if now_ts - ts > TRANSCRIPT_DEDUP_WINDOW_SECONDS * 2]
+        for k in stale:
+            del _TRANSCRIPT_DEDUP_CACHE[k]
+        cached = _TRANSCRIPT_DEDUP_CACHE.get(key)
+        if cached is not None:
+            cached_source, cached_ts = cached
+            if now_ts - cached_ts <= TRANSCRIPT_DEDUP_WINDOW_SECONDS and cached_source != source:
+                return False
+        _TRANSCRIPT_DEDUP_CACHE[key] = (source, now_ts)
+        return True
+
+
 def save_non_speech_audio_clip(event_id: str, audio_bytes: bytes) -> str:
     max_bytes = int(NON_SPEECH_MAX_CLIP_SECONDS * SAMPLE_RATE * SAMPLE_WIDTH)
     clipped = audio_bytes[:max_bytes]
@@ -1724,7 +1747,13 @@ def process_segment(
         write_wav(tmp_path, audio_bytes)
         text_value = transcribe_wav(tmp_path, provider, language, token)
         entry["text"] = text_value
+        is_primary = _claim_transcript_primary(text_value, config.source)
+        if not is_primary:
+            entry["deduplicated"] = True
         append_audio_log(entry, config.retention_hours, config.label)
+        if not is_primary:
+            log(f"duplicate transcript suppressed for {config.label}: '{text_value[:40]}'")
+            return
         append_auditory_event(
             build_auditory_event(
                 config,
