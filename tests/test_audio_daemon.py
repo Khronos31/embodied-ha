@@ -422,27 +422,36 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))  # prefix only
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("こんにちは", ["akane"]))
 
-    def test_update_current_room_from_audio_source_updates_body_location(self):
+    def test_update_current_room_from_audio_source_updates_user_location_belief(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs_path = Path(tmpdir) / "preferences.json"
-            state_path = Path(tmpdir) / "body_location.json"
+            body_location_path = Path(tmpdir) / "body_location.json"
+            belief_path = Path(tmpdir) / "location_belief.json"
             prefs_path.write_text(
                 json.dumps({"audio_sources": [{"source": "default", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
                 encoding="utf-8",
             )
-            state_path.write_text(
-                json.dumps({"current_room": "study", "previous_room": "living_room", "last_move_cost": 3}, ensure_ascii=False),
+            body_location_path.write_text(
+                json.dumps({"current_room": "study"}, ensure_ascii=False),
                 encoding="utf-8",
             )
             config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
-            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs_path), "EHA_BODY_LOCATION_FILE": str(state_path)}, clear=False),                  mock.patch("builtins.print") as print_mock:
+            with mock.patch.dict(os.environ, {
+                "EHA_PREFS_FILE": str(prefs_path),
+                "EHA_BODY_LOCATION_FILE": str(body_location_path),
+                "EHA_DATA_DIR": str(tmpdir),
+            }, clear=False), mock.patch("builtins.print") as print_mock:
                 self.audio_daemon.update_current_room_from_audio_source(config)
 
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["current_room"], "kitchen")
-            self.assertEqual(payload["previous_room"], "living_room")
-            self.assertEqual(payload["last_move_cost"], 3)
-            print_mock.assert_called_once_with("[audio] wake word: current_room → kitchen")
+            # あかねの body_location は変更されないこと
+            body_payload = json.loads(body_location_path.read_text(encoding="utf-8"))
+            self.assertEqual(body_payload["current_room"], "study")
+
+            # ユーザーの location_belief が更新されること
+            belief_payload = json.loads(belief_path.read_text(encoding="utf-8"))
+            self.assertEqual(belief_payload["room"], "kitchen")
+            self.assertEqual(belief_payload["method"], "wake_word")
+            print_mock.assert_called_once_with("[audio] wake word: user location_belief → kitchen")
 
     def test_record_non_speech_audio_event_suppresses_repeated_noise(self):
         config = self.audio_daemon.AudioSourceConfig(

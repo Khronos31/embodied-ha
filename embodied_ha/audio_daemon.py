@@ -589,12 +589,20 @@ def _audio_source_entry_by_source(preferences: dict | None, source: str) -> dict
     return None
 
 
-def _update_body_location_current_room(room: str) -> None:
-    path = body_location_path()
+def _location_belief_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR")) or "/config/embodied-ha"
+    return os.path.join(data_dir, "location_belief.json")
+
+
+def _update_user_location_belief(room: str, source: str) -> None:
+    """ウェイクワード検知時にユーザーの推定位置を更新する。あかねの body_location は変更しない。"""
+    path = _location_belief_path()
     state = read_json(path, {})
     if not isinstance(state, dict):
         state = {}
-    state["current_room"] = room
+    state["room"] = room
+    state["source"] = source
+    state["method"] = "wake_word"
     _write_json_atomic(path, state)
 
 
@@ -606,10 +614,10 @@ def update_current_room_from_audio_source(config: AudioSourceConfig, preferences
     if not room:
         return
     try:
-        _update_body_location_current_room(room)
+        _update_user_location_belief(room, config.source)
     except Exception:
         return
-    print(f"[audio] wake word: current_room → {room}")
+    print(f"[audio] wake word: user location_belief → {room}")
 
 
 def default_active_listen_request_dir() -> str:
