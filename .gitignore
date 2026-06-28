@@ -1,3 +1,4 @@
 embodied_ha/log/
 **/__pycache__/
 **/*.pyc
+body_state.json
