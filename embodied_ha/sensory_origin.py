@@ -14,6 +14,9 @@ from state_utils import clean, read_json
 DEFAULT_DATA_DIR = "/config/embodied-ha"
 DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
+DEFAULT_CALIB_FILE = "/config/embodied-ha/calibration/audio_calibration.json"
+
+_CALIB_INVALID_THRESHOLD = -200.0
 
 SPECIAL_SOURCE_HINTS = {
     "camera.home_pc_screenshot": "study",
@@ -256,6 +259,35 @@ def shortest_path(from_room: str | None, to_room: str | None, graph: dict[str, A
     return None, []
 
 
+def _calib_path() -> str:
+    data = clean(os.environ.get("EHA_DATA_DIR")) or DEFAULT_DATA_DIR
+    calib_dir = clean(os.environ.get("EHA_CALIB_DIR")) or os.path.join(data, "calibration")
+    return clean(os.environ.get("EHA_CALIB_FILE")) or os.path.join(calib_dir, "audio_calibration.json")
+
+
+def _attenuation_db(body_room: str, source_room: str) -> float | None:
+    """校正データから body_room 基準での source_room の相対減衰 (dB) を返す。"""
+    if body_room == source_room:
+        return 0.0
+    calib = read_json(_calib_path(), {})
+    if not isinstance(calib, dict):
+        return None
+    body_sources = calib.get(body_room, {}).get("sources", {})
+    ref_node, ref_db = None, None
+    for node, v in body_sources.items():
+        db = v.get("tone_db")
+        if isinstance(db, (int, float)) and db > _CALIB_INVALID_THRESHOLD:
+            if ref_db is None or db > ref_db:
+                ref_node, ref_db = node, db
+    if ref_node is None or ref_db is None:
+        return None
+    src_v = calib.get(source_room, {}).get("sources", {}).get(ref_node, {})
+    src_db = src_v.get("tone_db")
+    if not isinstance(src_db, (int, float)) or src_db <= _CALIB_INVALID_THRESHOLD:
+        return None
+    return round(src_db - ref_db, 1)
+
+
 def classify_sensory_origin(
     *,
     source: Any = "",
@@ -287,9 +319,11 @@ def classify_sensory_origin(
         else:
             origin = "remote"
         move_cost, move_path = shortest_path(body_room, source_room, graph)
+        attenuation = _attenuation_db(body_room, source_room)
     else:
         origin = "home_assistant"
         move_cost, move_path = None, []
+        attenuation = None
 
     return {
         "modality": clean(modality) or None,
@@ -303,4 +337,5 @@ def classify_sensory_origin(
         "access_mode": origin,
         "move_cost": move_cost,
         "move_path": move_path,
+        "attenuation_db": attenuation,
     }
