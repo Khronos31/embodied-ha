@@ -125,7 +125,7 @@ def format_state_as_narrative(state: Mapping[str, Any]) -> str:
     parts = []
 
     energy_desc = _pick(s["energy"], "だるい、疲れてる", "まあまあ", "しゃきっとしてる")
-    parts.append(f"気力: {energy_desc}")
+    parts.append(f"気力: {energy_desc}（{s['energy']:.2f}）")
 
     curiosity_desc = _pick(
         s["curiosity"],
@@ -133,13 +133,13 @@ def format_state_as_narrative(state: Mapping[str, Any]) -> str:
         "なんとなく気になることがある",
         "あちこち気になる、なんか知りたくてうずうず",
     )
-    parts.append(f"好奇心: {curiosity_desc}")
+    parts.append(f"好奇心: {curiosity_desc}（{s['curiosity']:.2f}）")
 
     stress_desc = _pick(s["stress"], "落ち着いてる", "少し張り詰めてる", "かなりそわそわしてる")
-    parts.append(f"落ち着き: {stress_desc}")
+    parts.append(f"落ち着き: {stress_desc}（{s['stress']:.2f}）")
 
     confidence_desc = _pick(s["confidence"], "慎重になってる", "ふつう", "はっきり言える感じ")
-    parts.append(f"自信: {confidence_desc}")
+    parts.append(f"自信: {confidence_desc}（{s['confidence']:.2f}）")
 
     social_desc = _pick(
         s["social_openness"],
@@ -147,7 +147,7 @@ def format_state_as_narrative(state: Mapping[str, Any]) -> str:
         "どちらでもない",
         "話しかけたい、少し開いてる",
     )
-    parts.append(f"話す気分: {social_desc}")
+    parts.append(f"話す気分: {social_desc}（{s['social_openness']:.2f}）")
 
     return "\n".join(f"- {p}" for p in parts)
 

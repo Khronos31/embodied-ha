@@ -124,9 +124,10 @@ for line in sys.stdin:
     try:
         d = json.loads(line)
         ts = d.get('timestamp', '')[:16]
-        obs = d.get('private', '')
+        obs = d.get('private') or ''
         emo = d.get('emotion', '')
-        lines.append(f'{ts} [{emo}] {obs}')
+        if obs:
+            lines.append(f'{ts} [{emo}] {obs}')
     except: pass
 print('\n'.join(lines) if lines else 'なし')
 ")
@@ -536,7 +537,7 @@ phase2_prompt = context + f"""
 最後に以下のJSON形式のみで返答してください。マークダウンや余分な説明は不要です。
 
 {{
-  "private": "今この瞬間に浮かんだこと。誰も見てない前提で、何も考えずそのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字程度。{resident}さんが見ることもできるが気にせず素のまま。",
+  "private": "今この瞬間に浮かんだこと。誰も見てない前提で、何も考えずそのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字程度。{resident}さんが見ることもできるが気にせず素のまま。直近の観察と同じ状況が続いているだけなら null でよい。",
   "emotion": "今の気分を一語で。curious / calm / happy / concerned / amused / nostalgic / bored / surprised のどれか。",
   "speak": "ユーザーへのショートメッセージ。センサートリガー時は積極的に。定期実行時は明確な変化があるときだけ。それ以外は null。",
   "speak_room": "発話先の部屋。speak が null なら null。speak が null でなければ **必ずこの中から1つ選ぶ**（null 禁止）。利用可能な部屋: {_speaker_rooms}。{resident}さんが今いる部屋（人感センサー履歴・在室から判断）を選ぶ。外出中で away があれば away。居場所が不明なら先頭の部屋を選ぶ。",
@@ -659,11 +660,11 @@ try:
     d = json.load(open('$PARSED_FILE', encoding='utf-8'))
 except Exception:
     d = {}
-private = d.get('private', '') or ''
+private = d.get('private') or None
 speak_v = d.get('speak')
 speak   = speak_v if speak_v else ''
 pairs = {
-    'PRIVATE':      private,
+    'PRIVATE':      private or '',
     'SPEAK':        speak,
     'SPEAK_ROOM':   d.get('speak_room') or '',
     'EMOTION':      d.get('emotion', '') or '',
