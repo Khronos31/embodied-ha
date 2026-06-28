@@ -1152,6 +1152,34 @@ async function loadSttProviders(currentProvider) {
 }
 
 
+async function loadTtsProviders(currentProvider) {
+    const sel = document.getElementById('setting-tts-provider');
+    if (!sel) return;
+    sel.disabled = true;
+    try {
+        const res = await fetch(`${base}/api/ha-entities?domain=tts`);
+        const entities = await res.json();
+        const opts = ['<option value="">（未設定）</option>'];
+        for (const e of (entities || [])) {
+            const selected = e.entity_id === currentProvider ? ' selected' : '';
+            const label = e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
+            opts.push(`<option value="${e.entity_id}"${selected}>${label}</option>`);
+        }
+        sel.innerHTML = opts.join('');
+        if (currentProvider && !entities.find(e => e.entity_id === currentProvider)) {
+            const opt = document.createElement('option');
+            opt.value = currentProvider;
+            opt.textContent = currentProvider + ' (不明)';
+            opt.selected = true;
+            sel.insertBefore(opt, sel.children[1]);
+        }
+    } catch (e) {
+        sel.innerHTML = '<option value=""></option>';
+    } finally {
+        sel.disabled = false;
+    }
+}
+
 function setAntigravityLog(lines) {
     const logEl = document.getElementById('antigravity-log');
     if (logEl) logEl.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
@@ -1568,6 +1596,7 @@ async function renderSettingsForm() {
     await loadSttProviders(sttProvider);
     // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
+    await loadTtsProviders(prefsData.tts_provider || '');
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
         sttLangSel.value = prefsData.stt_language || 'ja-JP';
@@ -1848,15 +1877,19 @@ function serializeFormToPrefs() {
     const audio_sources = getAudioSourcesFromUI();
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
     const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
+    const tts_provider = document.getElementById('setting-tts-provider')?.value?.trim() || null;
     const wakeWordsRaw = document.getElementById('setting-wake-words')?.value || '';
     const wake_words = wakeWordsRaw.split(",").map(s => s.trim()).filter(Boolean);
 
     return {
+        // フォームで管理していないフィールド（tts_provider 等）を保持してから上書きする
+        ...prefsData,
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
         audio_sources,
         stt_provider,
         stt_language,
+        tts_provider,
         wake_words,
         speakers,
         entities,
