@@ -75,7 +75,7 @@ f = (os.environ.get('EHA_BODY_LOCATION_FILE') or
      '/config/embodied-ha/body_location.json')
 try:
     d = json.load(open(f, encoding='utf-8'))
-    h = (d.get('projected_host') or '').strip()
+    h = (d.get('current_entity') or '').strip()
     if h.startswith('camera.'):
         print(h)
 except Exception:
@@ -517,12 +517,12 @@ phase2_prompt = context + f"""
 読み取り（必要なときだけ）:
 - ha_get … センサー欄に無い個別エンティティの現在値・履歴を読む（気になったときだけ）
 - get_sensors … 主要センサーをまとめて取り直す
-- get_location / move_to / project_to / return_to_body / estimate_move_cost … 物理体の部屋と今つないでいる窓を確認する。身体ごと近くへ行くなら move_to、今の部屋に身体を残したまま別の窓を覗くなら project_to、戻るなら return_to_body。
+. get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する。身体ごと移動するなら move_to、電脳体として初回侵入するなら enter_cyberspace、電脳体で移動するなら move_cyber、戻るなら return_to_body。
 - camera_get … 指定カメラのスナップショットを追加で見る（source は go2rtcストリーム名 or camera.xxx）。返る camera_context は record_episode の evidence に含める。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。見たい対象が画角外にありそうなら、少し動かしてから camera_get で再確認してよい。
 - listen … 音声を聴く（source省略でTV/レコーダー）。音のある場所や変化を感じ取りたいときに使う。transcribe はデフォルト false で、文字が必要なときだけ true にする。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。結果は active_listen_log に残る。
 - queue_next_listen … 今は聴かず、次のセッションで音を取得したいときに予約だけ残す。
-内なる衝動に「身体がこわばる」「ストレッチしたい」感じがあるなら move_to を優先し、「自由に飛び回りたい」「別の窓を覗きたい」感じがあるなら project_to を優先してよい。
+内なる衝動に「身体がこわばる」「ストレッチしたい」感じがあるなら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」感じがあるなら enter_cyberspace → move_cyber を自然に選んでよい。
 記録（あれば呼ぶ。下のJSONには書かない）:
 - remember … 長期記憶に残したい気づき・パターンがあれば note に一文で記録する。一時的な観察は残さない
 - record_episode … カメラ確認を含む出来事を保存する。camera_get を使った場合は evidence に camera_context を含める。音も意味があるときだけ audio_context を添える。音は毎回記録しない。
@@ -591,7 +591,7 @@ if _sd:
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path] + _servers,
                    env={**CLAUDE_ENV, "EHA_ACTOR": "watch"}, check=False)
     if os.path.exists(_mcp_path):
-        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
+        _allowed = ("mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
                     "mcp__memory__remember,mcp__memory__loops_add,mcp__memory__record_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__record_counterfactual,"
                     "mcp__sociality__get_person_model,mcp__sociality__should_interrupt,"
                     "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"

@@ -228,10 +228,6 @@ def build_listen_spec() -> dict:
         "inputSchema": {
             "type": "object",
             "properties": {
-                "source": {
-                    "type": "string",
-                    "description": "上記ソースのいずれか。省略時はデフォルト",
-                },
                 "duration": {
                     "type": "integer",
                     "description": "録音秒数。デフォルト 5、最大 30",
@@ -257,10 +253,6 @@ TOOL_QUEUE_NEXT_LISTEN = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "source": {
-                "type": "string",
-                "description": "上記ソースのいずれか。省略時はデフォルト",
-            },
             "duration": {
                 "type": "integer",
                 "description": "次回録音秒数。デフォルト 5、最大 30",
@@ -548,15 +540,12 @@ def queue_next_listen(args: dict):
     ok, reason = check_listen_queue_cooldown()
     if not ok:
         return [text(json.dumps({"queued": False, "error": reason}, ensure_ascii=False))], False
-    source = normalize_source_uri(args.get("source") or default_listen_source())
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
     request = {
         "timestamp": now().isoformat(timespec="seconds"),
         "request_id": uuid.uuid4().hex,
-        "source": source,
-        "source_label": label_for_source(source),
         "duration": duration,
         "transcribe": transcribe,
         "mode": clean(args.get("mode")) or (clean(os.environ.get("EHA_ACTOR")) or "unknown"),

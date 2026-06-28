@@ -118,7 +118,7 @@ f = (os.environ.get('EHA_BODY_LOCATION_FILE') or
      '/config/embodied-ha/body_location.json')
 try:
     d = json.load(open(f, encoding='utf-8'))
-    h = (d.get('projected_host') or '').strip()
+    h = (d.get('current_entity') or '').strip()
     if h.startswith('camera.'):
         print(h)
 except Exception:
@@ -169,7 +169,7 @@ case "$MODE" in
 読み取り:
 - get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
 - ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
-- get_location / move_to / project_to / return_to_body / estimate_move_cost … 物理体の部屋と、今どの窓につないでいるかを確認する。身体ごと行くなら move_to、今の部屋に身体を残したまま別室を見るなら project_to、戻るなら return_to_body。
+- get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する。身体ごと行くなら move_to、初回侵入なら enter_cyberspace、電脳体で移動するなら move_cyber、戻るなら return_to_body。
 - camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
 - camera_ptz … PTZ対応カメラを left/right/up/down に動かす。画角外にありそうなら、camera_get の前に少し振って確認してよい。自分のいる部屋から直接見に行くか、遠隔で首を振るかを body_location / sensory_origin / move_cost で意識する。
 - listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
@@ -187,10 +187,10 @@ case "$MODE" in
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
 2. センサーだけでは分からないことは camera_get / camera_ptz / listen で確認してもよい（必要なときだけ。画角外かもと思ったら先にPTZしてから撮る。STTは費用がかかるので、文字で知りたいときだけtranscribe:true）
-3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら project_to を自然に選んでよい。無理に両方は使わない。
+3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら enter_cyberspace → move_cyber を自然に選んでよい。無理に両方は使わない。
 4. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 5. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__project_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
     MCP_SERVERS="sensors ha camera audio body memory sociality http"
     ;;
   reflect)

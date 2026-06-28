@@ -85,3 +85,62 @@ class ListenQueueTests(unittest.TestCase):
                     os.environ["EHA_LISTEN_QUEUE_COOLDOWN_SESSIONS"] = old_cooldown
         self.assertTrue(ok)
         self.assertEqual(reason, "")
+
+
+    def test_prepare_queued_listen_session_resolves_current_entity(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body_location_path = Path(tmpdir) / "body_location.json"
+            prefs_path = Path(tmpdir) / "preferences.json"
+            request_path = Path(tmpdir) / "next_listen_request.json"
+            body_location_path.write_text(json.dumps({"current_entity": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
+            prefs_path.write_text(json.dumps({"audio_sources": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen", "label": "Kitchen"}]}, ensure_ascii=False), encoding="utf-8")
+            request_path.write_text(json.dumps({"request_id": "req-1", "duration": 4, "transcribe": True, "mode": "watch"}, ensure_ascii=False), encoding="utf-8")
+            old_env = {k: os.environ.get(k) for k in ["EHA_BODY_LOCATION_FILE", "EHA_PREFS_FILE", "EHA_NEXT_LISTEN_REQUEST_FILE"]}
+            logged = []
+            try:
+                os.environ["EHA_BODY_LOCATION_FILE"] = str(body_location_path)
+                os.environ["EHA_PREFS_FILE"] = str(prefs_path)
+                os.environ["EHA_NEXT_LISTEN_REQUEST_FILE"] = str(request_path)
+                with unittest.mock.patch.object(self.listen_queue, "record_request_to_wav") as record_mock,                      unittest.mock.patch.object(self.listen_queue, "append_active_listen_result", side_effect=lambda entry: logged.append(entry)):
+                    ctx = self.listen_queue.prepare_queued_listen_session("watch")
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["EHA_QUEUED_LISTEN_SOURCE"], "rtsp://example.local/kitchen")
+        record_mock.assert_called_once()
+        self.assertEqual(len(logged), 1)
+        self.assertTrue(logged[0]["prepared_for_session"])
+        self.assertEqual(logged[0]["source"], "rtsp://example.local/kitchen")
+
+    def test_prepare_queued_listen_session_blocks_when_entity_not_registered(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            body_location_path = Path(tmpdir) / "body_location.json"
+            prefs_path = Path(tmpdir) / "preferences.json"
+            request_path = Path(tmpdir) / "next_listen_request.json"
+            body_location_path.write_text(json.dumps({"current_entity": "camera.hall"}, ensure_ascii=False), encoding="utf-8")
+            prefs_path.write_text(json.dumps({"audio_sources": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen", "label": "Kitchen"}]}, ensure_ascii=False), encoding="utf-8")
+            request_path.write_text(json.dumps({"request_id": "req-2", "duration": 4, "mode": "watch"}, ensure_ascii=False), encoding="utf-8")
+            old_env = {k: os.environ.get(k) for k in ["EHA_BODY_LOCATION_FILE", "EHA_PREFS_FILE", "EHA_NEXT_LISTEN_REQUEST_FILE"]}
+            logged = []
+            try:
+                os.environ["EHA_BODY_LOCATION_FILE"] = str(body_location_path)
+                os.environ["EHA_PREFS_FILE"] = str(prefs_path)
+                os.environ["EHA_NEXT_LISTEN_REQUEST_FILE"] = str(request_path)
+                with unittest.mock.patch.object(self.listen_queue, "record_request_to_wav") as record_mock,                      unittest.mock.patch.object(self.listen_queue, "append_active_listen_result", side_effect=lambda entry: logged.append(entry)):
+                    ctx = self.listen_queue.prepare_queued_listen_session("watch")
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+        self.assertIsNotNone(ctx)
+        self.assertIn("EHA_QUEUED_LISTEN_ERROR", ctx)
+        record_mock.assert_not_called()
+        self.assertEqual(len(logged), 1)
+        self.assertFalse(logged[0]["prepared_for_session"])
+        self.assertIn("current_entity", logged[0]["error"])

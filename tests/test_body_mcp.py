@@ -125,7 +125,7 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(payload["state"]["projected_room"], "kitchen")
         self.assertEqual(state["current_room"], "study")
         self.assertEqual(state["projected_room"], "kitchen")
-        self.assertEqual(state["projected_host"], "camera.kitchen")
+        self.assertEqual(state["current_entity"], "camera.kitchen")
         self.assertEqual(rows[0]["kind"], "body_project")
         self.assertEqual(rows[0]["action_mode"], "remote_avatar")
         self.assertEqual(rows[0]["action_cost"], 0.35)
@@ -140,7 +140,7 @@ class BodyMcpTests(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "current_room": "study",
                 "projected_room": "kitchen",
-                "projected_host": "camera.kitchen"
+                "current_entity": "camera.kitchen"
             }, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {
                 "EHA_ROOM_GRAPH_FILE": str(graph_path),
@@ -174,7 +174,7 @@ class BodyMcpTests(unittest.TestCase):
                 state = json.loads(state_path.read_text(encoding="utf-8"))
                 rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(payload["state"]["projected_room"], "study")
-        self.assertEqual(state["projected_host"], "external://astrolabe")
+        self.assertEqual(state["current_entity"], "external://astrolabe")
         self.assertEqual(rows[0]["kind"], "body_project")
         self.assertEqual(rows[0]["projection_mode"], "enter_remote")
         self.assertEqual(rows[0]["action_cost"], 0.35)
@@ -187,7 +187,7 @@ class BodyMcpTests(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "current_room": "study",
                 "projected_room": "kitchen",
-                "projected_host": "camera.kitchen"
+                "current_entity": "camera.kitchen"
             }, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {
                 "EHA_ROOM_GRAPH_FILE": str(graph_path),
@@ -198,7 +198,7 @@ class BodyMcpTests(unittest.TestCase):
                 state = json.loads(state_path.read_text(encoding="utf-8"))
                 rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(payload["state"]["projected_room"], "kitchen")
-        self.assertEqual(state["projected_host"], "camera.living_room")
+        self.assertEqual(state["current_entity"], "camera.living_room")
         self.assertEqual(rows[0]["projection_mode"], "remote_move")
         self.assertEqual(rows[0]["action_cost"], 0.0)
 
@@ -225,7 +225,7 @@ class BodyMcpTests(unittest.TestCase):
         self.assertIsNone(payload["state"]["projected_room"])
         self.assertEqual(state["current_room"], "living_room")
         self.assertIsNone(state["projected_room"])
-        self.assertEqual(state["projected_host"], "")
+        self.assertEqual(state["current_entity"], "")
         self.assertEqual(rows[0]["kind"], "body_return")
         self.assertEqual(rows[0]["action_mode"], "direct_in_room")
 
@@ -238,7 +238,7 @@ class BodyMcpTests(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "current_room": "living_room",
                 "projected_room": "kitchen",
-                "projected_host": "camera.kitchen"
+                "current_entity": "camera.kitchen"
             }, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {
                 "EHA_ROOM_GRAPH_FILE": str(graph_path),

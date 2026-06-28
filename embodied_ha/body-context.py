@@ -93,7 +93,7 @@ def load_location(graph: dict[str, Any]) -> dict[str, Any]:
         "current_room": current,
         "previous_room": previous,
         "projected_room": projected,
-        "projected_host": clean(state.get("projected_host")) or "",
+        "current_entity": clean(state.get("current_entity")) or "",
         "projection_updated_at": clean(state.get("projection_updated_at")) or None,
         "updated_at": clean(state.get("updated_at")) or None,
         "last_move_cost": state.get("last_move_cost"),
@@ -151,15 +151,15 @@ def format_body_context(limit: int = 5) -> str:
     body_state = load_body_state()
     current = state["current_room"]
     projected = state.get("projected_room")
-    projected_host = state.get("projected_host") or clean(body_state.get("remote_avatar_host"))
+    current_entity = clean(state.get("current_entity")) or clean(body_state.get("remote_avatar_host"))
     lines = [
         "# 身体位置",
         f"物理体の位置: {room_label(current, graph)} (`{current}`)",
     ]
     if projected:
         lines.append(f"電脳体の位置: {room_label(projected, graph)} (`{projected}`)")
-        if projected_host:
-            lines.append(f"電脳体が見ているデバイス: `{projected_host}`")
+        if current_entity:
+            lines.append(f"電脳体が見ているデバイス: `{current_entity}`")
         lines.append("感覚の足場は少し離れている。必要なら return_to_body で戻ってよい。")
     else:
         lines.append("電脳体の位置: なし（物理体と同じ場所にいる）")
@@ -180,7 +180,7 @@ def format_body_context(limit: int = 5) -> str:
 
     lines.extend([
         "感覚の扱い: 物理体と同じ部屋で見聞きしたものは direct。別室の窓につないで見聞きしたものは remote_avatar。HA状態確認は home_assistant。",
-        "別室へ身体ごと行くなら move_to。今の部屋に身体を残したまま別室を見るなら project_to。落ち着く場所に戻るなら return_to_body。迷ったら estimate_move_cost を使う。",
+        "別室へ身体ごと行くなら move_to。電脳体として初回侵入するなら enter_cyberspace、電脳体で別デバイスへ移動するなら move_cyber。戻るなら return_to_body。迷ったら estimate_move_cost を使う。",
     ])
     return "\n".join(lines)
 

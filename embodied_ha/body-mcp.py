@@ -142,7 +142,7 @@ def load_location_state(graph: dict[str, Any] | None = None) -> dict[str, Any]:
         "projected_room": projected,
         "projected_display_name": _room_label(projected, graph) if projected else None,
         "projection_updated_at": clean(state.get("projection_updated_at")) or None,
-        "projected_host": clean(state.get("projected_host")) or "",
+        "current_entity": clean(state.get("current_entity")) or "",
         "source": clean(state.get("source")) or "alsa://default",
     }
 
@@ -220,8 +220,8 @@ def publish_body_presence(state: dict[str, Any]) -> None:
     mqtt_user = clean(os.environ.get("MQTT_USER"))
     mqtt_pass = clean(os.environ.get("MQTT_PASS"))
     physical_room = clean(state.get("current_room"))
-    projected_host = clean(state.get("projected_host"))
-    current_place = projected_host or "身体の中"
+    current_entity = clean(state.get("current_entity"))
+    current_place = current_entity or "身体の中"
     base = ["mosquitto_pub", "-h", mqtt_host, "-p", mqtt_port]
     if mqtt_user:
         base.extend(["-u", mqtt_user])
@@ -253,7 +253,7 @@ def get_location(args: dict[str, Any]):
         "active_display_name": _room_label(projected or current, graph),
         "projected_room": projected,
         "projected_display_name": state.get("projected_display_name"),
-        "projected_host": state.get("projected_host"),
+        "current_entity": state.get("current_entity"),
         "updated_at": state.get("updated_at"),
         "previous_room": state.get("previous_room"),
         "last_move_cost": state.get("last_move_cost"),
@@ -307,7 +307,7 @@ def move_to(args: dict[str, Any]):
         return _json_text({
             "error": "cannot move physical body while in cyber mode",
             "projected_room": state.get("projected_room"),
-            "projected_host": state.get("projected_host"),
+            "current_entity": state.get("current_entity"),
             "hint": "return_to_body を先に呼んでください",
         }), True
     current = state["current_room"]
@@ -327,7 +327,7 @@ def move_to(args: dict[str, Any]):
         "projected_room": None,
         "projected_display_name": None,
         "projection_updated_at": None,
-        "projected_host": "",
+        "current_entity": "",
         "source": clean(args.get("source")) or "body-mcp",
     }
     if reason:
@@ -368,7 +368,7 @@ def enter_cyberspace(args: dict[str, Any]):
         return _json_text({
             "error": "already in cyberspace",
             "projected_room": state.get("projected_room"),
-            "projected_host": state.get("projected_host"),
+            "current_entity": state.get("current_entity"),
         }), True
     entity = clean(args.get("entity"))
     if not entity:
@@ -419,7 +419,7 @@ def enter_cyberspace(args: dict[str, Any]):
         "projected_room": target_room,
         "projected_display_name": _room_label(target_room, graph),
         "projection_updated_at": timestamp,
-        "projected_host": entity,
+        "current_entity": entity,
         "updated_at": timestamp,
         "source": clean(args.get("source")) or "body-mcp",
     }
@@ -500,7 +500,7 @@ def move_cyber(args: dict[str, Any]):
         "projected_room": final_projected_room,
         "projected_display_name": _room_label(final_projected_room, graph) if final_projected_room else None,
         "projection_updated_at": timestamp,
-        "projected_host": entity,
+        "current_entity": entity,
         "updated_at": timestamp,
         "source": clean(args.get("source")) or "body-mcp",
     }
@@ -540,71 +540,6 @@ def move_cyber(args: dict[str, Any]):
     return _json_text({"state": new_state, "event": event})
 
 
-def project_to(args: dict[str, Any]):
-    graph = load_room_graph()
-    target = resolve_room(args.get("room") or args.get("to") or args.get("to_room"), graph)
-    if not target:
-        return _json_text({
-            "error": "unknown target room",
-            "room": args.get("room") or args.get("to") or args.get("to_room"),
-            "available_rooms": list(rooms(graph).keys()),
-        }), True
-    state = load_location_state(graph)
-    body_room = state["current_room"]
-    was_remote = bool(state.get("projected_room"))
-    cost, path = shortest_path(body_room, target, graph)
-    if cost is None:
-        return _json_text({"error": "no path", "from": body_room, "to": target}), True
-    timestamp = now().isoformat(timespec="seconds")
-    reason = clean(args.get("reason")) or None
-    host = clean(args.get("host")) or clean(args.get("source")) or f"room://{target}"
-    new_state = {
-        **state,
-        "current_room": body_room,
-        "display_name": _room_label(body_room, graph),
-        "projected_room": target,
-        "projected_display_name": _room_label(target, graph),
-        "projection_updated_at": timestamp,
-        "projected_host": host,
-        "updated_at": timestamp,
-        "source": clean(args.get("source")) or "body-mcp",
-    }
-    if reason:
-        new_state["reason"] = reason
-    save_location_state(new_state)
-    publish_body_presence(new_state)
-    action_cost = 0.0 if was_remote else 0.35
-    event = {
-        "timestamp": timestamp,
-        "kind": "body_project",
-        "body_room": body_room,
-        "body_display_name": _room_label(body_room, graph),
-        "to": target,
-        "to_display_name": _room_label(target, graph),
-        "target_host": host,
-        "cost": cost,
-        "path": path,
-        "path_display": _format_path(path, graph),
-        "reason": reason,
-        "projection_mode": "remote_move" if was_remote else "enter_remote",
-        "sensory_origin_after_project": "remote_avatar",
-        "action_mode": "remote_avatar",
-        "action_cost": action_cost,
-        "target_room": target,
-    }
-    append_move_log(event)
-    try:
-        apply_action_to_body_state(
-            action_mode="remote_avatar",
-            action_cost=event.get("action_cost"),
-            target_room=target,
-            target_host=host,
-            move_cost=cost,
-        )
-    except Exception:
-        pass
-    return _json_text({"state": new_state, "event": event})
-
 
 def return_to_body(args: dict[str, Any]):
     graph = load_room_graph()
@@ -616,7 +551,7 @@ def return_to_body(args: dict[str, Any]):
             "error": "cannot return to body from a different room",
             "physical_room": body_room,
             "projected_room": projected_room,
-            "projected_host": state.get("projected_host"),
+            "current_entity": state.get("current_entity"),
             "hint": f"先に move_cyber で {body_room} にあるエンティティへ移動してから return_to_body を呼んでください",
         }), True
     current = state["current_room"]
@@ -630,7 +565,7 @@ def return_to_body(args: dict[str, Any]):
         "projected_room": None,
         "projected_display_name": None,
         "projection_updated_at": timestamp,
-        "projected_host": "",
+        "current_entity": "",
         "updated_at": timestamp,
         "source": clean(args.get("source")) or "body-mcp",
     }
@@ -699,19 +634,6 @@ TOOL_MOVE_TO = {
     },
 }
 
-TOOL_PROJECT_TO = {
-    "name": "project_to",
-    "description": "物理体は今の部屋に残したまま、別の部屋の窓へ電脳体をつなぎ、遠隔確認として記録する。非推奨: このツールは後方互換のために残しています。代わりに enter_cyberspace（初回侵入）または move_cyber（電脳体での移動）を使ってください。",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "room": {"type": "string", "description": "投射先の room id または別名"},
-            "host": {"type": "string", "description": "使うデバイスや窓の識別子。例: camera.living_room"},
-            "reason": {"type": "string", "description": "投射する理由。任意"},
-        },
-        "required": ["room"],
-    },
-}
 
 TOOL_ENTER_CYBERSPACE = {
     "name": "enter_cyberspace",
@@ -798,7 +720,6 @@ if __name__ == "__main__":
         "move_to": {"spec": TOOL_MOVE_TO, "handler": move_to},
         "enter_cyberspace": {"spec": TOOL_ENTER_CYBERSPACE, "handler": enter_cyberspace},
         "move_cyber": {"spec": TOOL_MOVE_CYBER, "handler": move_cyber},
-        "project_to": {"spec": TOOL_PROJECT_TO, "handler": project_to},
         "return_to_body": {"spec": TOOL_RETURN_TO_BODY, "handler": return_to_body},
         "estimate_move_cost": {"spec": TOOL_ESTIMATE_MOVE_COST, "handler": estimate_move_cost},
         "get_room_graph": {"spec": TOOL_GET_ROOM_GRAPH, "handler": get_room_graph},

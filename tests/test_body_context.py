@@ -81,7 +81,7 @@ class BodyContextTests(unittest.TestCase):
             state_path.write_text(json.dumps({
                 "current_room": "study",
                 "projected_room": "kitchen",
-                "projected_host": "camera.kitchen"
+                "current_entity": "camera.kitchen"
             }, ensure_ascii=False), encoding="utf-8")
             body_state_path.write_text(json.dumps({"remote_avatar_host": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {

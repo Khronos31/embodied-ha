@@ -147,7 +147,6 @@ def queue_next_listen_request(payload: dict) -> str:
     request.setdefault("request_id", uuid.uuid4().hex)
     request.setdefault("created_at", now().isoformat(timespec="seconds"))
     request.setdefault("expires_after_sec", next_listen_ttl_seconds())
-    request["source"] = normalize_source_uri(request.get("source") or "alsa://default")
     request["duration"] = max(1, int(request.get("duration") or 5))
     request["transcribe"] = bool(request.get("transcribe", False))
     request["mode"] = clean(request.get("mode")) or "unknown"
@@ -169,7 +168,6 @@ def load_next_listen_request() -> dict | None:
         return None
     if not isinstance(request, dict):
         return None
-    request["source"] = normalize_source_uri(request.get("source") or "alsa://default")
     try:
         request["duration"] = max(1, int(request.get("duration") or 5))
     except Exception:
@@ -309,6 +307,55 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
     if not request:
         return None
 
+    bl_path = os.environ.get("EHA_BODY_LOCATION_FILE") or os.path.join(_data_dir(), "body_location.json")
+    try:
+        with open(bl_path, encoding="utf-8") as f:
+            bl = json.load(f)
+    except Exception:
+        bl = {}
+    current_entity = (bl.get("current_entity") or "").strip()
+
+    prefs_path = os.environ.get("EHA_PREFS_FILE") or os.path.join(_data_dir(), "preferences.json")
+    try:
+        with open(prefs_path, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        prefs = {}
+
+    audio_sources = prefs.get("audio_sources") or []
+    matched_source = None
+    matched_label = None
+    for entry in audio_sources:
+        if not isinstance(entry, dict):
+            continue
+        entry_entity = (entry.get("entity") or "").strip()
+        entry_source = (entry.get("source") or "").strip()
+        if entry_entity and entry_entity == current_entity:
+            matched_source = entry_source
+            matched_label = clean(entry.get("label"))
+            break
+        if not entry_entity and entry_source and entry_source == current_entity:
+            matched_source = entry_source
+            matched_label = clean(entry.get("label"))
+            break
+
+    if not matched_source:
+        entry = {
+            'timestamp': now().isoformat(timespec='seconds'),
+            'actor': mode,
+            'mode': mode,
+            'queued_listen': True,
+            'prepared_for_session': False,
+            'error': f"current_entity '{current_entity}' は audio_sources に登録されていません。VoiceS3R ノードに enter_cyberspace してから queue_next_listen を呼んでください。",
+            'request_id': request.get('request_id'),
+        }
+        append_active_listen_result(entry)
+        return {
+            'EHA_QUEUED_LISTEN_ERROR': entry['error'],
+            'EHA_QUEUED_LISTEN_REQUEST_ID': request.get('request_id') or '',
+        }
+
+    source = normalize_source_uri(matched_source)
     audio_dir = os.path.join('/tmp/embodied-ha', 'queued_listen')
     os.makedirs(audio_dir, exist_ok=True)
     wav_path = os.path.join(audio_dir, f"{request.get('request_id') or uuid.uuid4().hex}.wav")
@@ -317,8 +364,8 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
         'timestamp': started_at,
         'actor': mode,
         'mode': mode,
-        'source': normalize_source_uri(request.get('source') or 'alsa://default'),
-        'source_label': clean(request.get('source_label')) or clean(request.get('source')) or '不明',
+        'source': source,
+        'source_label': matched_label or clean(matched_source) or '不明',
         'duration_sec': max(1, int(request.get('duration') or 5)),
         'transcribe_requested': bool(request.get('transcribe', False)),
         'queued_listen': True,
@@ -331,7 +378,7 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
         'session_model': audio_session_model() or 'Gemini 3.5 Flash (High)',
     }
     try:
-        record_request_to_wav(request, wav_path)
+        record_request_to_wav(source, wav_path)
         append_active_listen_result(entry)
         try:
             import body_state as _bs
