@@ -61,6 +61,7 @@ _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
+_non_speech_cache: dict[tuple, float] = {}
 
 MOTION_CLASSES = {"motion", "occupancy", "presence"}
 MOTION_ACTIVE_STATES = {"on", "open", "occupied", "detected", "home"}
@@ -144,6 +145,17 @@ def default_non_speech_audio_events_path() -> str:
     if data_dir:
         return os.path.join(data_dir, "log", "non_speech_audio_events.jsonl")
     return "/config/embodied-ha/log/non_speech_audio_events.jsonl"
+
+
+def default_body_location_path() -> str:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
+    if data_dir:
+        return os.path.join(data_dir, "body_location.json")
+    return "/config/embodied-ha/body_location.json"
+
+
+def body_location_path() -> str:
+    return clean(os.environ.get("EHA_BODY_LOCATION_FILE")) or default_body_location_path()
 
 
 def non_speech_audio_events_path() -> str:
@@ -561,6 +573,43 @@ def background_hearing_enabled(item: dict) -> bool:
     if "background_hearing_enabled" in item:
         return item.get("background_hearing_enabled") is True
     return True
+
+
+def _audio_source_entry_by_source(preferences: dict | None, source: str) -> dict | None:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    raw_sources = prefs.get("audio_sources")
+    if not isinstance(raw_sources, list):
+        return None
+    target = clean(source)
+    for item in raw_sources:
+        if not isinstance(item, dict):
+            continue
+        if _source_identity(item, infer_transport(item)) == target:
+            return item
+    return None
+
+
+def _update_body_location_current_room(room: str) -> None:
+    path = body_location_path()
+    state = read_json(path, {})
+    if not isinstance(state, dict):
+        state = {}
+    state["current_room"] = room
+    _write_json_atomic(path, state)
+
+
+def update_current_room_from_audio_source(config: AudioSourceConfig, preferences: dict | None = None) -> None:
+    entry = _audio_source_entry_by_source(preferences, config.source)
+    if not isinstance(entry, dict):
+        return
+    room = clean(entry.get("room"))
+    if not room:
+        return
+    try:
+        _update_body_location_current_room(room)
+    except Exception:
+        return
+    print(f"[audio] wake word: current_room → {room}")
 
 
 def default_active_listen_request_dir() -> str:
@@ -1223,6 +1272,36 @@ def non_speech_event_id(timestamp: str, config: AudioSourceConfig, audio_bytes: 
     return f"audio_{safe_ts}_{digest}"
 
 
+def _non_speech_fingerprint(features: dict) -> tuple:
+    low = features.get("low_energy", 0)
+    mid = features.get("mid_energy", 0)
+    high = features.get("high_energy", 0)
+    dominant = "low" if low >= mid and low >= high else ("mid" if mid >= high else "high")
+    peak_bucket = round(features.get("peak_db", 0) / 5) * 5
+    source = features.get("source", "")
+    return (source, dominant, peak_bucket)
+
+
+def _should_suppress_non_speech(features: dict, now_ts: float) -> bool:
+    if features.get("transient"):
+        return False
+    fp = _non_speech_fingerprint(features)
+    last = _non_speech_cache.get(fp)
+    if last is None:
+        _non_speech_cache[fp] = now_ts
+        return False
+    window = 300.0 if features.get("periodic") else 60.0
+    if now_ts - last < window:
+        cached_peak = fp[2]
+        current_peak = round(features.get("peak_db", 0) / 5) * 5
+        if current_peak >= cached_peak + 10:
+            _non_speech_cache[fp] = now_ts
+            return False
+        return True
+    _non_speech_cache[fp] = now_ts
+    return False
+
+
 def save_non_speech_audio_clip(event_id: str, audio_bytes: bytes) -> str:
     max_bytes = int(NON_SPEECH_MAX_CLIP_SECONDS * SAMPLE_RATE * SAMPLE_WIDTH)
     clipped = audio_bytes[:max_bytes]
@@ -1305,6 +1384,8 @@ def record_non_speech_audio_event(
 ) -> dict | None:
     features = build_acoustic_features(audio_bytes, diagnostics)
     features["importance_score"] = non_speech_importance_score(reason, features)
+    if _should_suppress_non_speech(features, time.monotonic()):
+        return None
     if not should_record_non_speech_event(reason, features):
         return None
     sensory = classify_sensory_origin(
@@ -1650,6 +1731,7 @@ def process_segment(
             config.label,
         )
         if config.wake_word_enabled and should_trigger_wake_word(text_value, wake_words):
+            update_current_room_from_audio_source(config)
             post_wake_message(text_value)
     except Exception as exc:
         error_text = str(exc)

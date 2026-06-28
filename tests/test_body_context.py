@@ -51,13 +51,12 @@ class BodyContextTests(unittest.TestCase):
             body_state_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(Path(tmpdir) / "missing.json"), "EHA_BODY_STATE_FILE": str(body_state_path)}, clear=False):
                 output = self.body_context.format_body_context()
-        self.assertIn("# 身体位置", output)
-        self.assertIn("物理体の位置: スタディ (`study`)", output)
-        self.assertNotIn("足場デバイス", output)
-        self.assertIn("電脳体の位置: なし", output)
-        self.assertIn("リビング:2", output)
+        self.assertIn("# 今いる場所", output)
+        self.assertIn("スタディにいる。", output)
+        self.assertIn("近くへ移動: リビング(2) / 台所(3)", output)
         self.assertIn("enter_cyberspace", output)
-        self.assertIn("remote_avatar", output)
+        self.assertIn("move_to", output)
+        self.assertNotIn("感覚の扱い", output)
 
     def test_format_body_context_uses_saved_location_alias(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -68,8 +67,8 @@ class BodyContextTests(unittest.TestCase):
             body_state_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
             with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(graph_path), "EHA_BODY_LOCATION_FILE": str(state_path), "EHA_BODY_STATE_FILE": str(body_state_path)}, clear=False):
                 output = self.body_context.format_body_context()
-        self.assertIn("物理体の位置: リビング (`living_room`)", output)
-        self.assertNotIn("足場デバイス", output)
+        self.assertIn("# 今いる場所", output)
+        self.assertIn("リビングにいる。", output)
         self.assertIn("直前の物理移動: スタディ (`study`) から来た", output)
         self.assertIn("直前の物理移動コスト: 2", output)
 
@@ -90,10 +89,9 @@ class BodyContextTests(unittest.TestCase):
                 "EHA_BODY_STATE_FILE": str(body_state_path),
             }, clear=False):
                 output = self.body_context.format_body_context()
-        self.assertIn("物理体の位置: スタディ (`study`)", output)
-        self.assertNotIn("足場デバイス", output)
-        self.assertIn("電脳体の位置: 台所 (`kitchen`)", output)
-        self.assertIn("電脳体が見ているデバイス: `camera.kitchen`", output)
+        self.assertIn("# 今いる場所", output)
+        self.assertIn("台所 の `camera.kitchen` から見ている（電脳体）。身体は スタディ にある。", output)
+        self.assertIn("move_cyber", output)
         self.assertIn("return_to_body", output)
 
     def test_format_body_context_handles_missing_graph(self):

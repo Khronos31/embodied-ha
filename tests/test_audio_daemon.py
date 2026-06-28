@@ -27,6 +27,7 @@ def load_audio_daemon_module():
 class AudioDaemonTests(unittest.TestCase):
     def setUp(self):
         self.audio_daemon = load_audio_daemon_module()
+        self.audio_daemon._non_speech_cache.clear()
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
@@ -421,6 +422,67 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))  # prefix only
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("こんにちは", ["akane"]))
 
+    def test_update_current_room_from_audio_source_updates_body_location(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs_path = Path(tmpdir) / "preferences.json"
+            state_path = Path(tmpdir) / "body_location.json"
+            prefs_path.write_text(
+                json.dumps({"audio_sources": [{"source": "default", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            state_path.write_text(
+                json.dumps({"current_room": "study", "previous_room": "living_room", "last_move_cost": 3}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs_path), "EHA_BODY_LOCATION_FILE": str(state_path)}, clear=False),                  mock.patch("builtins.print") as print_mock:
+                self.audio_daemon.update_current_room_from_audio_source(config)
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["current_room"], "kitchen")
+            self.assertEqual(payload["previous_room"], "living_room")
+            self.assertEqual(payload["last_move_cost"], 3)
+            print_mock.assert_called_once_with("[audio] wake word: current_room → kitchen")
+
+    def test_record_non_speech_audio_event_suppresses_repeated_noise(self):
+        config = self.audio_daemon.AudioSourceConfig(
+            "rtsp://localhost:8554/capture_tv",
+            "TV・レコーダー",
+            24,
+            False,
+            room="study",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "log" / "non_speech_audio_events.jsonl"
+            wav_dir = Path(tmpdir) / "wav"
+            fixed_now = self.audio_daemon.parse_ts("2026-06-26T10:00:00+09:00")
+            with mock.patch.dict(os.environ, {
+                "EHA_NON_SPEECH_AUDIO_EVENTS_FILE": str(events_path),
+                "EHA_AUDIO_WAV_DIR": str(wav_dir),
+            }, clear=False),                  mock.patch.object(self.audio_daemon, "now", return_value=fixed_now),                  mock.patch.object(self.audio_daemon.time, "monotonic", return_value=1000.0):
+                first = self.audio_daemon.record_non_speech_audio_event(
+                    config,
+                    self._pcm_sine(4000.0),
+                    "2026-06-26T10:00:00+09:00",
+                    "empty_transcription",
+                    diagnostics={"peak_db": -20.0, "mean_db": -19.0, "speech_ratio": 0.35, "vad_mode": "fallback"},
+                    error="empty transcription",
+                )
+                second = self.audio_daemon.record_non_speech_audio_event(
+                    config,
+                    self._pcm_sine(4000.0),
+                    "2026-06-26T10:00:00+09:00",
+                    "empty_transcription",
+                    diagnostics={"peak_db": -20.0, "mean_db": -19.0, "speech_ratio": 0.35, "vad_mode": "fallback"},
+                    error="empty transcription",
+                )
+
+            self.assertIsNotNone(first)
+            self.assertIsNone(second)
+            rows = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["reason"], "empty_transcription")
+
     def test_append_audio_log_prunes_only_matching_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "audio_log.jsonl"
@@ -569,7 +631,7 @@ class AudioDaemonTests(unittest.TestCase):
              mock.patch.object(self.audio_daemon, "record_non_speech_audio_event") as non_speech_mock:
             self.audio_daemon.process_segment(
                 config,
-                self._pcm_sine(1200.0),
+                self._pcm_sine(4000.0),
                 "stt.home_assistant_cloud",
                 "ja-JP",
                 "token",
@@ -605,10 +667,10 @@ class AudioDaemonTests(unittest.TestCase):
                  mock.patch.object(self.audio_daemon, "now", return_value=fixed_now):
                 entry = self.audio_daemon.record_non_speech_audio_event(
                     config,
-                    self._pcm_sine(1200.0),
+                    self._pcm_sine(4000.0),
                     "2026-06-26T10:00:00+09:00",
                     "empty_transcription",
-                    diagnostics={"peak_db": -20.0, "mean_db": -42.0, "speech_ratio": 0.05, "vad_mode": "fallback"},
+                    diagnostics={"peak_db": -20.0, "mean_db": -19.0, "speech_ratio": 0.35, "vad_mode": "fallback"},
                     error="empty transcription",
                 )
 
@@ -623,7 +685,7 @@ class AudioDaemonTests(unittest.TestCase):
             self.assertIsNone(row["transcript"])
             self.assertTrue(row["wav_ref"].endswith(".wav"))
             self.assertTrue(Path(row["wav_ref"]).exists())
-            self.assertEqual(row["acoustic_features"]["dominant_band"], "mid")
+            self.assertEqual(row["acoustic_features"]["dominant_band"], "high")
             self.assertEqual(row["situational_context"]["source_room"], "study")
 
     def test_build_non_speech_situational_context_expands_phase_2b_fields(self):

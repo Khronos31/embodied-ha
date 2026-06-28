@@ -151,39 +151,38 @@ def format_body_context(limit: int = 5) -> str:
     body_state = load_body_state()
     current = state["current_room"]
     projected = state.get("projected_room")
-    current_entity = clean(state.get("current_entity")) or clean(body_state.get("remote_avatar_host"))
-    lines = [
-        "# 身体位置",
-        f"物理体の位置: {room_label(current, graph)} (`{current}`)",
-    ]
-    if projected:
-        lines.append(f"電脳体の位置: {room_label(projected, graph)} (`{projected}`)")
-        if current_entity:
-            lines.append(f"電脳体が見ているデバイス: `{current_entity}`")
-        lines.append("感覚の足場は少し離れている。必要なら return_to_body で戻ってよい。")
+    current_entity = clean(state.get("current_entity"))
+    remote_avatar_host = clean(body_state.get("remote_avatar_host"))
+    body_room_name = room_label(current, graph)
+    projected_room_name = room_label(projected, graph) if projected else body_room_name
+    lines = ["# 今いる場所"]
+
+    if projected and current_entity:
+        display_entity = current_entity or remote_avatar_host
+        if current_entity.startswith("camera."):
+            lines.append(f"{projected_room_name} の `{display_entity}` から見ている（電脳体）。身体は {body_room_name} にある。")
+        else:
+            lines.append(f"`{display_entity}` の中にいる（電脳体）。身体は {body_room_name} にある。")
+        lines.append("別のデバイスへ移動するなら move_cyber。戻るなら return_to_body。")
     else:
-        lines.append("電脳体の位置: なし（物理体と同じ場所にいる）")
+        lines.append(f"{body_room_name}にいる。")
+        costs = shortest_costs(current, graph)
+        nearby = [
+            (room_id, cost)
+            for room_id, cost in sorted(costs.items(), key=lambda item: (item[1], item[0]))
+            if room_id != current
+        ][: max(0, limit)]
+        if nearby:
+            cost_text = " / ".join(f"{room_label(room_id, graph)}({cost:g})" for room_id, cost in nearby)
+            lines.append(f"近くへ移動: {cost_text}")
+        lines.append("電脳空間に入るなら enter_cyberspace、身体ごと移動なら move_to。")
+
     if state.get("previous_room"):
         lines.append(f"直前の物理移動: {room_label(state['previous_room'], graph)} (`{state['previous_room']}`) から来た")
     if state.get("last_move_cost") is not None:
         lines.append(f"直前の物理移動コスト: {state['last_move_cost']}")
 
-    costs = shortest_costs(current, graph)
-    nearby = [
-        (room_id, cost)
-        for room_id, cost in sorted(costs.items(), key=lambda item: (item[1], item[0]))
-        if room_id != current
-    ][: max(0, limit)]
-    if nearby:
-        cost_text = " / ".join(f"{room_label(room_id, graph)}:{cost:g}" for room_id, cost in nearby)
-        lines.append(f"物理体から近い移動先: {cost_text}")
-
-    lines.extend([
-        "感覚の扱い: 物理体と同じ部屋で見聞きしたものは direct。別室の窓につないで見聞きしたものは remote_avatar。HA状態確認は home_assistant。",
-        "別室へ身体ごと行くなら move_to。電脳体として初回侵入するなら enter_cyberspace、電脳体で別デバイスへ移動するなら move_cyber。戻るなら return_to_body。迷ったら estimate_move_cost を使う。",
-    ])
     return "\n".join(lines)
-
 
 def main() -> None:
     print(format_body_context())
