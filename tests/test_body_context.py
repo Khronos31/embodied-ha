@@ -56,7 +56,7 @@ class BodyContextTests(unittest.TestCase):
         self.assertNotIn("足場デバイス", output)
         self.assertIn("電脳体の位置: なし", output)
         self.assertIn("リビング:2", output)
-        self.assertIn("project_to", output)
+        self.assertIn("enter_cyberspace", output)
         self.assertIn("remote_avatar", output)
 
     def test_format_body_context_uses_saved_location_alias(self):

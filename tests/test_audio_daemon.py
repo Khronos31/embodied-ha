@@ -416,9 +416,9 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertIsNone(entries[0]["transcript"])
         self.assertFalse(entries[0]["stt_requested"])
 
-    def test_should_trigger_wake_word_is_case_insensitive(self):
+    def test_should_trigger_wake_word_is_prefix_case_insensitive(self):
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("AkAnE, listen", ["akane"]))
-        self.assertTrue(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))
+        self.assertFalse(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))  # prefix only
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("こんにちは", ["akane"]))
 
     def test_append_audio_log_prunes_only_matching_source(self):

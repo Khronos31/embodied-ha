@@ -108,55 +108,6 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(rows[0]["action_mode"], "physical_move")
         self.assertEqual(rows[0]["action_cost"], 2.0)
 
-    def test_project_to_keeps_body_room_and_sets_projection(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            graph_path = self._write_graph(tmpdir)
-            state_path = Path(tmpdir) / "body_location.json"
-            log_path = Path(tmpdir) / "body_location_log.jsonl"
-            with mock.patch.dict(os.environ, {
-                "EHA_ROOM_GRAPH_FILE": str(graph_path),
-                "EHA_BODY_LOCATION_FILE": str(state_path),
-                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
-            }, clear=False):
-                payload = self._json(self.body_mcp.project_to({"room": "キッチン", "host": "camera.kitchen", "reason": "様子を見る"}))
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-                rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(payload["state"]["current_room"], "study")
-        self.assertEqual(payload["state"]["projected_room"], "kitchen")
-        self.assertEqual(state["current_room"], "study")
-        self.assertEqual(state["projected_room"], "kitchen")
-        self.assertEqual(state["current_entity"], "camera.kitchen")
-        self.assertEqual(rows[0]["kind"], "body_project")
-        self.assertEqual(rows[0]["action_mode"], "remote_avatar")
-        self.assertEqual(rows[0]["action_cost"], 0.35)
-        self.assertEqual(rows[0]["projection_mode"], "enter_remote")
-        self.assertEqual(rows[0]["target_host"], "camera.kitchen")
-
-    def test_project_to_is_zero_cost_while_already_remote(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            graph_path = self._write_graph(tmpdir)
-            state_path = Path(tmpdir) / "body_location.json"
-            log_path = Path(tmpdir) / "body_location_log.jsonl"
-            state_path.write_text(json.dumps({
-                "current_room": "study",
-                "projected_room": "kitchen",
-                "current_entity": "camera.kitchen"
-            }, ensure_ascii=False), encoding="utf-8")
-            with mock.patch.dict(os.environ, {
-                "EHA_ROOM_GRAPH_FILE": str(graph_path),
-                "EHA_BODY_LOCATION_FILE": str(state_path),
-                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
-            }, clear=False):
-                payload = self._json(self.body_mcp.project_to({"room": "living_room", "host": "camera.living_room", "reason": "見直す"}))
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-                rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(payload["state"]["current_room"], "study")
-        self.assertEqual(payload["state"]["projected_room"], "living_room")
-        self.assertEqual(state["projected_room"], "living_room")
-        self.assertEqual(rows[0]["action_cost"], 0.0)
-        self.assertEqual(rows[0]["projection_mode"], "remote_move")
-        self.assertEqual(rows[0]["cost"], 2.0)
-
     def test_enter_cyberspace_uses_external_projection_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)
