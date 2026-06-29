@@ -1607,15 +1607,14 @@ async function renderSettingsForm() {
         wakeWordsEl.value = (prefsData.wake_words || []).join(", ");
     }
 
-    const speakersList = document.getElementById('speakers-list');
-    speakersList.innerHTML = '';
+    const speakersTbody = document.getElementById('speakers-tbody');
+    if (speakersTbody) speakersTbody.innerHTML = '';
     const spk = prefsData.speakers;
     if (Array.isArray(spk)) {
-        spk.forEach(item => createSpeakerCard(item));
+        spk.forEach(item => createSpeakerRow(item));
     } else if (spk && typeof spk === 'object') {
-        // 旧辞書形式の後方互換読み込み
         Object.entries(spk).forEach(([roomName, config]) => {
-            createSpeakerCard({ room: roomName, ...config });
+            createSpeakerRow({ room: roomName, ...config });
         });
     }
 
@@ -1754,28 +1753,24 @@ function initJsonEditor(initialValue) {
 
 function serializeFormToPrefs() {
     const speakers = [];
-    const speakerCards = document.querySelectorAll('.speaker-item');
-    speakerCards.forEach(card => {
-        const room = card.querySelector('.speaker-room-name').value.trim();
-        const label = card.querySelector('.speaker-label').value.trim();
-        const note = card.querySelector('.speaker-note').value.trim();
-        const type = card.querySelector('.speaker-type').value;
-        const deviceEntityVal = card.querySelector('.speaker-entity').value.trim();
+    document.querySelectorAll('#speakers-tbody .speaker-item').forEach(tr => {
+        const room = tr.dataset.room || '';
         if (!room) return;
-
-        let saveType = type;
-
-        const item = { room, label, type: saveType, note };
-        if (deviceEntityVal) {
-            item.entity = deviceEntityVal;
+        const type = tr.dataset.type || 'tts';
+        const item = {
+            room,
+            type,
+            label: tr.dataset.label || undefined,
+            entity: tr.dataset.entity || undefined,
+            note: tr.dataset.note || undefined,
+        };
+        if (type === 'tcp') {
+            item.host = tr.dataset.host || '';
+            const portNum = parseInt(tr.dataset.port || '3334', 10);
+            item.port = isNaN(portNum) ? 3334 : portNum;
         }
-
-        if (saveType === 'tcp') {
-            item.host = card.querySelector('.speaker-tcp-host').value.trim();
-            const portVal = card.querySelector('.speaker-tcp-port').value.trim();
-            item.port = portVal ? parseInt(portVal, 10) : 3334;
-        }
-
+        // undefinedキーを除去
+        Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
         speakers.push(item);
     });
 
@@ -2114,154 +2109,62 @@ function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
 }
 window.populateSpeakerHaEntityDropdown = populateSpeakerHaEntityDropdown;
 
-function handleSpeakerHaEntityChange(select) {
-    const card = select.closest('.speaker-item');
-    const entityInput = card.querySelector('.speaker-entity');
-    if (select.value) {
-        entityInput.value = select.value;
-        entityInput.readOnly = true;
-        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
-    } else {
-        entityInput.value = '';
-        entityInput.readOnly = false;
-        entityInput.style.background = '';
-    }
-}
-window.handleSpeakerHaEntityChange = handleSpeakerHaEntityChange;
+function createSpeakerRow(item = {}) {
+    const tbody = document.getElementById('speakers-tbody');
+    if (!tbody) return;
+    const tr = document.createElement('tr');
+    tr.className = 'speaker-item';
 
-function createSpeakerCard(item = {}) {
-    const speakersList = document.getElementById('speakers-list');
-    const card = document.createElement('div');
-    card.className = 'setting-item-card speaker-item';
-
-    const roomName = item.room || '';
-    const label = item.label || '';
-    const note = item.note || '';
     const type = item.type || 'tts';
+    const room = item.room || '';
+    const label = item.label || '';
+    const entity = item.entity || '';
+    const note = item.note || '';
+    const host = item.host || '';
+    const port = item.port || 3334;
 
-    const uiType = type === 'tts' ? 'ha_entity' : type;
+    tr.dataset.type = type;
+    tr.dataset.room = room;
+    tr.dataset.label = label;
+    tr.dataset.entity = entity;
+    tr.dataset.note = note;
+    tr.dataset.host = host;
+    tr.dataset.port = String(port);
 
-    let haEntityVal = '';
-    let deviceEntity = '';
-    if (type === 'tts') {
-        haEntityVal = item.entity || '';
-        deviceEntity = haEntityVal;
-    } else {
-        deviceEntity = item.entity || '';
-    }
+    // 表示するエンティティ/ホスト文字列
+    const entityDisplay = type === 'tcp'
+        ? (host ? `${host}:${port}` : '（未設定）')
+        : (entity || '（未設定）');
 
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title" style="font-weight:600;">スピーカー設定</span>
-            <div class="speaker-actions" style="display:flex; align-items:center; gap:8px;">
-                <span class="speak-test-status" style="font-size:12px; font-weight:500;"></span>
-                <button type="button" class="btn btn-secondary btn-sm btn-speak-test" onclick="handleSpeakTest(this)">
-                    📢 テスト
-                </button>
-                <button type="button" class="btn-remove" onclick="this.closest('.speaker-item').remove()">
-                    ✕ 削除
-                </button>
-            </div>
-        </div>
-        
-        <div class="config-grid-4" style="margin-bottom: 12px;">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>部屋名 (room)</label>
-                <input type="text" class="speaker-room-name form-input" placeholder="部屋名 (例: study)" value="${esc(roomName)}" style="font-weight:600;">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>表示名 (label)</label>
-                <input type="text" class="speaker-label form-input" placeholder="例: 書斎（Nest Mini）" value="${esc(label)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ペアリングID (entity)</label>
-                <input type="text" class="speaker-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(deviceEntity)}">
-                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">同じIDを持つ音声ソースと同一デバイス扱いになります。TCPスピーカーのみ設定が必要です。</p>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>メモ (note)</label>
-                <input type="text" class="speaker-note form-input" placeholder="メモ" value="${esc(note)}">
-            </div>
-        </div>
-        
-        <div class="type-selector">
-            <button type="button" class="type-btn ${uiType === 'ha_entity' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'ha_entity')">HAエンティティ</button>
-            <button type="button" class="type-btn ${uiType === 'tcp' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tcp')">TCP (PCM Push)</button>
-            <input type="hidden" class="speaker-type" value="${esc(type)}">
-        </div>
-
-        <div class="speaker-fields-ha-entity" style="display: ${uiType === 'ha_entity' ? 'grid' : 'none'}; grid-template-columns: 1fr 1fr; gap: 12px;">
-            <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
-                <label>HAエンティティ (media_player.xxx)</label>
-                <select class="speaker-ha-entity-select ha-entity-select-field form-input" data-domain="media_player" onchange="handleSpeakerHaEntityChange(this)">
-                    <option value="">(ロード中...)</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="speaker-fields-tcp config-grid-2" style="display: ${uiType === 'tcp' ? 'grid' : 'none'};">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ホスト (host)</label>
-                <input type="text" class="speaker-tcp-host form-input" placeholder="192.168.1.xxx" value="${esc(item.host || '')}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ポート (port)</label>
-                <input type="number" class="speaker-tcp-port form-input" placeholder="3334" min="1" max="65535" value="${esc(String(item.port || 3334))}">
-            </div>
-            <div style="grid-column: span 2; font-size:12px; color:var(--claude-text-sub); margin-top:4px;">
-                raw mono s16le 16kHz PCM を TCP で push します。tts_provider はグローバル設定から継承されます。
-            </div>
-        </div>
+    tr.innerHTML = `
+        <td style="font-weight:600;">${esc(room || '（未設定）')}</td>
+        <td style="font-size:12px;">${esc(entityDisplay)}</td>
+        <td>${esc(label)}</td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon" title="編集"
+                    onclick="openEditModal('speaker', this.closest('tr'))">✏️</button>
+        </td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon btn-remove-icon" title="削除"
+                    onclick="if(confirm('このスピーカーを削除しますか？')) this.closest('tr').remove()">✕</button>
+        </td>
     `;
-
-    speakersList.appendChild(card);
-
-    const selectHaEntity = card.querySelector('.speaker-ha-entity-select');
-    populateSpeakerHaEntityDropdown(selectHaEntity, haEntityVal);
-
-    if (uiType === 'ha_entity' && deviceEntity && deviceEntity.includes('.')) {
-        const entityInput = card.querySelector('.speaker-entity');
-        entityInput.readOnly = true;
-        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
-    }
-}
-
-function toggleSpeakerType(btn, targetType) {
-    const card = btn.closest('.speaker-item');
-    const buttons = card.querySelectorAll('.type-btn');
-    buttons.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    const typeInput = card.querySelector('.speaker-type');
-    const entityInput = card.querySelector('.speaker-entity');
-
-    if (targetType !== 'tcp') {
-        typeInput.value = 'tts';
-    } else {
-        typeInput.value = 'tcp';
-    }
-
-    card.querySelector('.speaker-fields-ha-entity').style.display = targetType === 'ha_entity' ? 'grid' : 'none';
-    card.querySelector('.speaker-fields-tcp').style.display = targetType === 'tcp' ? 'grid' : 'none';
-
-    const selectHaEntity = card.querySelector('.speaker-ha-entity-select');
-    if (targetType === 'ha_entity') {
-        if (selectHaEntity.value) {
-            entityInput.value = selectHaEntity.value;
-            entityInput.readOnly = true;
-            entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
-        } else {
-            entityInput.readOnly = false;
-            entityInput.style.background = '';
-        }
-    } else {
-        entityInput.readOnly = false;
-        entityInput.style.background = '';
-    }
+    tbody.appendChild(tr);
 }
 
 function addSpeakerRow() {
-    createSpeakerCard({ type: 'tts' });
+    createSpeakerRow({ type: 'tts' });
+}
+
+function addSpeakerRowAndOpen() {
+    createSpeakerRow({ type: 'tts' });
+    const rows = document.querySelectorAll('#speakers-tbody .speaker-item');
+    const last = rows[rows.length - 1];
+    if (last) {
+        const accordion = document.getElementById('accordion-speakers');
+        if (accordion) openAccordion(accordion);
+        openEditModal('speaker', last);
+    }
 }
 
 function createCameraRow(cam = {}) {
@@ -2486,12 +2389,17 @@ function openAccordion(accordion) {
 }
 
 function updateCameraModalEntityState(modal) {
+    const selectEl = modal.querySelector('.camera-source-select-modal');
     const sourceInput = modal.querySelector('.camera-source-modal');
     const entityInput = modal.querySelector('.camera-entity-modal');
     const entityHint = modal.querySelector('.camera-entity-hint-modal');
-    if (!sourceInput || !entityInput) return;
-    
-    const sourceVal = sourceInput.value.trim();
+    if (!entityInput) return;
+
+    // ドロップダウンでHAエンティティが選ばれているか
+    const selectVal = selectEl ? selectEl.value : '';
+    const isHaSelect = selectVal && selectVal !== '__custom__';
+    const sourceVal = isHaSelect ? selectVal : (sourceInput ? sourceInput.value.trim() : '');
+
     if (sourceVal.includes('.')) {
         entityInput.value = sourceVal;
         entityInput.readOnly = true;
@@ -2512,6 +2420,21 @@ function toggleAudioSttRetentionModal(checkbox) {
         group.style.display = checkbox.checked ? 'block' : 'none';
     }
 }
+
+function handleSpeakerTypeModalChange(select) {
+    const modal = select.closest('#edit-modal') || select.closest('.modal');
+    if (!modal) return;
+    const ttsDiv = modal.querySelector('.speaker-fields-tts-modal');
+    const tcpDiv = modal.querySelector('.speaker-fields-tcp-modal');
+    if (select.value === 'tcp') {
+        if (ttsDiv) ttsDiv.style.display = 'none';
+        if (tcpDiv) tcpDiv.style.display = 'block';
+    } else {
+        if (ttsDiv) ttsDiv.style.display = 'block';
+        if (tcpDiv) tcpDiv.style.display = 'none';
+    }
+}
+window.handleSpeakerTypeModalChange = handleSpeakerTypeModalChange;
 
 // --- Edit Modal Functions ---
 function openEditModal(type, tr) {
@@ -2557,11 +2480,19 @@ function openEditModal(type, tr) {
         const entity = tr.dataset.entity || '';
         const label = tr.dataset.label || '';
         const note = tr.dataset.note || '';
-        
+
+        // sourceがHA cameraエンティティかどうか判定（ドット含む）
+        const isHaEntity = source && source.includes('.');
+        const customSource = isHaEntity ? '' : source;
+
         bodyEl.innerHTML = `
             <div class="form-group">
                 <label class="form-label">ソース (source)</label>
-                <input type="text" class="camera-source-modal form-input" placeholder="例: camera.living_room または capture_tv" value="${esc(source)}">
+                <select class="camera-source-select-modal form-input">
+                    <option value="">(未選択)</option>
+                    <option value="__custom__">その他のRTSPストリーム（手動入力）</option>
+                </select>
+                <input type="text" class="camera-source-modal form-input" placeholder="例: capture_tv または rtsp://..." value="${esc(customSource)}" style="margin-top: 6px; display: ${isHaEntity ? 'none' : 'block'};">
             </div>
             <div class="form-group">
                 <label class="form-label">カメラID (entity)</label>
@@ -2577,8 +2508,47 @@ function openEditModal(type, tr) {
                 <input type="text" class="camera-note-modal form-input" placeholder="例: リビングの広角カメラ (任意)" value="${esc(note)}">
             </div>
         `;
-        
+
+        // ドロップダウンにHAカメラエンティティを追加（「その他」の前に挿入）
+        const selectEl = bodyEl.querySelector('.camera-source-select-modal');
+        const customOpt = selectEl.querySelector('option[value="__custom__"]');
+        const cameras = (entityList && entityList['camera']) || [];
+        cameras.slice().sort((a, b) => {
+            const areaA = a.area || '', areaB = b.area || '';
+            if (areaA !== areaB) return areaA.localeCompare(areaB, 'ja');
+            return (a.friendly_name || '').localeCompare(b.friendly_name || '', 'ja');
+        }).forEach(ent => {
+            const opt = document.createElement('option');
+            opt.value = ent.entity_id;
+            const areaStr = ent.area ? `[${ent.area}] ` : '';
+            opt.textContent = `${areaStr}${ent.friendly_name} (${ent.entity_id})`;
+            selectEl.insertBefore(opt, customOpt);
+        });
+
+        // 現在のsourceに合わせて初期選択
+        if (isHaEntity && Array.from(selectEl.options).some(o => o.value === source)) {
+            selectEl.value = source;
+        } else if (source) {
+            selectEl.value = '__custom__';
+        }
+
+        // ドロップダウン変更時の処理
         const sourceInput = bodyEl.querySelector('.camera-source-modal');
+        selectEl.addEventListener('change', () => {
+            if (selectEl.value === '__custom__') {
+                sourceInput.style.display = 'block';
+                sourceInput.focus();
+                updateCameraModalEntityState(bodyEl);
+            } else if (selectEl.value) {
+                sourceInput.style.display = 'none';
+                sourceInput.value = selectEl.value;
+                updateCameraModalEntityState(bodyEl);
+            } else {
+                sourceInput.style.display = 'none';
+                sourceInput.value = '';
+                updateCameraModalEntityState(bodyEl);
+            }
+        });
         sourceInput.addEventListener('input', () => updateCameraModalEntityState(bodyEl));
         updateCameraModalEntityState(bodyEl);
         
@@ -2639,6 +2609,63 @@ function openEditModal(type, tr) {
             </div>
         `;
         
+    } else if (type === 'speaker') {
+        titleEl.textContent = 'スピーカーを編集';
+        const spkType = tr.dataset.type || 'tts';
+        const room = tr.dataset.room || '';
+        const label = tr.dataset.label || '';
+        const entity = tr.dataset.entity || '';
+        const note = tr.dataset.note || '';
+        const host = tr.dataset.host || '';
+        const port = tr.dataset.port || '3334';
+
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">部屋名 (room)</label>
+                <input type="text" class="speaker-room-modal form-input" placeholder="例: study" value="${esc(room)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">ラベル (label)</label>
+                <input type="text" class="speaker-label-modal form-input" placeholder="例: 書斎（Nest Mini）" value="${esc(label)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">メモ (note)</label>
+                <input type="text" class="speaker-note-modal form-input" placeholder="任意" value="${esc(note)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">スピーカータイプ</label>
+                <select class="speaker-type-select-modal form-input" onchange="handleSpeakerTypeModalChange(this)">
+                    <option value="tts" ${spkType === 'tts' ? 'selected' : ''}>HAエンティティ (TTS)</option>
+                    <option value="tcp" ${spkType === 'tcp' ? 'selected' : ''}>その他TCPスピーカー（手動設定）</option>
+                </select>
+            </div>
+            <div class="speaker-fields-tts-modal form-group" style="display: ${spkType === 'tcp' ? 'none' : 'block'};">
+                <label class="form-label">HAエンティティ (media_player.xxx)</label>
+                <select class="speaker-ha-entity-modal form-input">
+                    <option value="">(未選択)</option>
+                </select>
+            </div>
+            <div class="speaker-fields-tcp-modal" style="display: ${spkType === 'tcp' ? 'block' : 'none'};">
+                <div class="form-group">
+                    <label class="form-label">ホスト (host)</label>
+                    <input type="text" class="speaker-host-modal form-input" placeholder="192.168.1.xxx" value="${esc(host)}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">ポート (port)</label>
+                    <input type="number" class="speaker-port-modal form-input" placeholder="3334" min="1" max="65535" value="${esc(port)}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">ペアリングID (entity)</label>
+                    <input type="text" class="speaker-entity-modal form-input" placeholder="例: voice_s3r_kitchen" value="${esc(spkType === 'tcp' ? entity : '')}">
+                    <p class="form-hint" style="font-size:11px;">同じIDを持つ音声ソースと同一デバイスとして扱われます。</p>
+                </div>
+                <p class="form-hint" style="font-size:11px;">raw mono s16le 16kHz PCM を TCP で push します。tts_provider はグローバル設定を使用します。</p>
+            </div>
+        `;
+
+        // media_player ドロップダウンを populate
+        const haEntitySelect = bodyEl.querySelector('.speaker-ha-entity-modal');
+        populateSpeakerHaEntityDropdown(haEntitySelect, spkType === 'tts' ? entity : '');
     } else if (type === 'sensor') {
         titleEl.textContent = 'センサーの編集';
         const label = tr.dataset.label || '';
@@ -2797,7 +2824,11 @@ function saveEditModal() {
         _currentEditTr.querySelector('td:nth-child(3) .view-mode-element').textContent = note;
         
     } else if (_currentEditType === 'camera') {
-        const source = modal.querySelector('.camera-source-modal').value.trim();
+        const selectEl = modal.querySelector('.camera-source-select-modal');
+        const selectVal = selectEl ? selectEl.value : '';
+        const source = (selectVal && selectVal !== '__custom__')
+            ? selectVal
+            : modal.querySelector('.camera-source-modal').value.trim();
         const entity = modal.querySelector('.camera-entity-modal').value.trim();
         const label = modal.querySelector('.camera-label-modal').value.trim();
         const note = modal.querySelector('.camera-note-modal').value.trim();
@@ -2834,6 +2865,40 @@ function saveEditModal() {
         _currentEditTr.querySelector('td:nth-child(1)').textContent = source || '（未設定）';
         _currentEditTr.querySelector('td:nth-child(2)').textContent = label;
         _currentEditTr.querySelector('td:nth-child(3)').textContent = room;
+        
+    } else if (_currentEditType === 'speaker') {
+        const room = modal.querySelector('.speaker-room-modal').value.trim();
+        const label = modal.querySelector('.speaker-label-modal').value.trim();
+        const note = modal.querySelector('.speaker-note-modal').value.trim();
+        const type = modal.querySelector('.speaker-type-select-modal').value;
+
+        let entity = '';
+        let host = '';
+        let port = '3334';
+
+        if (type === 'tts') {
+            entity = modal.querySelector('.speaker-ha-entity-modal').value;
+        } else {
+            entity = modal.querySelector('.speaker-entity-modal').value.trim();
+            host = modal.querySelector('.speaker-host-modal').value.trim();
+            port = modal.querySelector('.speaker-port-modal').value.trim() || '3334';
+        }
+
+        _currentEditTr.dataset.type = type;
+        _currentEditTr.dataset.room = room;
+        _currentEditTr.dataset.label = label;
+        _currentEditTr.dataset.entity = entity;
+        _currentEditTr.dataset.note = note;
+        _currentEditTr.dataset.host = host;
+        _currentEditTr.dataset.port = port;
+
+        const entityDisplay = type === 'tcp'
+            ? (host ? `${host}:${port}` : '（未設定）')
+            : (entity || '（未設定）');
+
+        _currentEditTr.querySelector('td:nth-child(1)').textContent = room || '（未設定）';
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = entityDisplay;
+        _currentEditTr.querySelector('td:nth-child(3)').textContent = label;
         
     } else if (_currentEditType === 'sensor') {
         const label = modal.querySelector('.sensor-label-modal').value.trim();
@@ -3069,15 +3134,12 @@ async function handleSaveSettings(e) {
         }
     } else {
         // フォームタブがアクティブな場合
-        const speakerCards = document.querySelectorAll('.speaker-item');
         let validationError = null;
         let errorInput = null;
-        speakerCards.forEach(card => {
-            const roomInput = card.querySelector('.speaker-room-name');
-            const roomName = roomInput.value.trim();
-            if (!roomName && !validationError) {
+        document.querySelectorAll('#speakers-tbody .speaker-item').forEach(tr => {
+            if (!tr.dataset.room && !validationError) {
                 validationError = "スピーカー設定で部屋名が空の項目があります。";
-                errorInput = roomInput;
+                errorInput = tr;
             }
         });
         if (validationError) {
@@ -3090,7 +3152,7 @@ async function handleSaveSettings(e) {
     const spk = nextPrefs.speakers;
     const hasSpeakers = Array.isArray(spk) ? spk.length > 0 : Object.keys(spk || {}).length > 0;
     if (!hasSpeakers) {
-        const addSpeakerBtn = document.querySelector('button[onclick="addSpeakerRow()"]');
+        const addSpeakerBtn = document.querySelector('button[onclick*="addSpeakerRow"]');
         highlightAndFocusValidationError(addSpeakerBtn, 'スピーカーが1つも登録されていません。');
         return;
     }

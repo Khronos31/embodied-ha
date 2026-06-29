@@ -326,19 +326,31 @@
                                     <span class="accordion-icon">▶</span>
                                     <h3>発話先スピーカー (speakers)</h3>
                                 </div>
-                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add" onclick="event.stopPropagation(); addSpeakerRow()">＋ 部屋を追加</button>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
+                                        onclick="event.stopPropagation(); addSpeakerRowAndOpen()">＋ 追加</button>
                             </div>
                             <div class="accordion-content" style="display: none;">
-                                <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるか、TCPで直接PCMを送るかを選択できます。</p>
+                                <p class="section-desc">部屋ごとの発話先を設定します。HAの media_player エンティティ（TTS）か、TCPで直接PCMを送るデバイス（VoiceS3R等）を指定します。</p>
                                 <div class="form-group" style="max-width:480px; margin-bottom:16px;">
                                     <label class="form-label">TTSプロバイダー (tts_provider)</label>
                                     <select id="setting-tts-provider" class="form-input">
                                         <option value="">（未設定）</option>
                                     </select>
-                                    <p class="form-hint">TCP スピーカーが音声合成に使用するプロバイダー。TTS タイプのスピーカーは各カード内の TTSエンジン で個別指定します。</p>
+                                    <p class="form-hint">TCP スピーカーが音声合成に使用するプロバイダー。</p>
                                 </div>
-                                <div id="speakers-list" class="settings-list">
-                                    <!-- Dynamically generated -->
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>部屋 (room)</th>
+                                                <th>エンティティ / ホスト</th>
+                                                <th>ラベル (label)</th>
+                                                <th style="width:50px; text-align:center;">編集</th>
+                                                <th style="width:50px; text-align:center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="speakers-tbody"></tbody>
+                                    </table>
                                 </div>
                             </div>
                         </section>
