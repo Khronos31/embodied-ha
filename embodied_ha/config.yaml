@@ -1,5 +1,5 @@
 name: Embodied HA
-version: "1.17.5"
+version: "1.18.0"
 slug: embodied_ha
 description: An autonomous agent that lives in your home, running three loops for conversation, observation, and exploration.
 arch:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
+import importlib.util
 import json, os, subprocess, time, queue, threading, tempfile, sys, re, re
 import urllib.request
 import urllib.error
@@ -42,6 +43,8 @@ CHARACTER_FILE = os.environ.get("EHA_CHARACTER_FILE", os.path.join(SCRIPT_DIR, "
 
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
+LOUNGE_QUEUE_LOG = os.path.join(LOG_DIR, "ai_lounge_queue.jsonl")
+LOUNGE_RESOLVED_LOG = os.path.join(LOG_DIR, "ai_lounge_log.jsonl")
 
 
 def atomic_write(filepath: str, content: str | bytes) -> bool:
@@ -388,6 +391,43 @@ def append_jsonl(path: str, row: dict) -> None:
         os.makedirs(dir_name, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+
+
+def _load_lounge_module():
+    path = os.path.join(SCRIPT_DIR, "lounge-mcp.py")
+    spec = importlib.util.spec_from_file_location("embodied_ha_lounge_mcp", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("lounge-mcp.py を読み込めません")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _set_lounge_env_from_prefs() -> None:
+    try:
+        with open(PREFS_FILE, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        prefs = {}
+    ai_lounge = prefs.get("ai_lounge", {}) if isinstance(prefs, dict) else {}
+    if not isinstance(ai_lounge, dict):
+        ai_lounge = {}
+    app_id = str(ai_lounge.get("app_id") or "").strip()
+    installation_id = str(ai_lounge.get("installation_id") or "").strip()
+    if app_id:
+        os.environ["LOUNGE_APP_ID"] = app_id
+    if installation_id:
+        os.environ["LOUNGE_INSTALLATION_ID"] = installation_id
+
+
+def get_lounge_queue() -> list:
+    return [item for item in read_jsonl(LOUNGE_QUEUE_LOG, 1000) if item.get("status") == "pending"]
+
+
+def get_lounge_log(limit: int = 20) -> list:
+    return list(reversed(read_jsonl(LOUNGE_RESOLVED_LOG, limit)))
 
 
 def get_chat_messages(limit: int = 300) -> list:
@@ -954,6 +994,12 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int(qs.get("limit", ["300"])[0])
             self.send_json(read_jsonl(AUDIO_EVENT_TAGS_LOG, limit))
+        elif path == "/api/lounge-queue":
+            self.send_json(get_lounge_queue())
+        elif path == "/api/lounge-log":
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["20"])[0])
+            self.send_json(get_lounge_log(limit))
         elif path.startswith("/api/audio-events/") and path.endswith("/wav"):
             event_id = path[len("/api/audio-events/"):-len("/wav")].strip("/")
             if not event_id or not all(c.isalnum() or c in "-_" for c in event_id):
@@ -1187,6 +1233,32 @@ class Handler(BaseHTTPRequestHandler):
                 source = body.get("source", "chat")
                 threading.Thread(target=send_chat, args=(message, source), daemon=True).start()
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path.startswith("/api/lounge-queue/") and path.endswith("/approve"):
+            item_id = path[len("/api/lounge-queue/"):-len("/approve")].strip("/")
+            if not item_id:
+                self.send_json({"error": "id is required"}, 400)
+                return
+            try:
+                _set_lounge_env_from_prefs()
+                result = _load_lounge_module().approve_queue_item(item_id)
+                notify_sse("update", {"room": "lounge"})
+                self.send_json({"ok": True, "item": result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path.startswith("/api/lounge-queue/") and path.endswith("/reject"):
+            item_id = path[len("/api/lounge-queue/"):-len("/reject")].strip("/")
+            if not item_id:
+                self.send_json({"error": "id is required"}, 400)
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                reason = body.get("reason") if isinstance(body, dict) else None
+                result = _load_lounge_module().reject_queue_item(item_id, reason)
+                notify_sse("update", {"room": "lounge"})
+                self.send_json({"ok": True, "item": result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/audio-event-tags" or (path.startswith("/api/audio-events/") and path.endswith("/tags")):

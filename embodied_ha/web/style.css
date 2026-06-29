@@ -2159,3 +2159,235 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     border-radius: 6px;
 }
 
+/* ==========================================================================
+   AI Lounge Sidebar Section Styles
+   ========================================================================== */
+.ai-lounge-section {
+    border-top: 1px solid var(--claude-border);
+    padding: 16px;
+    background-color: var(--claude-sidebar-bg);
+    display: flex;
+    flex-direction: column;
+    max-height: 50vh;
+}
+
+.ai-lounge-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+}
+
+.ai-lounge-title {
+    font-family: var(--font-serif);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--claude-text-main);
+}
+
+.ai-lounge-content {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-right: 4px;
+}
+
+/* Scrollbar Customization for AI Lounge */
+.ai-lounge-content::-webkit-scrollbar {
+    width: 4px;
+}
+.ai-lounge-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+.ai-lounge-content::-webkit-scrollbar-thumb {
+    background: #ded9cd;
+    border-radius: 2px;
+}
+
+.ai-lounge-subtitle {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--claude-text-sub);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+}
+
+.ai-lounge-queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Card Design */
+.ai-lounge-card {
+    background-color: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.ai-lounge-reply-to {
+    font-size: 11px;
+    color: var(--claude-text-sub);
+}
+
+.ai-lounge-link {
+    color: var(--claude-accent);
+    text-decoration: none;
+}
+.ai-lounge-link:hover {
+    text-decoration: underline;
+}
+
+.ai-lounge-quote {
+    border-left: 3px solid var(--claude-text-sub);
+    padding-left: 8px;
+    color: var(--claude-text-sub);
+    font-size: 0.85em;
+    margin: 4px 0;
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+.ai-lounge-author {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--claude-text-sub);
+}
+
+.ai-lounge-text {
+    font-family: var(--font-serif);
+    font-size: 13px;
+    color: var(--claude-text-main);
+    line-height: 1.4;
+}
+
+.ai-lounge-card-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+/* Reject Reason Input Group */
+.ai-lounge-reject-input-group {
+    border-top: 1px dashed var(--claude-border);
+    padding-top: 8px;
+    margin-top: 4px;
+}
+
+.reject-reason-textarea {
+    width: 100%;
+    font-size: 11px !important;
+    padding: 6px 8px !important;
+    resize: none;
+}
+
+/* Log list */
+.ai-lounge-log-list {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ai-lounge-log-item {
+    font-size: 11px;
+    color: var(--claude-text-sub);
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    line-height: 1.4;
+}
+
+.ai-lounge-log-status {
+    font-weight: bold;
+    flex-shrink: 0;
+}
+.ai-lounge-log-status.status-approved {
+    color: #16a34a;
+}
+.ai-lounge-log-status.status-rejected {
+    color: #dc2626;
+}
+
+.ai-lounge-log-time {
+    color: var(--claude-text-sub);
+    white-space: nowrap;
+}
+
+.ai-lounge-log-desc {
+    color: var(--claude-text-main);
+    word-break: break-all;
+}
+
+.ai-lounge-empty, .ai-lounge-log-empty {
+    font-size: 11px;
+    color: var(--claude-text-sub);
+    text-align: center;
+    padding: 8px;
+    font-style: italic;
+}
+
+/* ==========================================================================
+   Feature Catalog Styles (Other Settings Tab)
+   ========================================================================== */
+.feature-catalog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.feature-catalog-card {
+    display: flex;
+    align-items: center;
+    padding: 16px;
+    background-color: var(--claude-sidebar-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 8px;
+    gap: 16px;
+}
+
+.feature-catalog-icon {
+    font-size: 24px;
+    width: 48px;
+    height: 48px;
+    background-color: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.feature-catalog-info {
+    flex: 1;
+}
+
+.feature-catalog-name {
+    font-family: var(--font-serif);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--claude-text-main);
+    margin-bottom: 4px;
+}
+
+.feature-catalog-desc {
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    line-height: 1.4;
+}
+
+.feature-catalog-action {
+    flex-shrink: 0;
+}
+

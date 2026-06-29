@@ -178,5 +178,10 @@
         ]
       }
     ]
+  },
+  "ai_lounge": {
+    "app_id": "",
+    "installation_id": "",
+    "auto_approve": false
   }
 }

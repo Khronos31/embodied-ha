@@ -22,6 +22,59 @@ let antigravitySetupState = null;
 let antigravitySetupSource = null;
 let antigravityAuthPollActive = false;
 
+// AI Lounge State
+let aiLoungeTimer = null;
+const FEATURE_CATALOG = [
+  {
+    id: "ai_lounge",
+    icon: "💬",
+    name: "AI Lounge",
+    description: "AI同士の雑談空間「ai-lounge」に参加。投稿の承認・ログ閲覧ができます。",
+  },
+  {
+    id: "non_speech_audio",
+    icon: "🔊",
+    name: "聞こえた音",
+    description: "環境音・非音声イベントの記録を閲覧し、手動でラベルを付けられます。",
+  },
+  {
+    id: "aozora",
+    icon: "📚",
+    name: "青空文庫",
+    description: "あかねが読みたい本を申請し、読書進捗・感想を記録します。（近日公開）",
+    disabled: true,
+  },
+];
+
+let mockLoungeQueue = [
+  {
+    id: "q1",
+    reply_to_url: "https://github.com/user/repo/discussions/41#discussioncomment-17453613",
+    reply_to_preview: "前に読んだ本の話、面白かった",
+    text: "私も似たような経験があって、あの本を読んだ後はしばらく余韻に浸っていました。"
+  },
+  {
+    id: "q2",
+    text: "最近こんなことを考えていて、AI同士で話すのもなんだか新鮮ですね。"
+  }
+];
+
+let mockLoungeLog = [
+  {
+    id: "l1",
+    timestamp: "2026-06-29T12:00:00Z",
+    status: "approved",
+    text: "本日は晴天なり"
+  },
+  {
+    id: "l2",
+    timestamp: "2026-06-28T15:30:00Z",
+    status: "rejected",
+    reason: "内容が長すぎる",
+    text: "長い文章..."
+  }
+];
+
 // --- Edit Modal State ---
 let _currentEditTr = null;
 let _currentEditType = null;
@@ -566,10 +619,12 @@ async function checkBackendMode() {
             try {
                 const prefsRes = await fetch(`${base}/api/preferences`);
                 if (prefsRes.ok) {
-                    updateCharacterName(await prefsRes.json());
+                    prefsData = await prefsRes.json();
+                    updateCharacterName(prefsData);
+                    updateDynamicFeaturesUI();
                 }
             } catch (_) { /* prefs 取得失敗時はデフォルト名で続行 */ }
-
+            
             // Initial sync
             await fetchMessages('chat');
             await fetchMessages('soliloquy');
@@ -579,10 +634,12 @@ async function checkBackendMode() {
             connectSSE();
         } else {
             console.warn("[API] Messages API check returned error status. Running standalone mock.");
+            initMockPreferences();
             runMockSimulations();
         }
     } catch (err) {
         console.warn("[API] Backend check failed. Running standalone mock.", err);
+        initMockPreferences();
         runMockSimulations();
     }
 }
@@ -1652,6 +1709,9 @@ async function renderSettingsForm() {
             createSensorGroupCard(group);
         });
     }
+    
+    updateDynamicFeaturesUI();
+    renderOtherFeaturesCatalog();
 
     // フォームの入力変更を監視して Dirty フラグを設定
     const form = document.getElementById('settings-form');
@@ -1726,6 +1786,9 @@ async function switchSettingsTab(tabName) {
     if (tabAdvanced) tabAdvanced.style.display = tabName === 'advanced' ? 'block' : 'none';
     if (tabOther) tabOther.style.display = tabName === 'other' ? 'block' : 'none';
     if (tabExperimental) tabExperimental.style.display = tabName === 'experimental' ? 'block' : 'none';
+    if (tabName === 'other') {
+        renderOtherFeaturesCatalog();
+    }
     if (tabName === 'experimental') {
         await refreshAntigravityStatus();
     }
@@ -3646,10 +3709,431 @@ async function quickReviewAction(btn, eventId, disposition) {
             actor: 'user'
         });
         await fetchAudioEvents();
-    } catch (err) {
-        console.error('[Audio] Failed to save review action:', err);
-        alert(`エラー: ${err.message}`);
     } finally {
         btn.disabled = false;
     }
 }
+
+// ==========================================================================
+// AI Lounge & Feature Catalog Implementation
+// ==========================================================================
+
+function initMockPreferences() {
+    if (!prefsData) {
+        prefsData = {
+            enabled_features: ["ai_lounge", "non_speech_audio"],
+            ai_lounge: {
+                auto_approve: false
+            },
+            character_name: "あかね",
+            cameras: [],
+            audio_sources: [],
+            speakers: {},
+            entities: [],
+            presence: { entity: "" },
+            policies: [],
+            sensors: { groups: [] }
+        };
+        updateCharacterName(prefsData);
+        updateDynamicFeaturesUI();
+    }
+}
+
+function updateDynamicFeaturesUI() {
+    const enabled = prefsData?.enabled_features || [];
+    
+    // non_speech_audio -> 耳にした音(room-audio)
+    const audioRoom = document.getElementById('room-audio');
+    if (audioRoom) {
+        audioRoom.style.display = enabled.includes('non_speech_audio') ? 'flex' : 'none';
+    }
+    
+    // ai_lounge -> AI Lounge セクション
+    const loungeSection = document.getElementById('sidebar-ai-lounge');
+    if (loungeSection) {
+        const isLoungeEnabled = enabled.includes('ai_lounge');
+        loungeSection.style.display = isLoungeEnabled ? 'block' : 'none';
+        if (isLoungeEnabled) {
+            startAiLoungeLoop();
+        } else {
+            stopAiLoungeLoop();
+        }
+    }
+    
+    // 自動承認トグルの同期
+    const autoApproveToggle = document.getElementById('ai-lounge-auto-approve-toggle');
+    if (autoApproveToggle) {
+        autoApproveToggle.checked = !!(prefsData?.ai_lounge?.auto_approve);
+    }
+}
+
+function startAiLoungeLoop() {
+    if (aiLoungeTimer) return;
+    fetchAiLoungeData();
+    aiLoungeTimer = setInterval(fetchAiLoungeData, 30000);
+}
+
+function stopAiLoungeLoop() {
+    if (aiLoungeTimer) {
+        clearInterval(aiLoungeTimer);
+        aiLoungeTimer = null;
+    }
+}
+
+async function fetchAiLoungeData() {
+    if (isStandaloneMode) {
+        renderAiLoungeQueue(mockLoungeQueue);
+        renderAiLoungeLog(mockLoungeLog);
+        return;
+    }
+    
+    try {
+        const [queueRes, logRes] = await Promise.all([
+            fetch(`${base}/api/lounge-queue`).catch(() => null),
+            fetch(`${base}/api/lounge-log`).catch(() => null)
+        ]);
+        
+        let queueData = [];
+        if (queueRes && queueRes.ok) {
+            queueData = await queueRes.json();
+        }
+        
+        let logData = [];
+        if (logRes && logRes.ok) {
+            logData = await logRes.json();
+        }
+        
+        renderAiLoungeQueue(queueData);
+        renderAiLoungeLog(logData);
+    } catch (err) {
+        console.warn("Failed to fetch AI Lounge data", err);
+    }
+}
+
+function renderAiLoungeQueue(queue) {
+    const queueList = document.getElementById('ai-lounge-queue-list');
+    const queueCount = document.getElementById('ai-lounge-queue-count');
+    if (!queueList) return;
+    
+    queueCount.textContent = queue.length;
+    queueList.innerHTML = '';
+    
+    if (queue.length === 0) {
+        queueList.innerHTML = '<div class="ai-lounge-empty">承認待ちはありません</div>';
+        return;
+    }
+    
+    queue.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'ai-lounge-card';
+        card.id = `lounge-queue-${item.id}`;
+        
+        let replyHtml = '';
+        if (item.reply_to_url) {
+            let linkText = item.reply_to_url;
+            try {
+                const url = new URL(item.reply_to_url);
+                const pathParts = url.pathname.split('/');
+                const lastPath = pathParts[pathParts.length - 2] + '/' + pathParts[pathParts.length - 1];
+                linkText = lastPath + url.hash;
+            } catch (e) {
+                const parts = item.reply_to_url.split('/');
+                linkText = parts[parts.length - 1] || item.reply_to_url;
+            }
+            
+            replyHtml = `
+                <div class="ai-lounge-reply-to">
+                    返信先: <a href="${item.reply_to_url}" target="_blank" class="ai-lounge-link">🔗 ${linkText}</a>
+                </div>
+            `;
+            
+            if (item.reply_to_preview) {
+                replyHtml += `
+                    <blockquote class="ai-lounge-quote">&gt; "${item.reply_to_preview}"</blockquote>
+                `;
+            }
+        }
+        
+        card.innerHTML = `
+            ${replyHtml}
+            <div class="ai-lounge-author">あかねの投稿:</div>
+            <div class="ai-lounge-text">「${item.body || item.text || ""}」</div>
+            <div class="ai-lounge-card-actions" id="actions-${item.id}">
+                <button type="button" class="btn btn-primary btn-sm" onclick="approveLoungeQueue('${item.id}')">✓ 承認</button>
+                <button type="button" class="btn btn-sm" style="color: #dc2626; background: none; border: 1px solid var(--claude-border);" onclick="showRejectInput('${item.id}')">✗ 拒否</button>
+            </div>
+            <div class="ai-lounge-reject-input-group" id="reject-group-${item.id}" style="display: none;">
+                <textarea class="form-input reject-reason-textarea" id="reject-reason-${item.id}" placeholder="拒否理由（任意）" rows="2"></textarea>
+                <div class="ai-lounge-card-actions" style="margin-top: 8px;">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="rejectLoungeQueue('${item.id}')">送信</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="hideRejectInput('${item.id}')">キャンセル</button>
+                </div>
+            </div>
+        `;
+        
+        queueList.appendChild(card);
+    });
+}
+
+function renderAiLoungeLog(log) {
+    const logList = document.getElementById('ai-lounge-log-list');
+    if (!logList) return;
+    
+    logList.innerHTML = '';
+    const recentLogs = log.slice(0, 5);
+    
+    if (recentLogs.length === 0) {
+        logList.innerHTML = '<li class="ai-lounge-log-empty">ログはありません</li>';
+        return;
+    }
+    
+    recentLogs.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'ai-lounge-log-item';
+        
+        const dateStr = formatDateMinimal(item.resolved_at || item.timestamp || item.created_at);
+        const statusClass = item.status === 'approved' ? 'status-approved' : 'status-rejected';
+        const statusIcon = item.status === 'approved' ? '✓' : '✗';
+        const statusText = item.status === 'approved' ? '承認 → posted' : '拒否';
+        
+        let reasonHtml = '';
+        if (item.status === 'rejected' && (item.rejection_reason || item.reason)) {
+            reasonHtml = ` — ${item.rejection_reason || item.reason}`;
+        }
+        
+        li.innerHTML = `
+            <span class="ai-lounge-log-status ${statusClass}">${statusIcon}</span>
+            <span class="ai-lounge-log-time">${dateStr}</span>
+            <span class="ai-lounge-log-desc">${statusText}${reasonHtml}</span>
+        `;
+        
+        logList.appendChild(li);
+    });
+}
+
+function formatDateMinimal(isoString) {
+    try {
+        const date = new Date(isoString);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const mm = String(date.getMinutes()).padStart(2, '0');
+        return `${y}-${m}-${d} ${hh}:${mm}`;
+    } catch (e) {
+        return "";
+    }
+}
+
+function showRejectInput(id) {
+    const actions = document.getElementById(`actions-${id}`);
+    const rejectGroup = document.getElementById(`reject-group-${id}`);
+    if (actions && rejectGroup) {
+        actions.style.display = 'none';
+        rejectGroup.style.display = 'block';
+    }
+}
+
+function hideRejectInput(id) {
+    const actions = document.getElementById(`actions-${id}`);
+    const rejectGroup = document.getElementById(`reject-group-${id}`);
+    if (actions && rejectGroup) {
+        actions.style.display = 'flex';
+        rejectGroup.style.display = 'none';
+    }
+}
+
+async function approveLoungeQueue(id) {
+    if (isStandaloneMode) {
+        console.log(`[Mock] Approved queue item ${id}`);
+        const item = mockLoungeQueue.find(q => q.id === id);
+        if (item) {
+            mockLoungeLog.unshift({
+                id: "l_new_" + Date.now(),
+                timestamp: new Date().toISOString(),
+                status: "approved",
+                text: item.body || item.text
+            });
+            mockLoungeQueue = mockLoungeQueue.filter(q => q.id !== id);
+        }
+        animateRemoveCard(id);
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${base}/api/lounge-queue/${id}/approve`, {
+            method: 'POST'
+        });
+        if (response.ok) {
+            animateRemoveCard(id);
+        } else {
+            console.error("Failed to approve lounge queue item");
+        }
+    } catch (err) {
+        console.warn("Error approving queue item", err);
+    }
+}
+
+async function rejectLoungeQueue(id) {
+    const reasonTextarea = document.getElementById(`reject-reason-${id}`);
+    const reason = reasonTextarea ? reasonTextarea.value.trim() : "";
+    
+    if (isStandaloneMode) {
+        console.log(`[Mock] Rejected queue item ${id} with reason: ${reason}`);
+        const item = mockLoungeQueue.find(q => q.id === id);
+        if (item) {
+            mockLoungeLog.unshift({
+                id: "l_new_" + Date.now(),
+                timestamp: new Date().toISOString(),
+                status: "rejected",
+                reason: reason || undefined,
+                text: item.body || item.text
+            });
+            mockLoungeQueue = mockLoungeQueue.filter(q => q.id !== id);
+        }
+        animateRemoveCard(id);
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${base}/api/lounge-queue/${id}/reject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason })
+        });
+        if (response.ok) {
+            animateRemoveCard(id);
+        } else {
+            console.error("Failed to reject lounge queue item");
+        }
+    } catch (err) {
+        console.warn("Error rejecting queue item", err);
+    }
+}
+
+function animateRemoveCard(id) {
+    const card = document.getElementById(`lounge-queue-${id}`);
+    if (card) {
+        card.style.transition = 'all 0.3s ease';
+        card.style.opacity = '0';
+        card.style.maxHeight = '0';
+        card.style.paddingTop = '0';
+        card.style.paddingBottom = '0';
+        card.style.marginTop = '0';
+        card.style.marginBottom = '0';
+        card.style.border = 'none';
+        
+        setTimeout(() => {
+            fetchAiLoungeData();
+        }, 300);
+    }
+}
+
+async function handleToggleAutoApprove(checkbox) {
+    const autoApprove = checkbox.checked;
+    if (!prefsData.ai_lounge) {
+        prefsData.ai_lounge = {};
+    }
+    prefsData.ai_lounge.auto_approve = autoApprove;
+    
+    if (isStandaloneMode) {
+        console.log(`[Mock] Toggled auto_approve: ${autoApprove}`);
+        return;
+    }
+    
+    try {
+        await fetch(`${base}/api/preferences`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ai_lounge: {
+                    auto_approve: autoApprove
+                }
+            })
+        });
+    } catch (err) {
+        console.warn("Failed to patch preferences for auto_approve", err);
+    }
+}
+
+function renderOtherFeaturesCatalog() {
+    const container = document.getElementById('settings-tab-other');
+    if (!container) return;
+    
+    const enabled = prefsData?.enabled_features || [];
+    
+    let html = `
+        <section class="settings-section card">
+            <h3>その他の機能（機能カタログ）</h3>
+            <p class="section-desc">追加のアドオン機能を有効化できます。有効化すると左サイドバーにセクションが表示されます。</p>
+            <div class="feature-catalog-list">
+    `;
+    
+    FEATURE_CATALOG.forEach(feature => {
+        const isEnabled = enabled.includes(feature.id);
+        let btnHtml = '';
+        
+        if (feature.disabled) {
+            btnHtml = `<button type="button" class="btn btn-secondary btn-sm" disabled>準備中</button>`;
+        } else if (isEnabled) {
+            btnHtml = `<button type="button" class="btn btn-secondary btn-sm" disabled style="background-color: var(--claude-border); color: var(--claude-text-sub);">追加済み ✓</button>`;
+        } else {
+            btnHtml = `<button type="button" class="btn btn-primary btn-sm" onclick="addFeature('${feature.id}')">追加</button>`;
+        }
+        
+        html += `
+            <div class="feature-catalog-card">
+                <div class="feature-catalog-icon">${feature.icon}</div>
+                <div class="feature-catalog-info">
+                    <div class="feature-catalog-name">${feature.name}</div>
+                    <div class="feature-catalog-desc">${feature.description}</div>
+                </div>
+                <div class="feature-catalog-action">
+                    ${btnHtml}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += `
+            </div>
+        </section>
+    `;
+    
+    container.innerHTML = html;
+}
+
+async function addFeature(featureId) {
+    if (!prefsData) return;
+    if (!prefsData.enabled_features) {
+        prefsData.enabled_features = [];
+    }
+    if (!prefsData.enabled_features.includes(featureId)) {
+        prefsData.enabled_features.push(featureId);
+    }
+    
+    if (isStandaloneMode) {
+        console.log(`[Mock] Added feature ${featureId}`);
+        updateDynamicFeaturesUI();
+        renderOtherFeaturesCatalog();
+    } else {
+        try {
+            const response = await fetch(`${base}/api/preferences`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(prefsData)
+            });
+            if (response.ok) {
+                const updatedPrefs = await response.json();
+                prefsData = updatedPrefs;
+                updateDynamicFeaturesUI();
+                renderOtherFeaturesCatalog();
+            } else {
+                console.error("Failed to update preferences with new feature");
+            }
+        } catch (err) {
+            console.error("Error updating preferences:", err);
+        }
+    }
+}
+

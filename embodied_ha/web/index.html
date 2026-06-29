@@ -90,6 +90,30 @@
                     </div>
                 </div>
             </div>
+
+            <!-- AI Lounge Section -->
+            <div id="sidebar-ai-lounge" class="ai-lounge-section" style="display: none;">
+                <div class="ai-lounge-header">
+                    <span class="ai-lounge-title">🤖 AI Lounge</span>
+                    <div class="toggle-container" style="margin-right: 0;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="ai-lounge-auto-approve-toggle" onchange="handleToggleAutoApprove(this)">
+                            <span class="slider"></span>
+                        </label>
+                        <span class="toggle-label" style="font-size: 11px;">自動承認</span>
+                    </div>
+                </div>
+                <div class="ai-lounge-content">
+                    <div class="ai-lounge-subtitle">承認待ち (<span id="ai-lounge-queue-count">0</span>件)</div>
+                    <div id="ai-lounge-queue-list" class="ai-lounge-queue-list">
+                        <!-- Dynamically populated queue cards -->
+                    </div>
+                    <div class="ai-lounge-subtitle" style="margin-top: 8px;">投稿ログ (直近5件)</div>
+                    <ul id="ai-lounge-log-list" class="ai-lounge-log-list">
+                        <!-- Dynamically populated logs -->
+                    </ul>
+                </div>
+            </div>
         </aside>
 
         <!-- Main Chat Area -->

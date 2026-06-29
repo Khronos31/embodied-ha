@@ -5,14 +5,14 @@
 サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
 明示的に env ブロックへ注入する（env継承に依存しない）。
 
-サーバー名: audio / body / camera / ha / hacontrol / http / memory / sensors / sociality
+サーバー名: audio / body / camera / ha / hacontrol / http / lounge / memory / sensors / sociality
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_PREFS_FILE, EHA_LOG_DIR, EHA_DATA_DIR, EHA_AUDIO_LOG_FILE,
      EHA_AUDITORY_EVENTS_FILE, EHA_ACTIVE_LISTEN_LOG_FILE,
      EHA_ACTIVE_LISTEN_RETENTION_HOURS, EHA_BACKGROUND_AUDIO_LOG_FILE,
      EHA_NON_SPEECH_AUDIO_EVENTS_FILE, EHA_AUDIO_EVENT_TAGS_FILE, EHA_AUDIO_WAV_DIR,
      EHA_ROOM_GRAPH_FILE, EHA_BODY_LOCATION_FILE, EHA_BODY_LOCATION_LOG_FILE,
-     EHA_TOOLS_PATH, PATH
+     EHA_TOOLS_PATH, PATH, LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
 """
 import sys
 import os
@@ -33,11 +33,29 @@ _ENV_KEYS = (
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
 
 
-def _server(script, extra_args=None):
+def _load_prefs():
+    path = os.environ.get("EHA_PREFS_FILE", "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+prefs = _load_prefs()
+
+
+def _server(script, extra_args=None, extra_env=None):
+    env = dict(COMMON_ENV)
+    if extra_env:
+        env.update({k: str(v) for k, v in extra_env.items() if v is not None})
     return {
         "command": "python3",
         "args": [os.path.join(DIR, script)] + (extra_args or []),
-        "env": COMMON_ENV,
+        "env": env,
     }
 
 
@@ -51,6 +69,10 @@ REGISTRY = {
     "ha":        lambda: _server("ha-mcp.py"),          # 読み取り専用（ha_get）
     "hacontrol": lambda: _server("ha-control-mcp.py"),  # 家電操作（ha_call_service）
     "http":    lambda: _server("http-mcp.py"),
+    "lounge": lambda: _server("lounge-mcp.py", extra_env={
+        "LOUNGE_APP_ID": prefs.get("ai_lounge", {}).get("app_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
+        "LOUNGE_INSTALLATION_ID": prefs.get("ai_lounge", {}).get("installation_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
+    }),
     "memory":  lambda: _server("memory-mcp.py"),
     "sensors": lambda: _server("sensors-mcp.py"),
     "sociality": lambda: _server("sociality-mcp.py"),

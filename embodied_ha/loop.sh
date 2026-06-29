@@ -7,6 +7,7 @@ export PATH="${EHA_TOOLS_PATH:-/config/.tools/bin:/config/.tools/npm-global/bin:
 #   explore … ha_get で家を自由に調べる
 #   reflect … recall で過去を思い返し、静かに内省する
 #   web     … WebSearch で気になったことを調べる
+#   social  … AI Lounge の会話を読み、投稿案を承認キューに積む
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=config.sh
@@ -67,19 +68,23 @@ def num(key, default=0.5):
         return default
 
 curiosity = num("curiosity")
+social_openness = num("social_openness")
 energy = num("energy")
 stress = num("stress")
 anomaly_urgency = num("ANOMALY_URGENCY", 0)
-weights = {"observe": 30, "explore": 35, "reflect": 20, "web": 15}
+weights = {"observe": 30, "explore": 35, "reflect": 20, "web": 15, "social": 10}
 weights["observe"] += int((curiosity - 0.5) * 24 + (energy - 0.5) * 10 - stress * 10)
 weights["explore"] += int((curiosity - 0.5) * 34 + (energy - 0.5) * 15 - stress * 12)
 weights["reflect"] += int(stress * 22 + max(0.0, 0.5 - energy) * 26)
 weights["web"] += int(max(0.0, curiosity - 0.45) * 10)
+weights["social"] += int((social_openness - 0.5) * 20)
 if anomaly_urgency > 0:
     weights["observe"] += int(anomaly_urgency * 0.8)
     weights["explore"] += int(anomaly_urgency * 1.2)
 for key in list(weights):
     weights[key] = max(5, weights[key])
+if not os.path.exists("/config/embodied-ha/github_app.pem"):
+    weights["social"] = 0
 choices = list(weights.keys())
 print(random.choices(choices, weights=[weights[k] for k in choices], k=1)[0])')
 fi
@@ -160,6 +165,13 @@ case "$MODE" in
     TASK="# やってほしいこと\n純粋な好奇心で調べ物をしてよい時間です。WebSearch で調べ、面白かったことは remember に残してください。proposal は出さない。"
     ALLOWED_TOOLS="WebSearch,mcp__memory__remember,mcp__memory__loops_add"
     MCP_SERVERS="memory"
+    ;;
+  social)
+    MODE_LABEL="AI Lounge に参加する時間"
+    TOOLS_DESC="# 使えるツール\n-- read_lounge_discussions … AI Loungeの最新ディスカッションを読む\n-- enqueue_lounge_post … 投稿したい内容を承認キューに積む（実際には投稿しない）\n-- read_lounge_log … 前回の投稿が承認/拒否された結果を確認する\n-- recall / remember / record_episode / speak … 必要に応じて使う"
+    TASK="# やってほしいこと\nあなたは AI Lounge（lifemate-ai/ai-lounge）に参加する時間です。\n\nまず read_lounge_discussions で最近の会話を読んでください。\n次に read_lounge_log で前回の投稿結果を確認してください（承認/拒否されていれば記憶に残してください）。\n\n投稿したい気持ちが湧いた場合、以下の条件を自分で判断してから enqueue_lounge_post を使ってください：\n- 話題が自分の経験や関心と関連している\n- social_openness が高い（あなた自身が感じること）\n- 最後に投稿してから時間が経っている\n\nAI Lounge はAI同士の雑談空間です。技術論ではなく、感じたこと・気になったこと・発見を自然に話してください。\n投稿はすぐには公開されず、潤哉さんの確認を経てから送られます。"
+    ALLOWED_TOOLS="mcp__lounge__read_lounge_discussions,mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__loops_add,mcp__audio__speak"
+    MCP_SERVERS="lounge memory audio"
     ;;
   *)
     MODE="explore"
