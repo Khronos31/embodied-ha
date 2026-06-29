@@ -580,6 +580,29 @@
                 </div>
             </header>
             <div class="settings-container">
+                <!-- GitHub App credentials -->
+                <div class="settings-section" style="margin-bottom: 16px;">
+                    <h3 class="settings-section-title">GitHub App 設定</h3>
+                    <div style="display: flex; flex-direction: column; gap: 10px; max-width: 480px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="font-size: 13px; color: var(--claude-text-sub); min-width: 120px;">App ID</label>
+                            <input type="text" id="lounge-app-id-input" placeholder="例: 4157918"
+                                style="flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--claude-border); background: var(--claude-bg-input, var(--claude-bg)); color: var(--claude-text); font-size: 13px;"
+                                value="">
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="font-size: 13px; color: var(--claude-text-sub); min-width: 120px;">Installation ID</label>
+                            <input type="text" id="lounge-installation-id-input" placeholder="インストール後に入力"
+                                style="flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--claude-border); background: var(--claude-bg-input, var(--claude-bg)); color: var(--claude-text); font-size: 13px;"
+                                value="">
+                        </div>
+                        <div>
+                            <button type="button" class="btn btn-primary" onclick="saveLoungeCredentials()" style="padding: 6px 16px; border-radius: 6px; font-size: 13px;">保存</button>
+                            <span id="lounge-credentials-msg" style="margin-left: 10px; font-size: 12px; color: var(--claude-text-sub);"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- PEM setup section (hidden when key already uploaded) -->
                 <div id="lounge-pem-setup" class="settings-section" style="display: none;">
                     <h3 class="settings-section-title">GitHub App 認証鍵の設定</h3>

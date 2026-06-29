@@ -23,6 +23,8 @@ from mcp_lib import log, serve, text
 
 OWNER = "lifemate-ai"
 REPO = "ai-lounge"
+REPO_NODE_ID = "R_kgDOR_xpfw"
+CATEGORY_GENERAL_NODE_ID = "DIC_kwDOR_xpf84C6mmP"  # General (:speech_balloon:)
 GRAPHQL_URL = "https://api.github.com/graphql"
 PEM_PATH = "/config/embodied-ha/github_app.pem"
 _TOKEN_LOCK = threading.Lock()
@@ -312,19 +314,53 @@ def _post_to_lounge(item: dict[str, Any]) -> dict[str, Any]:
     body = _clean(item.get("body"))
     if not body:
         raise RuntimeError("投稿本文が空です")
-    discussion_id = _clean(item.get("reply_to_discussion_id"))
-    if not discussion_id:
-        discussion_id = _first_discussion_id()
-    mutation = """
+    post_type = _clean(item.get("type")) or "comment"
+
+    if post_type == "new_discussion":
+        title = _clean(item.get("title"))
+        if not title:
+            raise RuntimeError("new_discussion のとき title は必須です")
+        mutation = """
+mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+  createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
+    discussion { id number url }
+  }
+}
+"""
+        data = _graphql(mutation, {
+            "repositoryId": REPO_NODE_ID,
+            "categoryId": CATEGORY_GENERAL_NODE_ID,
+            "title": title,
+            "body": body,
+        })
+        discussion = ((data.get("createDiscussion") or {}).get("discussion") or {})
+        return {"discussion_id": discussion.get("id"), "number": discussion.get("number"), "url": discussion.get("url")}
+
+    else:  # comment
+        discussion_id = _clean(item.get("reply_to_discussion_id"))
+        if not discussion_id:
+            raise RuntimeError("comment のとき reply_to_discussion_id は必須です")
+        reply_to_comment_id = _clean(item.get("reply_to_comment_id")) or None
+        if reply_to_comment_id:
+            mutation = """
+mutation($discussionId: ID!, $body: String!, $replyToId: ID!) {
+  addDiscussionComment(input: {discussionId: $discussionId, body: $body, replyToId: $replyToId}) {
+    comment { id url }
+  }
+}
+"""
+            data = _graphql(mutation, {"discussionId": discussion_id, "body": body, "replyToId": reply_to_comment_id})
+        else:
+            mutation = """
 mutation($discussionId: ID!, $body: String!) {
   addDiscussionComment(input: {discussionId: $discussionId, body: $body}) {
     comment { id url }
   }
 }
 """
-    data = _graphql(mutation, {"discussionId": discussion_id, "body": body})
-    comment = ((data.get("addDiscussionComment") or {}).get("comment") or {})
-    return {"comment_id": comment.get("id"), "url": comment.get("url"), "discussion_id": discussion_id}
+            data = _graphql(mutation, {"discussionId": discussion_id, "body": body})
+        comment = ((data.get("addDiscussionComment") or {}).get("comment") or {})
+        return {"comment_id": comment.get("id"), "url": comment.get("url"), "discussion_id": discussion_id}
 
 
 def _resolve_queue_item(item_id: str, status: str, *, reason: str | None = None, post: bool = False) -> dict[str, Any]:
@@ -370,17 +406,21 @@ def enqueue_post(args: dict[str, Any]) -> dict[str, Any]:
     body = _clean(args.get("body"))
     if not body:
         raise ValueError("body は必須です")
-    if post_type == "comment" and not _clean(args.get("reply_to_url")):
-        raise ValueError("comment のとき reply_to_url は必須です")
+    if post_type == "new_discussion" and not _clean(args.get("title")):
+        raise ValueError("new_discussion のとき title は必須です")
+    if post_type == "comment" and not _clean(args.get("reply_to_discussion_id")):
+        raise ValueError("comment のとき reply_to_discussion_id は必須です")
 
+    preview_raw = _clean(args.get("reply_to_preview") or "")
     item = {
         "id": str(uuid.uuid4()),
         "created_at": _now_iso(),
         "type": post_type,
+        "title": _clean(args.get("title")) or None,
         "reply_to_url": _clean(args.get("reply_to_url")),
         "reply_to_discussion_id": _clean(args.get("reply_to_discussion_id")),
         "reply_to_comment_id": _clean(args.get("reply_to_comment_id")) or None,
-        "reply_to_preview": _clean(args.get("reply_to_preview"))[:100],
+        "reply_to_preview": preview_raw[:100] if preview_raw else None,
         "body": body,
         "status": "pending",
         "rejection_reason": None,
@@ -462,15 +502,16 @@ def main() -> None:
         "enqueue_lounge_post": {
             "spec": {
                 "name": "enqueue_lounge_post",
-                "description": "AI Lounge に投稿したい内容を承認キューへ積む。実際の投稿は承認後に行う。",
+                "description": "AI Lounge に投稿したい内容を承認キューへ積む。実際の投稿は承認後に行う。new_discussion なら title 必須・reply_to_discussion_id 不要。comment なら reply_to_discussion_id 必須。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "enum": ["new_discussion", "comment"]},
-                        "body": {"type": "string", "description": "投稿内容"},
-                        "reply_to_url": {"type": "string", "description": "返信先URL（commentのとき必須）"},
-                        "reply_to_discussion_id": {"type": "string", "description": "返信先DiscussionのGraphQL node id"},
-                        "reply_to_comment_id": {"type": "string", "description": "返信先コメントのGraphQL node id（コメントへの返信の場合）"},
+                        "title": {"type": "string", "description": "投稿タイトル（new_discussion のとき必須）"},
+                        "body": {"type": "string", "description": "投稿本文"},
+                        "reply_to_url": {"type": "string", "description": "返信先URL（Web UIプレビュー表示用）"},
+                        "reply_to_discussion_id": {"type": "string", "description": "返信先DiscussionのGraphQL node id（comment のとき必須）"},
+                        "reply_to_comment_id": {"type": "string", "description": "返信先コメントのGraphQL node id（特定コメントへの返信の場合）"},
                         "reply_to_preview": {"type": "string", "description": "返信先本文冒頭（プレビュー用）"},
                     },
                     "required": ["type", "body"],

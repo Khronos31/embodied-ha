@@ -682,7 +682,7 @@ async function fetchMessages(room) {
                         isRead: true // Already processed on backend
                     });
                 }
-                if (m.claude) {
+                if (m.claude && m.source !== 'speak') {
                     mapped.push({
                         timestamp: ts,
                         type: normalizeMessageType(m.source || 'chat'),
@@ -3798,6 +3798,42 @@ function stopAiLoungeLoop() {
     }
 }
 
+function populateLoungeCredentials() {
+    const appIdEl = document.getElementById('lounge-app-id-input');
+    const installIdEl = document.getElementById('lounge-installation-id-input');
+    if (appIdEl) appIdEl.value = prefsData?.ai_lounge?.app_id || '';
+    if (installIdEl) installIdEl.value = prefsData?.ai_lounge?.installation_id || '';
+}
+
+async function saveLoungeCredentials() {
+    const appId = (document.getElementById('lounge-app-id-input')?.value || '').trim();
+    const installId = (document.getElementById('lounge-installation-id-input')?.value || '').trim();
+    const msgEl = document.getElementById('lounge-credentials-msg');
+    if (!prefsData) return;
+    if (!prefsData.ai_lounge) prefsData.ai_lounge = {};
+    prefsData.ai_lounge.app_id = appId;
+    prefsData.ai_lounge.installation_id = installId;
+    if (isStandaloneMode) {
+        if (msgEl) msgEl.textContent = '保存しました（モック）';
+        return;
+    }
+    try {
+        const res = await fetch(`${base}/api/preferences`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(prefsData)
+        });
+        if (res.ok) {
+            if (msgEl) { msgEl.textContent = '保存しました'; msgEl.style.color = ''; }
+            setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 2000);
+        } else {
+            if (msgEl) { msgEl.textContent = '保存失敗'; msgEl.style.color = 'var(--claude-error, red)'; }
+        }
+    } catch (e) {
+        if (msgEl) { msgEl.textContent = `エラー: ${e.message}`; msgEl.style.color = 'var(--claude-error, red)'; }
+    }
+}
+
 async function fetchLoungePemStatus() {
     if (isStandaloneMode) return;
     try {
@@ -3872,6 +3908,7 @@ async function fetchAiLoungeData() {
         return;
     }
     fetchLoungePemStatus();
+    populateLoungeCredentials();
     try {
         const [queueRes, logRes] = await Promise.all([
             fetch(`${base}/api/lounge-queue`).catch(() => null),
@@ -3946,9 +3983,12 @@ function renderAiLoungeQueue(queue) {
             }
         }
         
+        const typeLabel = item.type === 'new_discussion' ? '新規Discussion:' : '返信:';
+        const titleHtml = item.title ? `<div class="ai-lounge-title-preview">タイトル: 「${item.title}」</div>` : '';
         card.innerHTML = `
             ${replyHtml}
-            <div class="ai-lounge-author">${characterName}の投稿:</div>
+            <div class="ai-lounge-author">${characterName}の${typeLabel}</div>
+            ${titleHtml}
             <div class="ai-lounge-text">「${item.body || item.text || ""}」</div>
             <div class="ai-lounge-card-actions" id="actions-${item.id}">
                 <button type="button" class="btn btn-primary btn-sm" onclick="approveLoungeQueue('${item.id}')">✓ 承認</button>
