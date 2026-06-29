@@ -186,15 +186,19 @@ function switchRoom(room) {
     document.getElementById('room-soliloquy').classList.toggle('active', room === 'soliloquy');
     document.getElementById('room-settings').classList.toggle('active', room === 'settings');
     document.getElementById('room-audio').classList.toggle('active', room === 'audio');
+    const roomLoungeEl = document.getElementById('room-lounge');
+    if (roomLoungeEl) roomLoungeEl.classList.toggle('active', room === 'lounge');
 
     const chatAreaEl = document.querySelector('.chat-area');
     const settingsViewEl = document.getElementById('settings-view');
     const audioViewEl = document.getElementById('audio-view');
+    const loungeViewEl = document.getElementById('lounge-view');
 
     if (room === 'settings') {
         if (chatAreaEl) chatAreaEl.style.display = 'none';
         if (settingsViewEl) settingsViewEl.style.display = 'flex';
         if (audioViewEl) audioViewEl.style.display = 'none';
+        if (loungeViewEl) loungeViewEl.style.display = 'none';
         fetchSettings();
         return;
     }
@@ -203,15 +207,28 @@ function switchRoom(room) {
         if (chatAreaEl) chatAreaEl.style.display = 'none';
         if (settingsViewEl) settingsViewEl.style.display = 'none';
         if (audioViewEl) audioViewEl.style.display = 'flex';
+        if (loungeViewEl) loungeViewEl.style.display = 'none';
         unreadCounts[room] = 0;
         updateUnreadBadges();
         fetchAudioEvents();
         return;
     }
 
+    if (room === 'lounge') {
+        if (chatAreaEl) chatAreaEl.style.display = 'none';
+        if (settingsViewEl) settingsViewEl.style.display = 'none';
+        if (audioViewEl) audioViewEl.style.display = 'none';
+        if (loungeViewEl) loungeViewEl.style.display = 'flex';
+        unreadCounts['lounge'] = 0;
+        updateUnreadBadges();
+        fetchAiLoungeData();
+        return;
+    }
+
     if (chatAreaEl) chatAreaEl.style.display = 'flex';
     if (settingsViewEl) settingsViewEl.style.display = 'none';
     if (audioViewEl) audioViewEl.style.display = 'none';
+    if (loungeViewEl) loungeViewEl.style.display = 'none';
 
     // Update Header Text, Subtitle and Toggle buttons
     const titleEl = document.getElementById('active-room-title');
@@ -3748,15 +3765,16 @@ function updateDynamicFeaturesUI() {
         audioRoom.style.display = enabled.includes('non_speech_audio') ? 'flex' : 'none';
     }
     
-    // ai_lounge -> AI Lounge セクション
-    const loungeSection = document.getElementById('sidebar-ai-lounge');
-    if (loungeSection) {
+    // ai_lounge -> AI Lounge nav item
+    const loungeRoom = document.getElementById('room-lounge');
+    if (loungeRoom) {
         const isLoungeEnabled = enabled.includes('ai_lounge');
-        loungeSection.style.display = isLoungeEnabled ? 'block' : 'none';
+        loungeRoom.style.display = isLoungeEnabled ? 'flex' : 'none';
         if (isLoungeEnabled) {
             startAiLoungeLoop();
         } else {
             stopAiLoungeLoop();
+            if (activeRoom === 'lounge') switchRoom('chat');
         }
     }
     
@@ -3815,9 +3833,16 @@ function renderAiLoungeQueue(queue) {
     const queueCount = document.getElementById('ai-lounge-queue-count');
     if (!queueList) return;
     
-    queueCount.textContent = queue.length;
+    if (queueCount) queueCount.textContent = queue.length;
+    const loungePreviewEl = document.getElementById('lounge-preview');
+    if (loungePreviewEl) loungePreviewEl.textContent = `承認待ち ${queue.length}件`;
+    const loungeUnreadEl = document.getElementById('lounge-unread');
+    if (loungeUnreadEl) {
+        loungeUnreadEl.style.display = queue.length > 0 ? 'flex' : 'none';
+        loungeUnreadEl.textContent = queue.length;
+    }
     queueList.innerHTML = '';
-    
+
     if (queue.length === 0) {
         queueList.innerHTML = '<div class="ai-lounge-empty">承認待ちはありません</div>';
         return;
