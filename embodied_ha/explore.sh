@@ -150,17 +150,18 @@ PYEOF
 # モードごとに使う MCP サーバー（空なら MCP なし）。case 内で上書き。
 MCP_SERVERS=""
 
-# 発話先の部屋（preferences.speakers のキー）。speak_room はこの中から選ぶ。
 SPEAKER_ROOMS=$(python3 -c "
 import json, os
 try: p = json.load(open(os.environ.get('EHA_PREFS_FILE',''), encoding='utf-8'))
 except Exception: p = {}
-print('、'.join((p.get('speakers') or {}).keys()) or '（スピーカー未設定）')
+_spk = p.get('speakers', [])
+if isinstance(_spk, list): print('、'.join(s.get('room','') for s in _spk if isinstance(s,dict)) or '（スピーカー未設定）')
+else: print('、'.join(_spk.keys()) or '（スピーカー未設定）')
 " 2>/dev/null || echo "（スピーカー未設定）")
 
 JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:
-{\"topic\": \"今回何をしたか・何に注目したかの一言メモ（重複探索回避のヒント。例: バッテリー残量確認、センサー履歴調査、TVキャプチャ確認）\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。${RESIDENT}さんが見ることもできるが気にせず\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"speak\": \"${RESIDENT}さんに今すぐ伝えたいことがあれば一言。なければ null（基本は null でよい）\", \"speak_room\": \"speakする場合の発話先の部屋（利用可能: ${SPEAKER_ROOMS}。${RESIDENT}さんがいる部屋を選ぶ）。null可\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"speakで機能を紹介したならその機能id（featuresの見出し[id]）。なければ null\"}
-（長期記憶に残したいこと・後で気にかけたいことは、上のJSONではなく remember / loops_add ツールで記録すること）"
+{\"topic\": \"今回何をしたか・何に注目したかの一言メモ（重複探索回避のヒント。例: バッテリー残量確認、センサー履歴調査、TVキャプチャ確認）\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。${RESIDENT}さんが見ることもできるが気にせず\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id（featuresの見出し[id]）。なければ null\"}
+（${RESIDENT}さんへの発話は audio_speak ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   explore)
@@ -183,6 +184,7 @@ case "$MODE" in
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
 - loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
+- audio_speak … 現在の身体の場所に応じたスピーカーから声を出す。物理体なら current_room のスピーカー、電脳体で VoiceS3R に侵入中ならそのノードから発話。${RESIDENT}さんに伝えたいことがあれば積極的に使う。
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
@@ -190,8 +192,8 @@ case "$MODE" in
 3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら enter_cyberspace → move_cyber を自然に選んでよい。無理に両方は使わない。
 4. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 5. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
-    MCP_SERVERS="sensors ha camera audio body memory sociality http"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__tts__audio_speak,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    MCP_SERVERS="sensors ha camera audio body tts memory sociality http"
     ;;
   reflect)
     MODE_LABEL="物思いにふける時間"
@@ -218,7 +220,7 @@ case "$MODE" in
 今は自分の興味で調べ物をしていい時間です。
 1. 最近の家の出来事や${RESIDENT}さんとの会話、自分の関心から、調べてみたいことを見つける（家と無関係なことでもいい。純粋な好奇心でOK）
 2. WebSearch で調べる
-3. 知って面白かったことは remember ツールに、${RESIDENT}さんに伝えたいことは speak（JSON）に。操作の提案（proposal）はしない（null）"
+3. 知って面白かったことは remember ツールに。操作の提案（proposal）はしない（null）"
     ALLOWED_TOOLS="WebSearch,mcp__memory__remember,mcp__memory__loops_add"
     MCP_SERVERS="memory"
     ;;
@@ -234,7 +236,7 @@ if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   AUTONOMOUS_NOTE="
 # 家電操作について（自律操作ON）
 消し忘れ・明らかに直した方がよい状況は、proposal で待たずに ha_call_service で自分の判断で直してよい。
-操作したら必ず speak で${RESIDENT}さんに「何を・なぜ」操作したか事後報告する（報告は必須）。
+操作したら必ず audio_speak で${RESIDENT}さんに「何を・なぜ」操作したか事後報告する（報告は必須）。
 確信が持てないもの・影響の大きい操作は、従来どおり proposal で提案するに留める。"
 fi
 
@@ -248,7 +250,7 @@ if [ -n "$FEATURES_MD" ]; then
   [ -n "$FEATURES_PRESENTED" ] && _presented_note="既に伝えた機能: ${FEATURES_PRESENTED}（繰り返し紹介しなくてよい）
 "
   FEATURES_NOTE="
-【このアドオンでできること】（speak で文脈が自然なら一つ紹介してよい。しなくてもよい。紹介したらJSONの feature_presented に見出し末尾の [id] を入れる）
+【このアドオンでできること】（audio_speak で文脈が自然なら一つ紹介してよい。しなくてもよい。紹介したらJSONの feature_presented に見出し末尾の [id] を入れる）
 ${_presented_note}${FEATURES_MD}
 "
 fi
@@ -429,30 +431,26 @@ except Exception:
 
 # parsed.json から必要な値を python1回でまとめて抽出。
 # 万一 python が出力ゼロで死んでも set -u で落ちないよう先に空で初期化。
-PRIVATE=""; PRIVATE_JSON='""'; EMOTION=""; SPEAK=""; SPEAK_ROOM=""; TOPIC_JSON='""'; SPEAK_JSON="null"
+PRIVATE=""; PRIVATE_JSON='""'; EMOTION=""; SPEAK=""; SPEAK_ROOM=""; TOPIC_JSON='""'
 eval "$(python3 -c "
 import json, shlex
 try:
     d = json.load(open('$PARSED_FILE', encoding='utf-8'))
 except Exception:
     d = {}
-speak_v = d.get('speak')
 private_v = d.get('private', '') or ''
 pairs = {
     'PRIVATE':      private_v,
     'PRIVATE_JSON': json.dumps(private_v, ensure_ascii=False),
     'EMOTION':      d.get('emotion', '') or '',
-    'SPEAK':        speak_v if speak_v else '',
-    'SPEAK_ROOM':   d.get('speak_room') or '',
     'TOPIC_JSON':   json.dumps(d.get('topic', '') or '', ensure_ascii=False),
-    'SPEAK_JSON':   json.dumps(speak_v, ensure_ascii=False),
 }
 for k, v in pairs.items():
     print(f'{k}={shlex.quote(v)}')
 ")"
 
 # --- 探索ログ追記 ---
-echo "{\"timestamp\":\"$TIMESTAMP\",\"mode\":\"$MODE\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON,\"topic\":$TOPIC_JSON,\"speak\":$SPEAK_JSON}" >> "$EXPLORE_LOG"
+echo "{\"timestamp\":\"$TIMESTAMP\",\"mode\":\"$MODE\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON,\"topic\":$TOPIC_JSON}" >> "$EXPLORE_LOG"
 echo "[$TIMESTAMP] ($MODE) $PRIVATE"
 
 # --- 長期記憶・開いたループは MCP ツール（remember / loops_add）で記録する。---
@@ -506,8 +504,9 @@ if [ -n "$PROPOSAL" ] && [ -z "$SPEAK" ]; then
 import json, os
 try:
     prefs = json.load(open(os.environ['EHA_PREFS_FILE'], encoding='utf-8'))
-    keys = list(prefs.get('speakers', {}).keys())
-    print(keys[0] if keys else '')
+    spk = prefs.get('speakers', [])
+    if isinstance(spk, list): print(next((s.get('room','') for s in spk if isinstance(s,dict) and s.get('room')), ''))
+    else: print(next(iter(spk.keys()), ''))
 except: print('')
 " 2>/dev/null)
   fi

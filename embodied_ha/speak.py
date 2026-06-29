@@ -39,6 +39,15 @@ def _find_speaker(speakers, room: str) -> dict:
     return {}
 
 
+def _find_speaker_by_host(speakers, host: str) -> dict:
+    """TCP スピーカーをホストで検索する（電脳体モードの明示的ルーティング用）。"""
+    if isinstance(speakers, list):
+        for item in speakers:
+            if isinstance(item, dict) and item.get("type") == "tcp" and item.get("host") == host:
+                return item
+    return {}
+
+
 def _rewrite_tts_url(tts_url: str, ha_url: str) -> str:
     """外部向け TTS URL を supervisor プロキシ経由 URL に書き換える。
     ha_url = "http://supervisor/core/api" のとき "/api" を取り除いた
@@ -123,7 +132,7 @@ def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
     return pcm_bytes
 
 
-def speak(room, message):
+def speak(room, message, host=""):
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
     ha_url = os.environ["HA_URL"]
     ha_token = get_ha_token()
@@ -134,7 +143,11 @@ def speak(room, message):
     except Exception:
         pass
 
-    config = _find_speaker(prefs.get("speakers", []), room)
+    # host が指定されている場合はホストで検索（電脳体モードでの直接ルーティング）
+    if host:
+        config = _find_speaker_by_host(prefs.get("speakers", []), host)
+    else:
+        config = _find_speaker(prefs.get("speakers", []), room)
 
     if not config:
         print(f"[speak] '{room}' は preferences.json に未登録。TTS をスキップ。", file=sys.stderr)
@@ -214,8 +227,11 @@ def speak(room, message):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("使い方: speak.py <room> <message>", file=sys.stderr)
-        sys.exit(1)
-    ok = speak(sys.argv[1], sys.argv[2])
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("room")
+    parser.add_argument("message")
+    parser.add_argument("--host", default="", help="TCP スピーカーをホストで直接指定（電脳体モード用）")
+    a = parser.parse_args()
+    ok = speak(a.room, a.message, host=a.host)
     sys.exit(0 if ok else 1)
