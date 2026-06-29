@@ -422,35 +422,24 @@ def enter_cyberspace(args: dict[str, Any]):
         return _json_text({"error": "missing entity"}), True
     prefs = load_preferences()
     entity, entry_room = normalize_cyberspace_entity(raw_entity, prefs)
-    room_arg = clean(args.get("room"))
     target_room: str | None = None
     if raw_entity.startswith("external://"):
         target_room = resolve_external_room(raw_entity)
         if not target_room:
             return _json_text({"error": "unknown external projection target", "entity": raw_entity}), True
     else:
-        if room_arg:
-            target_room = resolve_room(room_arg, graph)
-            if not target_room:
-                return _json_text({
-                    "error": "unknown target room",
-                    "room": room_arg,
-                    "available_rooms": list(rooms(graph).keys()),
-                }), True
-        else:
-            target_room = entry_room
-            if not target_room:
-                from sensory_origin import area_for_entity, resolve_area_room
+        target_room = entry_room
+        if not target_room:
+            from sensory_origin import area_for_entity, resolve_area_room
 
-                area = area_for_entity(raw_entity)
-                target_room = resolve_area_room(area, graph) if area else None
-            if not target_room:
-                return _json_text({
-                    "error": "HAエンティティの部屋を自動解決できませんでした。room パラメータで部屋を指定してください",
-                    "entity": raw_entity,
-                    "normalized_entity": entity,
-                    "available_rooms": list(rooms(graph).keys()),
-                }), True
+            area = area_for_entity(raw_entity)
+            target_room = resolve_area_room(area, graph) if area else None
+        if not target_room:
+            return _json_text({
+                "error": "エンティティの部屋を解決できません。preferences.json に room を設定するか、HA でエリアを設定してください",
+                "entity": raw_entity,
+                "normalized_entity": entity,
+            }), True
     body_room = state["current_room"]
     if target_room != body_room:
         return _json_text({
@@ -521,14 +510,11 @@ def move_cyber(args: dict[str, Any]):
         return _json_text({"error": "missing entity"}), True
     prefs = load_preferences()
     entity, entry_room = normalize_cyberspace_entity(raw_entity, prefs)
-    room_arg = clean(args.get("room"))
     target_room: str | None = None
     if raw_entity.startswith("external://"):
         target_room = resolve_external_room(raw_entity)
         if not target_room:
             return _json_text({"error": "unknown external projection target", "entity": raw_entity}), True
-    elif room_arg:
-        target_room = resolve_room(room_arg, graph)
     else:
         target_room = entry_room
         if not target_room:
@@ -692,19 +678,20 @@ TOOL_ENTER_CYBERSPACE = {
     "name": "enter_cyberspace",
     "description": (
         "物理体は今の部屋に残したまま、同室にあるデバイスやカメラへ電脳体として侵入する。\n"
-        "entity には HA エンティティ ID（camera.xxx, media_player.xxx など）または "
-        "external://astrolabe のような外部デバイス ID を渡す。\n"
-        "侵入できるのは物理体と同じ部屋にあるエンティティのみ。\n"
+        "【使う場面】カメラの映像を取得する / 特定マイクで集中して聴く / スマホや外部デバイスに意識を飛ばす。\n"
+        "【使わない場面】スピーカーから声を出したいだけなら enter_cyberspace は不要。\n"
+        "  - 現在の部屋で話す → speak\n"
+        "  - 別の部屋で話す → move_to でその部屋に移動してから speak\n"
+        "侵入できるのは物理体と同じ部屋にあるエンティティのみ。別室のエンティティを指定するとエラー。\n"
         "すでに電脳体モード中の場合は使えない（move_cyber を使うこと）。\n"
-        "HA エンティティの場合は room を省略すると HA のエリア設定から自動解決する。\n"
-        "エリアが未設定のエンティティは room パラメータで部屋を明示すること。\n"
-        "external:// デバイスは preferences.json の projection_targets に登録されていれば room 不要。"
+        "entity には preferences に登録済みのデバイス entity id（例: voice_s3r_hallway, camera_hallway）"
+        "または HA エンティティ ID（camera.xxx など）または external://xxx を渡す。\n"
+        "HA エンティティの部屋は HA のエリア設定から自動解決する（エリア未設定はエラー）。"
     ),
     "inputSchema": {
         "type": "object",
         "properties": {
-            "entity": {"type": "string", "description": "侵入先のエンティティ ID または external://xxx"},
-            "room": {"type": "string", "description": "エンティティのある部屋 ID。HA エンティティは省略可"},
+            "entity": {"type": "string", "description": "侵入先のデバイス entity id または HA エンティティ ID または external://xxx"},
             "reason": {"type": "string", "description": "侵入する理由。任意"},
         },
         "required": ["entity"],
@@ -717,13 +704,13 @@ TOOL_MOVE_CYBER = {
         "電脳体モード中に、別のエンティティへ移動する。\n"
         "enter_cyberspace で電脳空間に入った後にのみ使える。\n"
         "物理体の場所に関係なく、どのエンティティへでも自由に移動できる。\n"
-        "entity には HA エンティティ ID または external://xxx を渡す。"
+        "entity には preferences に登録済みのデバイス entity id"
+        "または HA エンティティ ID または external://xxx を渡す。"
     ),
     "inputSchema": {
         "type": "object",
         "properties": {
-            "entity": {"type": "string", "description": "移動先のエンティティ ID または external://xxx"},
-            "room": {"type": "string", "description": "エンティティのある部屋 ID。任意"},
+            "entity": {"type": "string", "description": "移動先のデバイス entity id または HA エンティティ ID または external://xxx"},
             "reason": {"type": "string", "description": "移動する理由。任意"},
         },
         "required": ["entity"],

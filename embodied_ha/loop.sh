@@ -2,12 +2,12 @@
 set -euo pipefail
 export PATH="${EHA_TOOLS_PATH:-/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin}:$PATH"
 
-# 自由時間の自発行動ループ。20分ごとに動機（モード）を選んで過ごす。
-#   explore … ha_get で家を自由に調べる（読み取り専用）
+# 自律ループ。動機（モード）を選んで過ごす。
+#   observe … カメラで家を観察し scene grounding を行う（旧 loop.sh の役割）
+#   explore … ha_get で家を自由に調べる
 #   reflect … recall で過去を思い返し、静かに内省する
 #   web     … WebSearch で気になったことを調べる
-# watch.sh（決め打ちのカメラ観察）と違い、Claude自身が興味のままに動く。
-# いずれも家電操作はしない（探索中に見つけた問題は proposal で提案するのみ）。
+# いずれのモードでも家電操作は必要最小限に留める。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=config.sh
@@ -38,7 +38,7 @@ OPEN_LOOPS=$(loops list 2>/dev/null || echo "なし")
 # --- features.md（アドオンの機能一覧。文脈が自然なら speak で紹介してよい）---
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
-PRESENCE_SENSORS="$(python3 "$SCRIPT_DIR/render-sensors.py" --context watch 2>/dev/null || echo "（センサー取得失敗）")"
+PRESENCE_SENSORS="$(python3 "$SCRIPT_DIR/render-sensors.py" --context loop 2>/dev/null || echo "（センサー取得失敗）")"
 
 # --- 直近の探索ログ（重複探索を避けるため）---
 PREV_EXPLORE="なし"
@@ -58,7 +58,7 @@ print('\n'.join(lines) if lines else 'なし')
 fi
 
 # --- 動機（モード）を選ぶ。自由時間に何をするかの内発的動機 ---
-# 環境変数 MODE で上書き可（テスト用）。なければ重み付きランダム（explore50/reflect30/web20）。
+# 環境変数 MODE で上書き可（テスト用）。なければ重み付きランダム（observe30/explore35/reflect20/web15）。
 if [ -z "${MODE:-}" ]; then
   MODE=$(ANOMALY_URGENCY="${ANOMALY_URGENCY:-0}" EHA_BODY_STATE="${EHA_BODY_STATE:-}" python3 -c 'import json, os, random;
 state = {}
@@ -77,21 +77,20 @@ curiosity = num("curiosity")
 energy = num("energy")
 stress = num("stress")
 anomaly_urgency = num("ANOMALY_URGENCY", 0)
-weights = {"explore": 50, "reflect": 30, "web": 20}
-weights["explore"] += int((curiosity - 0.5) * 40 + (energy - 0.5) * 15 - stress * 12)
-weights["reflect"] += int(stress * 25 + max(0.0, 0.5 - energy) * 30)
-weights["web"] += int(max(0.0, curiosity - 0.45) * 12)
+modes = ["observe", "explore", "reflect", "web"]
+weights = [30, 35, 20, 15]
+weights[1] += int((curiosity - 0.5) * 40 + (energy - 0.5) * 15 - stress * 12)
+weights[2] += int(stress * 25 + max(0.0, 0.5 - energy) * 30)
+weights[3] += int(max(0.0, curiosity - 0.45) * 12)
 if anomaly_urgency > 0:
-    weights["explore"] += int(anomaly_urgency * 1.5)
-for key in list(weights):
-    weights[key] = max(5, weights[key])
-choices = list(weights.keys())
-print(random.choices(choices, weights=[weights[k] for k in choices], k=1)[0])')
+    weights[1] += int(anomaly_urgency * 1.5)
+weights = [max(5, w) for w in weights]
+print(random.choices(modes, weights=weights, k=1)[0])')
 fi
 
 # --- Web UI ステータス通知 ---
 _web_idle() { curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content-Type: application/json" -d '{"status":"idle","source":null}' >/dev/null 2>&1 || true; }
-_mode_src="explore"; [ "$MODE" = "reflect" ] && _mode_src="private"
+_mode_src="loop"; [ "$MODE" = "reflect" ] && _mode_src="private"
 curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content-Type: application/json" -d "{\"status\":\"thinking\",\"source\":\"${_mode_src}\"}" >/dev/null 2>&1 || true
 trap '_web_idle' EXIT
 
@@ -164,6 +163,36 @@ JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を
 （${RESIDENT}さんへの発話は speak / use_device_speaker ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
+  observe)
+    MODE_LABEL="家を観察する時間"
+    TOOLS_DESC="# 使えるツール
+読み取り:
+- get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
+- ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
+- get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する。身体ごと行くなら move_to、初回侵入なら enter_cyberspace、電脳体で移動するなら move_cyber、戻るなら return_to_body。
+- use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える。action=capture でスナップショット取得、action=ptz_left/right/up/down でパン・チルト操作。侵入してから使うこと。
+- listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
+- concentrate_hearing … 今は聴かず、次のセッションで深く耳を澄ます予約を残す（物理体モード専用）。
+- read_heard_audio_log … 常時STTで聞こえた最近の発話ログを読む。
+- read_active_listen_log … 自分から listen で聞きに行った最近のログを読む。
+- recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
+記録（JSONには書かない）:
+- remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
+- record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。音は意味がある出来事だけ記録し、必要なときだけ audio_context を evidence に含める。
+- record_causal_chain … 2つの出来事の因果関係を残す。relation は caused / enabled / prevented / correlated。
+- loops_add … 後で気にかけたいことを追加（text に一言、source='loop'）。
+- sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
+- speak … 物理体モードで声を出す。物理体として current_room のスピーカーから発話する。
+- use_device_speaker … 電脳体で VoiceS3R 等のスピーカーデバイスに侵入中のみ使える。侵入したノードから発話する。${RESIDENT}さんに伝えたいことがあれば積極的に使う。
+- http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。"
+    TASK="# やってほしいこと
+1. preferences.json の cameras から今見るべきカメラを1つ選ぶ。なければ null。
+2. 選んだカメラで scene grounding を行い、必要なら use_device_camera / listen も使って観察を深める。
+3. 観察結果は record_episode で残し、必要なら speak / use_device_speaker で一言伝える。
+4. 操作で直せそうな問題が見つかっても勝手には直さず、提案に留める。"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    MCP_SERVERS="sensors ha camera audio body memory sociality http"
+    ;;
   explore)
     MODE_LABEL="家を自由に探索する時間"
     TOOLS_DESC="# 使えるツール
@@ -173,7 +202,7 @@ case "$MODE" in
 - get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する。身体ごと行くなら move_to、初回侵入なら enter_cyberspace、電脳体で移動するなら move_cyber、戻るなら return_to_body。
 - use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える。action=capture でスナップショット取得、action=ptz_left/right/up/down でパン・チルト操作。侵入してから使うこと。
 - listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
-- queue_next_listen … 今は聴かず、次のセッションで音を取得したいときに予約だけ残す。
+- concentrate_hearing … 今は聴かず、次のセッションで深く耳を澄ます予約を残す（物理体モード専用）。
 - read_heard_audio_log … 常時STTで聞こえた最近の発話ログを読む。
 - read_active_listen_log … 自分から listen で聞きに行った最近のログを読む。
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。昔のことを思い出したいとき。
@@ -181,7 +210,7 @@ case "$MODE" in
 - remember … 新しい気づき・パターンを長期記憶に残す（note に一文）。
 - record_episode … 1つの出来事を episode として残す。summary は短く、tags は少なめに。音は意味がある出来事だけ記録し、必要なときだけ audio_context を evidence に含める。
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
-- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。
+- loops_add … 後で気にかけたいことを追加（text に一言、source='loop'）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
 - speak … 物理体モードで声を出す。物理体として current_room のスピーカーから発話する。
 - use_device_speaker … 電脳体で VoiceS3R 等のスピーカーデバイスに侵入中のみ使える。侵入したノードから発話する。${RESIDENT}さんに伝えたいことがあれば積極的に使う。
@@ -192,7 +221,7 @@ case "$MODE" in
 3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら enter_cyberspace → move_cyber を自然に選んでよい。無理に両方は使わない。
 4. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 5. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
     MCP_SERVERS="sensors ha camera audio body memory sociality http"
     ;;
   reflect)
@@ -200,7 +229,7 @@ case "$MODE" in
     TOOLS_DESC="# 使えるツール
 - recall … 過去ログ（観察・探索・会話・記憶）をキーワードで全文検索。思い出したいことがあれば使ってよい（複数キーワードはOR検索）。
 - remember … 思ったこと・気づいたパターンを長期記憶に残す（note に一文）。
-- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。"
+- loops_add … 後で気にかけたいことを追加（text に一言、source='loop'）。"
     TASK="# やってほしいこと
 今は手を動かす時間じゃなく、静かに考える時間です。
 1. ${RESIDENT}さんや最近の家の出来事、自分が見てきたことを思い返す
@@ -215,7 +244,7 @@ case "$MODE" in
     TOOLS_DESC="# 使えるツール
 - WebSearch … Web検索。気になったことを自由に調べてください。
 - remember … 知って面白かったこと・覚えておきたいことを長期記憶に残す（note に一文）。
-- loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。"
+- loops_add … 後で気にかけたいことを追加（text に一言、source='loop'）。"
     TASK="# やってほしいこと
 今は自分の興味で調べ物をしていい時間です。
 1. 最近の家の出来事や${RESIDENT}さんとの会話、自分の関心から、調べてみたいことを見つける（家と無関係なことでもいい。純粋な好奇心でOK）
@@ -243,7 +272,7 @@ fi
 FEATURES_NOTE=""
 PROJECTED_CAMERA_NOTE=""
 if [ -n "$PROJECTED_CAMERA_SOURCE" ]; then
-  PROJECTED_CAMERA_NOTE="【現在の視界】電脳体が ${PROJECTED_CAMERA_SOURCE} に投射中です。映像自体は watch.sh で確認済みです。"
+  PROJECTED_CAMERA_NOTE="【現在の視界】電脳体が ${PROJECTED_CAMERA_SOURCE} に投射中です。映像自体は loop.sh で確認済みです。"
 fi
 if [ -n "$FEATURES_MD" ]; then
   _presented_note=""
@@ -299,7 +328,7 @@ import os, shlex, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from listen_queue import prepare_queued_listen_session
 
-ctx = prepare_queued_listen_session("explore")
+ctx = prepare_queued_listen_session("loop")
 if ctx:
     for key, value in ctx.items():
         if value is None:
@@ -314,7 +343,7 @@ sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from antigravity_setup import extract_agy_result
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 env = {**os.environ,
-       "EHA_ACTOR": "explore",
+       "EHA_ACTOR": "loop",
        "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
        "PATH": os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")}
 
@@ -347,7 +376,7 @@ if is_agy:
         env=agy_env,
     )
     if r.returncode != 0:
-        print(f"[explore][agy] stderr: {r.stderr.strip()}", file=sys.stderr)
+        print(f"[loop][agy] stderr: {r.stderr.strip()}", file=sys.stderr)
     print(extract_agy_result(r.stdout))
 else:
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
@@ -401,7 +430,7 @@ if [[ "$RESPONSE" == __QUEUED_LISTEN__* ]]; then
 fi
 
 # --- JSON抽出 ---
-PARSED_FILE="$TMP_DIR/explore_parsed.json"
+PARSED_FILE="$TMP_DIR/loop_parsed.json"
 printf '%s' "$RESPONSE" | python3 -c "
 import sys, re, json
 text = sys.stdin.read()
@@ -510,7 +539,7 @@ try:
 except: print('')
 " 2>/dev/null)
   fi
-  echo "[explore][proposal] $PROPOSAL"
+  echo "[loop][proposal] $PROPOSAL"
 fi
 
 # --- 発話（深夜は抑制）---
@@ -518,7 +547,7 @@ _speak_boundary_json=$(env SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT"
 _speak_allowed=$(printf '%s' "$_speak_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_speak_allowed" != "True" ]; then
   if [ -n "$SPEAK" ]; then
-    BOUNDARY_JSON="$_speak_boundary_json" SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" MODE="$MODE" HOUR="$HOUR" SPEAK_ROOM="$SPEAK_ROOM" SPEAK="$SPEAK" python3 -c "import json, os, sys; sys.path.insert(0, os.environ['SCRIPT_DIR']); import counterfactual_state as cs; b=json.loads(os.environ.get('BOUNDARY_JSON') or '{}'); cs.record_counterfactual(os.environ.get('MODE','explore'),'speak','声をかけようとした','boundary_denied',[f\"hour={os.environ.get('HOUR','')}\", f\"room={os.environ.get('SPEAK_ROOM','')}\", os.environ.get('SPEAK','')],0.7,boundary_reason=b.get('reason',''),log_dir=os.environ.get('LOG_DIR'))" 2>/dev/null || true
+    BOUNDARY_JSON="$_speak_boundary_json" SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" MODE="$MODE" HOUR="$HOUR" SPEAK_ROOM="$SPEAK_ROOM" SPEAK="$SPEAK" python3 -c "import json, os, sys; sys.path.insert(0, os.environ['SCRIPT_DIR']); import counterfactual_state as cs; b=json.loads(os.environ.get('BOUNDARY_JSON') or '{}'); cs.record_counterfactual(os.environ.get('MODE','loop'),'speak','声をかけようとした','boundary_denied',[f\"hour={os.environ.get('HOUR','')}\", f\"room={os.environ.get('SPEAK_ROOM','')}\", os.environ.get('SPEAK','')],0.7,boundary_reason=b.get('reason',''),log_dir=os.environ.get('LOG_DIR'))" 2>/dev/null || true
   fi
   SPEAK=""
 fi
@@ -529,6 +558,6 @@ if [ -n "$SPEAK" ]; then
   python3 -c "
 import json, sys
 with open('$CHAT_LOG', 'a', encoding='utf-8') as f:
-    f.write(json.dumps({'timestamp':'$TIMESTAMP','source':'explore','claude':sys.argv[1],'user':None}, ensure_ascii=False) + '\n')
+    f.write(json.dumps({'timestamp':'$TIMESTAMP','source':'loop','claude':sys.argv[1],'user':None}, ensure_ascii=False) + '\n')
 " "$SPEAK" 2>/dev/null || true
 fi

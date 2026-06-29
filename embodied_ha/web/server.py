@@ -340,7 +340,7 @@ _login_pty_lock = threading.Lock()
 
 # --- エージェント稼働状態 ---
 # status: "idle" | "thinking"
-# source: "watch" | "explore" | "chat" | None
+# source: "loop" | "explore" | "chat" | None
 _agent_status: dict = {"status": "idle", "source": None}
 _agent_status_lock = threading.Lock()
 
@@ -398,7 +398,7 @@ def get_chat_messages(limit: int = 300) -> list:
 def get_soliloquy_messages(limit: int = 300) -> list:
     """observations.jsonl + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
     obs = [
-        {"timestamp": d["timestamp"], "source": "watch",
+        {"timestamp": d["timestamp"], "source": "loop",
          "private": d.get("private", ""), "emotion": d.get("emotion", ""),
          "topic": d.get("topic")}
         for d in read_jsonl(OBS_LOG)

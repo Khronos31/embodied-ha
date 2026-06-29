@@ -135,15 +135,15 @@
   },
 
   "policies": [
-    "深夜1〜6時は発話しない（watch/explore に組み込み済み）"
+    "深夜1〜6時は発話しない（loop/explore に組み込み済み）"
   ],
 
-  "_sensors_doc": "観察ループ(watch)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
+  "_sensors_doc": "自律ループ(loop)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
   "sensors": {
     "groups": [
       {
         "title": "人感センサー",
-        "contexts": ["watch"],
+        "contexts": ["loop"],
         "items": [
           { "label": "リビング", "entity": "binary_sensor.living_motion" },
           { "label": "廊下1", "entity": "binary_sensor.hall_motion_1", "note": "リビング誤反応あり" }
@@ -151,14 +151,14 @@
       },
       {
         "title": "温湿度",
-        "contexts": ["watch"],
+        "contexts": ["loop"],
         "items": [
           { "label": "リビング", "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%" }
         ]
       },
       {
         "title": "テレビ",
-        "contexts": ["watch"],
+        "contexts": ["loop"],
         "items": [
           { "label": "最前面アプリ", "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}", "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入" }
         ]

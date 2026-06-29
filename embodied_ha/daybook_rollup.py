@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""watch.sh から呼ばれる structured daybook 生成ヘルパー。
+"""loop.sh から呼ばれる structured daybook 生成ヘルパー。
 
 環境変数で入力を受け取り、前日の観察ログを episode/daybook に圧縮して保存する。
 """
@@ -137,7 +137,7 @@ def _build_raw_episode(day: str, entry: dict[str, Any], index: int) -> dict[str,
         "timestamp": timestamp,
         "day": day,
         "kind": "observation",
-        "source": "watch",
+        "source": "loop",
         "summary": _short(summary, 96),
         "detail": " / ".join(detail_parts),
         "tags": [tag for tag in [emotion, "speak" if speak else ""] if tag],
@@ -224,7 +224,7 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
     prompt += '  "themes": ["主題", "主題"],\n'
     prompt += '  "highlights": [{"summary": "...", "detail": "...", "tags": ["..."], "importance": 0.0}],\n'
     prompt += '  "open_questions": ["..."],\n'
-    prompt += '  "episodes": [{"timestamp": "...", "kind": "observation", "source": "watch", "summary": "...", "detail": "...", "tags": ["..."], "entities": ["..."], "actors": ["..."], "importance": 0.0, "evidence": [{"timestamp": "...", "private": "..."}], "status": "canonical", "links": {"causes": [], "effects": []}}]\n'
+    prompt += '  "episodes": [{"timestamp": "...", "kind": "observation", "source": "loop", "summary": "...", "detail": "...", "tags": ["..."], "entities": ["..."], "actors": ["..."], "importance": 0.0, "evidence": [{"timestamp": "...", "private": "..."}], "status": "canonical", "links": {"causes": [], "effects": []}}]\n'
     prompt += "}\n\n"
     prompt += "制約:\n"
     prompt += "- episodes は出来事単位にまとめる\n"
@@ -307,7 +307,7 @@ def _save_episodes(log_dir: str, day: str, draft: dict[str, Any], entries: list[
             continue
         payload = dict(episode)
         payload.setdefault("day", day)
-        payload.setdefault("source", "watch")
+        payload.setdefault("source", "loop")
         payload.setdefault("kind", "observation")
         payload.setdefault("timestamp", payload.get("timestamp") or f"{day}T00:00:00+09:00")
         saved = ms.save_episode(log_dir, payload)
@@ -342,7 +342,7 @@ def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, An
         highlights=highlights,
         open_questions=draft["open_questions"],
         raw_entry_count=len(entries),
-        source="watch",
+        source="loop",
     )
     brief = ms.daybook_brief(daybook)
     if _append_memory_brief(memory_file, brief):

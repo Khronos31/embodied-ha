@@ -15,10 +15,10 @@ RESIDENT=$(python3 -c "import json; print(json.load(open('/data/options.json')).
 echo "[run] RESIDENT=${RESIDENT}"
 
 # --- 自律操作ゲート（デフォルトOFF）---
-# ON のときだけ watch/explore に家電操作サーバー(ha-control)を繋ぐ＝物理的なゲート。
+# ON のときだけ loop/explore に家電操作サーバー(ha-control)を繋ぐ＝物理的なゲート。
 export EHA_AUTONOMOUS
 EHA_AUTONOMOUS=$(python3 -c "import json; print('1' if json.load(open('/data/options.json')).get('autonomous_control', False) else '0')" 2>/dev/null || echo "0")
-echo "[run] 自律操作: $([ "$EHA_AUTONOMOUS" = "1" ] && echo "ON（watch/explore が家電操作可）" || echo "OFF（観察・提案のみ）")"
+echo "[run] 自律操作: $([ "$EHA_AUTONOMOUS" = "1" ] && echo "ON（loop/explore が家電操作可）" || echo "OFF（観察・提案のみ）")"
 
 # --- Claude 認証 ---
 # 優先順位: 1) options.json の claude_api_key → 2) サブスク認証（.credentials.json）
@@ -254,7 +254,7 @@ print(d.get("host",""), d.get("port", 1883), d.get("username",""), d.get("passwo
             -u "$MQTT_USER" -P "$MQTT_PASS" -r "$@"
     }
 
-    # 内省ログ（watch/explore ループが書き込む）
+    # 内省ログ（loop/observe ループが書き込む）
     _pub -t "homeassistant/sensor/embodied_ha_observation/config" -m \
         '{"name":"Embodied HA 内省","unique_id":"embodied_ha_observation","state_topic":"embodied_ha/observation/state","icon":"mdi:thought-bubble","entity_category":"diagnostic"}'
 
@@ -288,7 +288,7 @@ PYEOF
 
     # 観察トリガーボタン
     _pub -t "homeassistant/button/embodied_ha_observe/config" -m \
-        '{"name":"Embodied HA 観察","unique_id":"embodied_ha_observe","command_topic":"embodied_ha/observe/trigger","icon":"mdi:eye","payload_press":"OBSERVE"}'
+        '{"name":"Embodied HA ループ","unique_id":"embodied_ha_loop","command_topic":"embodied_ha/loop/trigger","icon":"mdi:eye","payload_press":"LOOP"}'
 
     _pub -t "homeassistant/sensor/embodied_ha_body_physical_room/config" -m \
         "$(python3 - <<'PYEOF'
@@ -364,6 +364,6 @@ if ! _auth_ok; then
     echo "[run] 認証完了。daemon 起動..."
 fi
 
-# --- daemon.py 起動（watch / explore / chat ループを管理）---
+# --- daemon.py 起動（loop / explore / chat ループを管理）---
 echo "[run] daemon.py 起動"
 exec python3 "$SCRIPT_DIR/daemon.py"

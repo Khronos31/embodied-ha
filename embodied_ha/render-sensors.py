@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """render-sensors.py — preferences.json の sensors マニフェストを
-HA Template API で SENSORS テキストブロックに描画する。watch.sh / explore.sh / chat.sh 共用。
+HA Template API で SENSORS テキストブロックに描画する。loop.sh / chat.sh 共用。
 
 マニフェストの宣言（groups → items）から Jinja テンプレートを組み立て、
 /api/template を1回叩いて整形済みテキストを得る。
 
 env: EHA_PREFS_FILE, HA_URL, SUPERVISOR_TOKEN
-引数: --context watch|chat（省略時 watch）… group.contexts でフィルタ
+引数: --context loop|chat（省略時 loop）… group.contexts でフィルタ
 
 マニフェスト構造（preferences.json の "sensors"）:
   {
     "groups": [
       {
         "title": "人感センサー",
-        "contexts": ["watch"],          # 省略時は全コンテキストで表示
+        "contexts": ["loop"],          # 省略時は全コンテキストで表示
         "items": [
           {"label": "リビング", "entity": "binary_sensor.xxx_motion"},
           {"label": "廊下1", "entity": "binary_sensor.yyy", "note": "リビング誤反応あり"},
@@ -77,7 +77,7 @@ def render(template, ha_url, token):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--context", default="watch")
+    p.add_argument("--context", default="loop")
     args = p.parse_args()
 
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")

@@ -91,26 +91,6 @@ class AudioMcpTests(unittest.TestCase):
                 "/config/embodied-ha/log/audio_event_tags.jsonl",
             )
 
-    def test_queue_next_listen_schema_omits_source(self):
-        props = self.audio_mcp.TOOL_QUEUE_NEXT_LISTEN["inputSchema"]["properties"]
-        self.assertNotIn("source", props)
-        self.assertIn("duration", props)
-
-    def test_queue_next_listen_builds_request_without_source(self):
-        captured = {}
-
-        def fake_queue(request):
-            captured.update(request)
-            return "/tmp/next_listen.json"
-
-        with mock.patch.object(self.audio_mcp, "check_listen_queue_cooldown", return_value=(True, "")),              mock.patch.object(self.audio_mcp, "queue_next_listen_request", side_effect=fake_queue):
-            result = self.audio_mcp.queue_next_listen({"duration": 6, "transcribe": True, "mode": "chat", "reason": "test", "note": "note"})
-        payload = json.loads(result[0][0]["text"])
-        self.assertTrue(payload["queued"])
-        self.assertNotIn("source", captured)
-        self.assertNotIn("source_label", captured)
-        self.assertEqual(captured["duration"], 6)
-
     def test_listen_defaults_to_first_configured_audio_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = Path(tmpdir) / "preferences.json"

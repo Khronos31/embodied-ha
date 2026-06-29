@@ -95,7 +95,7 @@ def build_draft(rows, resident):
         pass
     if presence_entity:
         groups.append({
-            "title": "在宅状態", "contexts": ["watch"],
+            "title": "在宅状態", "contexts": ["loop"],
             "items": [{"label": f"{resident}さん", "entity": presence_entity}]
         })
 
@@ -112,7 +112,7 @@ def build_draft(rows, resident):
             if area_counts[r["area"]] > 1:
                 label = f"{r['area']}({r['eid'].split('.')[-1][:12]})"
             items.append({"label": label, "entity": r["eid"]})
-        groups.append({"title": "人感センサー", "contexts": ["watch"], "items": items})
+        groups.append({"title": "人感センサー", "contexts": ["loop"], "items": items})
 
     # temperature + humidity（area でペア）
     temps = [r for r in rows if r["dc"] == "temperature" and r["area"]]
@@ -136,7 +136,7 @@ def build_draft(rows, resident):
                 for tr in trs:
                     items.append({"label": f"{area}({tr['eid'].split('.')[-1][:12]})",
                                   "template": f"{{{{ states('{tr['eid']}') }}}}℃"})
-        groups.append({"title": "温湿度", "contexts": ["watch"], "items": items})
+        groups.append({"title": "温湿度", "contexts": ["loop"], "items": items})
 
     # battery（area なし・要選別）
     batts = [r for r in rows if r["dc"] == "battery"]
@@ -145,7 +145,7 @@ def build_draft(rows, resident):
                         f"（「○○のバッテリーは要らない」等）。")
         items = [{"label": strip_battery_label(r["name"]),
                   "template": f"{{{{ states('{r['eid']}') }}}}%"} for r in batts]
-        groups.append({"title": "デバイスバッテリー", "contexts": ["watch"], "items": items})
+        groups.append({"title": "デバイスバッテリー", "contexts": ["loop"], "items": items})
 
     return {"groups": groups}, warnings
 

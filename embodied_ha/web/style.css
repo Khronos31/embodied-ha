@@ -21,8 +21,8 @@
     /* Badges */
     --badge-chat-bg: #e0f2fe;
     --badge-chat-text: #0369a1;
-    --badge-watch-bg: #dcfce7;
-    --badge-watch-text: #15803d;
+    --badge-loop-bg: #dcfce7;
+    --badge-loop-text: #15803d;
     --badge-explore-bg: #fef3c7;
     --badge-explore-text: #b45309;
     --badge-private-bg: #f3e8ff;
@@ -335,9 +335,9 @@ body {
     color: var(--badge-chat-text);
 }
 
-.badge-watch {
-    background-color: var(--badge-watch-bg);
-    color: var(--badge-watch-text);
+.badge-loop {
+    background-color: var(--badge-loop-bg);
+    color: var(--badge-loop-text);
 }
 
 .badge-explore {
@@ -1376,8 +1376,8 @@ select.stt-loading {
 }
 
 .audio-badge-direct {
-    background-color: var(--badge-watch-bg);
-    color: var(--badge-watch-text);
+    background-color: var(--badge-loop-bg);
+    color: var(--badge-loop-text);
 }
 
 .audio-badge-remote {

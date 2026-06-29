@@ -1265,11 +1265,17 @@ def should_record_non_speech_event(reason: str, features: dict) -> bool:
     except Exception:
         peak_db = None
     try:
+        mean_db = float(features.get("mean_db"))
+    except Exception:
+        mean_db = None
+    try:
         duration_sec = float(features.get("duration_sec") or 0)
     except Exception:
         duration_sec = 0.0
 
     if duration_sec < MIN_SEGMENT_SECONDS or peak_db is None:
+        return False
+    if mean_db is not None and mean_db < FALLBACK_DB_THRESHOLD:
         return False
 
     score = non_speech_importance_score(reason, features)

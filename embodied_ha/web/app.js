@@ -9,7 +9,7 @@ let unreadCounts = {
     audio: 0
 };
 let isTyping = false;
-let typingType = 'chat'; // 'chat', 'watch', 'explore', 'private'
+let typingType = 'chat'; // 'chat', 'loop', 'explore', 'private'
 let setupMode = false;
 
 // Settings State
@@ -217,14 +217,14 @@ function renderMessages() {
     // Filter message list based on active room
     let displayList = [];
     if (activeRoom === 'chat') {
-        // User messages, chat responses, watch/explore statements (where text is present)
+        // User messages, chat responses, loop/explore statements (where text is present)
         displayList = chatMessages.filter(m => m.text).map(m => ({
             timestamp: m.timestamp,
             // 送信者名はバックエンドに保存されない。ユーザー以外はキャラクター設定から
             // 描画時に導出する（独り言ルームと同じ方式）。これで名前変更が即反映される。
             sender: m.sender === 'あなた' ? 'あなた' : characterName,
             text: m.text,
-            type: m.type, // 'chat', 'watch', 'explore', 'user'
+            type: m.type, // 'chat', 'loop', 'explore', 'user'
             source: m.source || 'chat',
             isUser: m.sender === 'あなた',
             isRead: m.isRead !== false,
@@ -370,7 +370,7 @@ function renderMessages() {
 function getBadgeText(type) {
     switch (type) {
         case 'chat': return '会話';
-        case 'watch': return '観察';
+        case 'loop': return 'ループ';
         case 'explore': return '探索';
         default: return '';
     }
@@ -379,7 +379,7 @@ function getBadgeText(type) {
 function getBadgeClass(type) {
     switch (type) {
         case 'chat': return 'badge-chat';
-        case 'watch': return 'badge-watch';
+        case 'loop': return 'badge-loop';
         case 'explore': return 'badge-explore';
         default: return '';
     }
@@ -624,7 +624,7 @@ async function fetchMessages(room) {
             // Soliloquy messages (private timeline)
             const mapped = data.map(m => ({
                 timestamp: m.timestamp,
-                type: m.source || 'watch',
+                type: m.source || 'loop',
                 sender: characterName,
                 private: m.private,
                 emotion: m.emotion,
@@ -685,7 +685,7 @@ function connectSSE() {
         try {
             const data = JSON.parse(e.data);
             console.log(`[SSE] typing state event:`, data);
-            // data schema: { "typing": true|false, "type": "chat"|"watch"|"explore"|"private" }
+            // data schema: { "typing": true|false, "type": "chat"|"loop"|"explore"|"private" }
             if (data.typing) {
                 showTypingIndicator(data.type);
             } else {
@@ -708,9 +708,9 @@ function connectSSE() {
 
 // --- Standalone Mock Simulations ---
 function runMockSimulations() {
-    // Daemon starting watch.sh (Observation loop)
+    // Daemon starting loop.sh (Autonomous loop)
     setTimeout(() => {
-        console.log("[DEMO] Daemon starting watch.sh (Observation loop)...");
+        console.log("[DEMO] Daemon starting loop.sh (Autonomous loop)...");
         
         // 1. Show private thoughts thinking in Soliloquy
         showTypingIndicator('private');
@@ -720,7 +720,7 @@ function runMockSimulations() {
             hideTypingIndicator();
             chatMessages.push({
                 timestamp: new Date().toISOString(),
-                type: 'watch',
+                type: 'loop',
                 sender: characterName,
                 text: null, 
                 private: "（定期観察より）部屋が少し薄暗くなってきた。照明のオートメーションは順調に動いているようだ。"
@@ -989,7 +989,7 @@ async function fetchSettings() {
                     groups: [
                         {
                             title: "人感センサー",
-                            contexts: ["watch"],
+                            contexts: ["loop"],
                             items: [
                                 { label: "リビング", entity: "binary_sensor.living_motion" }
                             ]
@@ -1848,7 +1848,7 @@ function serializeFormToPrefs() {
         const title = card.querySelector('.sensor-group-title').value.trim();
         
         const contexts = [];
-        if (card.querySelector('.sensor-context-watch').checked) contexts.push('watch');
+        if (card.querySelector('.sensor-context-loop').checked) contexts.push('loop');
         if (card.querySelector('.sensor-context-chat').checked) contexts.push('chat');
 
         const items = [];
@@ -2909,7 +2909,7 @@ function createSensorGroupCard(group = { title: '', contexts: [], items: [] }) {
     card.className = 'sensor-group-card';
 
     const title = group.title || '';
-    const isWatch = group.contexts?.includes('watch');
+    const isLoop = group.contexts?.includes('loop');
     const isChat = group.contexts?.includes('chat');
 
     card.innerHTML = `
@@ -2919,7 +2919,7 @@ function createSensorGroupCard(group = { title: '', contexts: [], items: [] }) {
             <div class="checkbox-group">
                 <span>コンテキスト:</span>
                 <label class="checkbox-label">
-                    <input type="checkbox" class="sensor-context-watch" ${isWatch ? 'checked' : ''}> watch (観察)
+                    <input type="checkbox" class="sensor-context-loop" ${isLoop ? 'checked' : ''}> loop (自律ループ)
                 </label>
                 <label class="checkbox-label">
                     <input type="checkbox" class="sensor-context-chat" ${isChat ? 'checked' : ''}> chat (会話)

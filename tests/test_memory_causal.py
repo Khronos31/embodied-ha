@@ -264,7 +264,7 @@ class MemoryCausalTests(unittest.TestCase):
 
     def test_chat_and_explore_expose_memory_tools(self):
         chat_text = (ROOT / "embodied_ha" / "chat.sh").read_text(encoding="utf-8")
-        explore_text = (ROOT / "embodied_ha" / "explore.sh").read_text(encoding="utf-8")
+        explore_text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
         for text in (chat_text, explore_text):
             self.assertIn("mcp__memory__record_episode", text)
             self.assertIn("mcp__memory__record_causal_chain", text)

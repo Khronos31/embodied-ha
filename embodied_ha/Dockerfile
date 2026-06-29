@@ -16,7 +16,7 @@ RUN npm install -g @anthropic-ai/claude-code
 COPY . /app/
 
 # 実行権限付与 + コマンド名でそのまま呼べるようシンボリックリンク
-RUN chmod +x /app/run.sh /app/watch.sh /app/explore.sh /app/chat.sh \
+RUN chmod +x /app/run.sh /app/loop.sh /app/chat.sh \
              /app/recall.sh /app/loops.sh \
     && ln -s /app/loops.sh   /usr/local/bin/loops \
     && ln -s /app/recall.sh  /usr/local/bin/recall

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stateful anomaly helpers for embodied-ha.
 
-This module keeps a small persistent anomaly state so watch.sh can record
+This module keeps a small persistent anomaly state so loop.sh can record
 sensor spikes / unresolved loops / world-model mismatches and the daemon can
 turn them into explore urgency.
 """
@@ -552,7 +552,7 @@ def detect_anomalies(
     *,
     now: _dt.datetime | None = None,
     trigger_reason: str = "",
-    loop_name: str = "watch",
+    loop_name: str = "loop",
 ) -> dict[str, Any]:
     """Detect anomalies from sensor logs and open loop data."""
 

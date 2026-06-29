@@ -253,7 +253,10 @@ def advance_tick(
         curiosity += 0.015
         stress += 0.010
 
-    if loop_name == "explore":
+    if loop_name == "loop":
+        curiosity += 0.012
+        stress += 0.004
+    elif loop_name == "explore":
         curiosity += 0.015
     elif loop_name == "watch":
         stress += 0.004
@@ -321,7 +324,7 @@ def apply_feedback(
             _clamp(current["confidence"] + (0.020 if success else -0.050)),
             3,
         )
-    elif loop_name == "explore":
+    elif loop_name in {"loop", "explore"}:
         current["curiosity"] = round(
             _clamp(current["curiosity"] - (0.060 if success else -0.015)),
             3,
@@ -467,7 +470,12 @@ def compute_run_chance(base_chance: int, state: Mapping[str, Any], loop_name: st
     confidence = current["confidence"]
     social_openness = current["social_openness"]
 
-    if loop_name == "watch":
+    if loop_name == "loop":
+        chance += round((curiosity - 0.5) * 30)
+        chance += round((confidence - 0.5) * 7)
+        chance += round((energy - 0.5) * 12)
+        chance -= round(max(0.0, stress - 0.32) * 26)
+    elif loop_name == "watch":
         chance += round((curiosity - 0.5) * 26)
         chance += round((confidence - 0.5) * 8)
         chance += round((energy - 0.5) * 10)

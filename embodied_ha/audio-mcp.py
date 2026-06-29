@@ -19,7 +19,7 @@ from pathlib import Path
 
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
-from mcp_lib import serve, text
+from mcp_lib import log, serve, text
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, load_prefs, now, parse_ts
 
@@ -292,40 +292,6 @@ def build_listen_spec() -> dict:
 TOOL_LISTEN = build_listen_spec()
 
 
-TOOL_QUEUE_NEXT_LISTEN = {
-    "name": "queue_next_listen",
-    "description": (
-        "次のセッションで音を聴く予定を保存する。"
-        "今この場で録音するのではなく、次回の chat/watch/explore で "
-        "一時ファイルを作って解析するための予約だけを残す。"
-    ),
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "duration": {
-                "type": "integer",
-                "description": "次回録音秒数。デフォルト 5、最大 30",
-            },
-            "transcribe": {
-                "type": "boolean",
-                "description": "次回の解析で文字起こしを行うか。デフォルト false",
-            },
-            "mode": {
-                "type": "string",
-                "description": "予約元のモード（chat/watch/explore など）",
-            },
-            "reason": {
-                "type": "string",
-                "description": "なぜ次回聴きたいのかの短い説明",
-            },
-            "note": {
-                "type": "string",
-                "description": "補足メモ",
-            },
-        },
-    },
-}
-
 
 TOOL_READ_AUDIO_LOG = {
 
@@ -585,25 +551,6 @@ def transcribe_audio(path: str) -> str | None:
     return transcribe_via_local(path)
 
 
-def queue_next_listen(args: dict):
-    ok, reason = check_listen_queue_cooldown()
-    if not ok:
-        return [text(json.dumps({"queued": False, "error": reason}, ensure_ascii=False))], False
-    duration = normalize_duration(args.get("duration"))
-    transcribe_arg = args.get("transcribe", False)
-    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
-    request = {
-        "timestamp": now().isoformat(timespec="seconds"),
-        "request_id": uuid.uuid4().hex,
-        "duration": duration,
-        "transcribe": transcribe,
-        "mode": clean(args.get("mode")) or (clean(os.environ.get("EHA_ACTOR")) or "unknown"),
-        "reason": clean(args.get("reason")),
-        "note": clean(args.get("note")),
-    }
-    path = queue_next_listen_request(request)
-    return [text(json.dumps({"queued": True, "request_path": path, "request": request}, ensure_ascii=False))], True
-
 
 def read_audio_log(args: dict):
     return read_jsonl_log(AUDIO_LOG_FILE, args)
@@ -781,7 +728,9 @@ TOOL_SPEAK = {
     "name": "speak",
     "description": (
         "物理体として声を出す。物理体モード専用。\n"
-        "現在の部屋に応じた最近傍スピーカーへ自動ルーティングする（デバイスを意識不要）。\n"
+        "現在の部屋に応じたスピーカーへ自動ルーティングする（デバイス ID の指定不要・enter_cyberspace 不要）。\n"
+        "【別の部屋で話したいとき】move_to でその部屋に移動してから speak を呼ぶ。"
+        "スピーカーの entity を指定したり enter_cyberspace したりする必要はない。\n"
         "電脳体モードの場合はエラーを返す。電脳体でスピーカーから発話したい場合は use_device_speaker を使う。"
     ),
     "inputSchema": {
@@ -827,7 +776,7 @@ TOOL_USE_DEVICE_MICROPHONE = {
 TOOL_CONCENTRATE_HEARING = {
     "name": "concentrate_hearing",
     "description": (
-        "耳を澄ます。Antigravity による WAV ファイルのマルチモーダル処理を次セッションへキューする。\n"
+        "耳を澄ます。次セッションで音声をマルチモーダル解析するためのキューを積む。\n"
         "物理体モード専用。電脳体モードでは使用不可。\n"
         "非同期: このツールは即座に「キューしました」と返す。次回セッション開始時に音声が処理される。\n"
         "通常の listen（テキスト返却・即時）よりも深い聴覚的注意が必要なときに使う。"
@@ -1086,7 +1035,6 @@ def concentrate_hearing(args: dict):
 if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
-        "queue_next_listen": {"spec": TOOL_QUEUE_NEXT_LISTEN, "handler": queue_next_listen},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
         "read_heard_audio_log": {"spec": TOOL_READ_HEARD_AUDIO_LOG, "handler": read_heard_audio_log},
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
