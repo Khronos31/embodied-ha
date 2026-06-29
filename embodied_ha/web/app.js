@@ -3504,7 +3504,7 @@ function renderAudioEvents() {
             if (bodyRoom === sourceRoom) {
                 roomInfo = `部屋: ${bodyRoom}`;
             } else {
-                roomInfo = `あかね: ${bodyRoom} / 音源: ${sourceRoom}`;
+                roomInfo = `${characterName}: ${bodyRoom} / 音源: ${sourceRoom}`;
             }
         } else if (bodyRoom) {
             roomInfo = `部屋: ${bodyRoom}`;
@@ -3856,7 +3856,7 @@ function renderAiLoungeQueue(queue) {
         
         card.innerHTML = `
             ${replyHtml}
-            <div class="ai-lounge-author">あかねの投稿:</div>
+            <div class="ai-lounge-author">${characterName}の投稿:</div>
             <div class="ai-lounge-text">「${item.body || item.text || ""}」</div>
             <div class="ai-lounge-card-actions" id="actions-${item.id}">
                 <button type="button" class="btn btn-primary btn-sm" onclick="approveLoungeQueue('${item.id}')">✓ 承認</button>
@@ -4124,8 +4124,6 @@ async function addFeature(featureId) {
                 body: JSON.stringify(prefsData)
             });
             if (response.ok) {
-                const updatedPrefs = await response.json();
-                prefsData = updatedPrefs;
                 updateDynamicFeaturesUI();
                 renderOtherFeaturesCatalog();
             } else {
