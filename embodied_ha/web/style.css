@@ -2043,30 +2043,29 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     color: #b91c1c;
 }
 
-/* Inline Edit modes */
-.entity-item:not(.edit-mode) .edit-mode-element,
-.sensor-item-row:not(.edit-mode) .edit-mode-element,
-.projection-target-item:not(.edit-mode) .edit-mode-element {
-    display: none !important;
+/* Modal styling */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
 }
-
-.entity-item.edit-mode .view-mode-element,
-.sensor-item-row.edit-mode .view-mode-element,
-.projection-target-item.edit-mode .view-mode-element {
-    display: none !important;
+.modal-dialog {
+  background: var(--claude-card-bg);
+  border-radius: 12px;
+  width: 480px; max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
 }
-
-.entity-item:not(.edit-mode) .view-mode-element,
-.sensor-item-row:not(.edit-mode) .view-mode-element,
-.projection-target-item:not(.edit-mode) .view-mode-element {
-    display: block;
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 24px 0;
 }
-
-.entity-item.edit-mode .edit-mode-element,
-.sensor-item-row.edit-mode .edit-mode-element,
-.projection-target-item.edit-mode .edit-mode-element {
-    display: block;
+.modal-body { padding: 20px 24px; }
+.modal-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 0 24px 20px;
 }
+.modal-close { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--claude-text-sub); }
 
 .sensor-item-mode-checkbox {
     margin-top: 6px;

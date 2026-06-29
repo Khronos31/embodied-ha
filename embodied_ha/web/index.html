@@ -332,9 +332,6 @@
                                         </tbody>
                                     </table>
                                 </div>
-                                <div class="table-actions">
-                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addEntityRow()">＋ 家電を追加</button>
-                                </div>
                             </div>
                         </section>
 
@@ -351,9 +348,6 @@
                                 <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
                                 <div id="sensors-list" class="settings-list">
                                     <!-- Dynamically generated groups -->
-                                </div>
-                                <div class="table-actions">
-                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addSensorGroup()">＋ グループを追加</button>
                                 </div>
                             </div>
                         </section>
@@ -388,9 +382,6 @@
                                             <!-- Dynamically generated rows -->
                                         </tbody>
                                     </table>
-                                </div>
-                                <div class="table-actions">
-                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addProjectionTargetRow()">＋ デバイスを追加</button>
                                 </div>
                             </div>
                         </section>
@@ -517,6 +508,24 @@
             </div>
         </main>
     </div>
+
+    <!-- 共通編集モーダル -->
+    <div id="edit-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 id="edit-modal-title">編集</h3>
+          <button type="button" class="modal-close" onclick="closeEditModal()">✕</button>
+        </div>
+        <div class="modal-body" id="edit-modal-body">
+          <!-- フォームを動的に挿入 -->
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeEditModal()">キャンセル</button>
+          <button type="button" class="btn btn-primary" onclick="saveEditModal()">保存</button>
+        </div>
+      </div>
+    </div>
+
     <script defer src="app.js"></script>
 </body>
 </html>

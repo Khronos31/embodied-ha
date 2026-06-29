@@ -22,6 +22,10 @@ let antigravitySetupState = null;
 let antigravitySetupSource = null;
 let antigravityAuthPollActive = false;
 
+// --- Edit Modal State ---
+let _currentEditTr = null;
+let _currentEditType = null;
+
 function updateCharacterName(prefs) {
     characterName = ((prefs && prefs.character_name) || 'Claude').trim() || 'Claude';
 }
@@ -1816,10 +1820,10 @@ function serializeFormToPrefs() {
     });
 
     const entities = [];
-    document.querySelectorAll('.entity-item').forEach(card => {
-        const entity_id = card.querySelector('.entity-eid').value;
-        const name = card.querySelector('.entity-name').value.trim();
-        const note = card.querySelector('.entity-note').value.trim();
+    document.querySelectorAll('.entity-item').forEach(tr => {
+        const entity_id = tr.dataset.entityId || '';
+        const name = (tr.dataset.name || '').trim();
+        const note = (tr.dataset.note || '').trim();
         if (entity_id) {
             const entObj = { name, entity_id };
             if (note) entObj.note = note;
@@ -1850,22 +1854,22 @@ function serializeFormToPrefs() {
         const items = [];
         const itemRows = card.querySelectorAll('.sensor-item-row');
         itemRows.forEach(row => {
-            const label = row.querySelector('.sensor-item-label').value.trim();
-            const isTemplate = row.querySelector('.sensor-item-is-template').checked;
-            const note = row.querySelector('.sensor-item-note').value.trim();
+            const label = (row.dataset.label || '').trim();
+            const isTemplate = row.dataset.isTemplate === 'true';
+            const note = (row.dataset.note || '').trim();
 
             const itemObj = {};
             if (label) itemObj.label = label;
             if (note) itemObj.note = note;
 
             if (isTemplate) {
-                const template = row.querySelector('.sensor-item-template').value.trim();
+                const template = (row.dataset.template || '').trim();
                 if (template) {
                     itemObj.template = template;
                     items.push(itemObj);
                 }
             } else {
-                const entity = row.querySelector('.sensor-item-entity').value;
+                const entity = row.dataset.entity || '';
                 if (entity) {
                     itemObj.entity = entity;
                     items.push(itemObj);
@@ -1879,11 +1883,10 @@ function serializeFormToPrefs() {
     });
 
     const projection_targets = [];
-    document.querySelectorAll('.projection-target-item').forEach(card => {
-        const displayName = card.querySelector('.pt-display-name')?.value?.trim();
-        const slug = card.querySelector('.pt-id-slug')?.value?.trim();
-        const id = slug ? `external://${slug}` : '';
-        const room = card.querySelector('.pt-room')?.value?.trim() || null;
+    document.querySelectorAll('.projection-target-item').forEach(tr => {
+        const displayName = (tr.dataset.displayName || '').trim();
+        const id = tr.dataset.id || '';
+        const room = tr.dataset.room || null;
         if (displayName && id) {
             projection_targets.push({ id, display_name: displayName, room: room || null });
         }
@@ -2060,88 +2063,48 @@ function addProjectionTargetRow(target = {}, isNew = false) {
     if (!listEl) return;
     const tr = document.createElement('tr');
     tr.className = 'projection-target-item';
-    if (isNew === true) {
-        tr.classList.add('edit-mode');
-    }
 
     const id = target.id || '';
-    const slug = (target.id || '').replace(/^external:\/\//, '');
     const displayName = target.display_name || '';
     const room = target.room || '';
+
+    // Set dataset attributes
+    tr.dataset.id = id;
+    tr.dataset.displayName = displayName;
+    tr.dataset.room = room;
 
     tr.innerHTML = `
         <td>
             <div class="view-mode-element font-mono">${esc(id || '(新規デバイス)')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <div class="input-prefix-group" style="display:flex; align-items:center;">
-                    <span class="input-prefix" style="
-                        padding: 0 8px;
-                        background: var(--claude-bg);
-                        border: 1px solid var(--claude-border);
-                        border-right: none;
-                        border-radius: 6px 0 0 6px;
-                        color: var(--claude-text-sub, #888);
-                        font-size: 13px;
-                        height: 36px;
-                        line-height: 36px;
-                        white-space: nowrap;
-                    ">external://</span>
-                    <input type="text" class="pt-id-slug form-input" placeholder="device_name" value="${esc(slug)}" style="
-                        border-radius: 0 6px 6px 0;
-                        flex: 1;
-                    ">
-                </div>
-            </div>
         </td>
         <td>
             <div class="view-mode-element">${esc(displayName || '')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <input type="text" class="pt-display-name form-input" placeholder="例: Astrolabe（スタディ）" value="${esc(displayName)}">
-            </div>
         </td>
         <td>
-            <div class="view-mode-element">${esc(room || '指定なし')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <select class="pt-room form-input">
-                    <option value="">指定なし（モバイル等）</option>
-                </select>
-            </div>
+            <div class="view-mode-element room-display">${esc(room || '指定なし')}</div>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+            <button type="button" class="btn-edit" onclick="openEditModal('projection', this.closest('tr'))" title="編集">✏️</button>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-remove-icon" onclick="this.closest('.projection-target-item').remove(); isSettingsDirty = true;" title="削除">✕</button>
+            <button type="button" class="btn-remove-icon" onclick="if(confirm('このデバイスを削除しますか？')) { this.closest('.projection-target-item').remove(); isSettingsDirty = true; }" title="削除">✕</button>
         </td>
     `;
 
     listEl.appendChild(tr);
 
-    const nameInput = tr.querySelector('.pt-display-name');
-    const slugInput = tr.querySelector('.pt-id-slug');
-    if (!id) {
-        slugInput.dataset.autoGenerated = 'true';
-    } else {
-        slugInput.dataset.autoGenerated = 'false';
+    if (room) {
+        getRoomGraphData().then(data => {
+            const display = data?.rooms?.[room]?.display_name || room;
+            const el = tr.querySelector('.room-display');
+            if (el) el.textContent = display;
+        });
     }
-    nameInput.addEventListener('input', () => {
-        if (!slugInput.value || slugInput.dataset.autoGenerated === 'true') {
-            const slug = nameInput.value
-                .toLowerCase()
-                .replace(/[\s　]+/g, '_')
-                .replace(/[^\w]/g, '')
-                .replace(/^_+|_+$/g, '');
-            slugInput.value = slug;
-            slugInput.dataset.autoGenerated = 'true';
-        }
-    });
-    slugInput.addEventListener('input', () => {
-        slugInput.dataset.autoGenerated = 'false';
-    });
 
-    const roomSelect = tr.querySelector('.pt-room');
-    populateRoomSelect(roomSelect, room);
-    setupInlineEditEvents(tr);
+    if (isNew) {
+        openEditModal('projection', tr);
+    }
+    return tr;
 }
 
 function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
@@ -2632,141 +2595,295 @@ function addProjectionTargetRowAndOpen(btn) {
     addProjectionTargetRow();
 }
 
-function toggleRowEdit(btn) {
-    const tr = btn.closest('tr');
-    if (!tr) return;
-    
-    const isEditing = tr.classList.contains('edit-mode');
-    if (isEditing) {
-        tr.classList.remove('edit-mode');
-        btn.textContent = '✏️';
-        updateRowViewText(tr);
-        isSettingsDirty = true;
-    } else {
-        tr.classList.add('edit-mode');
-        btn.textContent = '✓';
-        const firstInput = tr.querySelector('input, select');
-        if (firstInput) {
-            firstInput.focus();
-        }
-    }
-}
-
-function updateRowViewText(tr) {
-    if (tr.classList.contains('entity-item')) {
-        const select = tr.querySelector('.entity-eid');
-        const nameVal = tr.querySelector('.entity-name').value;
-        const noteVal = tr.querySelector('.entity-note').value;
-        
-        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = select.value || '(未選択)';
-        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = nameVal;
-        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = noteVal;
-    } else if (tr.classList.contains('sensor-item-row')) {
-        const labelVal = tr.querySelector('.sensor-item-label').value;
-        const isTemplate = tr.querySelector('.sensor-item-is-template').checked;
-        const noteVal = tr.querySelector('.sensor-item-note').value;
-        let valueDisplay = '';
-        if (isTemplate) {
-            valueDisplay = tr.querySelector('.sensor-item-template').value;
-        } else {
-            valueDisplay = tr.querySelector('.sensor-item-entity').value;
-        }
-        
-        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = labelVal;
-        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = valueDisplay || '(未選択)';
-        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = noteVal;
-    } else if (tr.classList.contains('projection-target-item')) {
-        const slugVal = tr.querySelector('.pt-id-slug').value.trim();
-        const idVal = slugVal ? `external://${slugVal}` : '';
-        const nameVal = tr.querySelector('.pt-display-name').value.trim();
-        const roomSelect = tr.querySelector('.pt-room');
-        let roomText = '指定なし';
-        if (roomSelect) {
-            if (roomSelect.tagName.toLowerCase() === 'select') {
-                const selectedOpt = roomSelect.options[roomSelect.selectedIndex];
-                roomText = selectedOpt ? (selectedOpt.value ? selectedOpt.textContent : '指定なし') : '指定なし';
-            } else {
-                roomText = roomSelect.value || '指定なし';
-            }
-        }
-        
-        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = idVal || '(新規デバイス)';
-        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = nameVal;
-        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = roomText;
-    }
-}
-
-function setupInlineEditEvents(tr) {
-    tr.addEventListener('focusout', (event) => {
-        setTimeout(() => {
-            if (!tr.contains(document.activeElement)) {
-                const editBtn = tr.querySelector('.btn-edit');
-                if (tr.classList.contains('edit-mode')) {
-                    tr.classList.remove('edit-mode');
-                    if (editBtn) editBtn.textContent = '✏️';
-                    updateRowViewText(tr);
-                    isSettingsDirty = true;
-                }
-            }
-        }, 50);
-    });
-}
-
 function createEntityCard(ent = { name: '', entity_id: '', note: '' }, isNew = false) {
     const entitiesList = document.getElementById('entities-list');
+    if (!entitiesList) return;
     const tr = document.createElement('tr');
     tr.className = 'entity-item';
-    if (isNew === true) {
-        tr.classList.add('edit-mode');
-    }
+    
+    // Set dataset attributes
+    tr.dataset.entityId = ent.entity_id || '';
+    tr.dataset.name = ent.name || '';
+    tr.dataset.note = ent.note || '';
 
     tr.innerHTML = `
         <td>
             <div class="view-mode-element font-mono">${esc(ent.entity_id || '(未選択)')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <select class="entity-eid ha-entity-select-field form-input" data-domain="${ENTITY_CONTROLLABLE_DOMAINS}" onchange="handleEntitySelectChange(this)">
-                    <option value="">(ロード中...)</option>
-                </select>
-            </div>
         </td>
         <td>
             <div class="view-mode-element">${esc(ent.name || '')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <input type="text" class="entity-name form-input" placeholder="例: リビングのライト" value="${esc(ent.name)}">
-            </div>
         </td>
         <td>
             <div class="view-mode-element">${esc(ent.note || '')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <input type="text" class="entity-note form-input" placeholder="例: 要確認" value="${esc(ent.note)}">
-            </div>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+            <button type="button" class="btn-edit" onclick="openEditModal('entity', this.closest('tr'))" title="編集">✏️</button>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-remove-icon" onclick="this.closest('.entity-item').remove(); isSettingsDirty = true;" title="削除">✕</button>
+            <button type="button" class="btn-remove-icon" onclick="if(confirm('この家電を削除しますか？')) { this.closest('.entity-item').remove(); isSettingsDirty = true; }" title="削除">✕</button>
         </td>
     `;
 
     entitiesList.appendChild(tr);
 
-    const selectEid = tr.querySelector('.entity-eid');
-    initDropdownOptions(selectEid, ENTITY_CONTROLLABLE_DOMAINS, ent.entity_id);
-    setupInlineEditEvents(tr);
+    if (isNew) {
+        openEditModal('entity', tr);
+    }
+    return tr;
 }
 
-// エンティティを選んだとき、呼び方が空なら friendly_name を自動で入れる。
-function handleEntitySelectChange(select) {
-    const card = select.closest('.entity-item');
-    const nameInput = card.querySelector('.entity-name');
+function addEntityRow() {
+    createEntityCard({ name: '', entity_id: '', note: '' }, true);
+}
+
+// --- Edit Modal Functions ---
+function openEditModal(type, tr) {
+    _currentEditTr = tr;
+    _currentEditType = type;
+    
+    const modal = document.getElementById('edit-modal');
+    const titleEl = document.getElementById('edit-modal-title');
+    const bodyEl = document.getElementById('edit-modal-body');
+    
+    if (!modal || !titleEl || !bodyEl) return;
+    
+    bodyEl.innerHTML = '';
+    
+    if (type === 'entity') {
+        titleEl.textContent = '家電の編集';
+        const entityId = tr.dataset.entityId || '';
+        const name = tr.dataset.name || '';
+        const note = tr.dataset.note || '';
+        
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">エンティティ (entity_id)</label>
+                <select class="entity-eid-modal ha-entity-select-field form-input" onchange="handleEntitySelectChangeModal(this)">
+                    <option value="">(ロード中...)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">呼び方 (name)</label>
+                <input type="text" class="entity-name-modal form-input" placeholder="例: リビングのライト" value="${esc(name)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">備考 (note)</label>
+                <input type="text" class="entity-note-modal form-input" placeholder="例: 要確認" value="${esc(note)}">
+            </div>
+        `;
+        const select = bodyEl.querySelector('.entity-eid-modal');
+        initDropdownOptions(select, ENTITY_CONTROLLABLE_DOMAINS, entityId);
+        
+    } else if (type === 'sensor') {
+        titleEl.textContent = 'センサーの編集';
+        const label = tr.dataset.label || '';
+        const entity = tr.dataset.entity || '';
+        const template = tr.dataset.template || '';
+        const note = tr.dataset.note || '';
+        const isTemplate = tr.dataset.isTemplate === 'true';
+        
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">ラベル (label)</label>
+                <input type="text" class="sensor-label-modal form-input" placeholder="例: リビング" value="${esc(label)}">
+            </div>
+            <div class="form-group sensor-entity-container-modal" style="display: ${isTemplate ? 'none' : 'block'};">
+                <label class="form-label">エンティティ</label>
+                <select class="sensor-entity-modal ha-entity-select-field form-input">
+                    <option value="">(ロード中...)</option>
+                </select>
+            </div>
+            <div class="form-group sensor-template-container-modal" style="display: ${isTemplate ? 'block' : 'none'};">
+                <label class="form-label">テンプレート</label>
+                <input type="text" class="sensor-template-modal form-input" placeholder="Template (例: {{ states('sensor.temp') }}℃)" value="${esc(template)}">
+            </div>
+            <div class="checkbox-group sensor-item-mode-checkbox" style="margin-top: 4px; margin-bottom: 12px;">
+                <label class="checkbox-label" style="font-size:13px;">
+                    <input type="checkbox" class="sensor-is-template-modal" ${isTemplate ? 'checked' : ''} onchange="toggleSensorItemModeModal(this)"> 式(Template)
+                </label>
+            </div>
+            <div class="form-group">
+                <label class="form-label">メモ (note)</label>
+                <input type="text" class="sensor-note-modal form-input" placeholder="メモ (任意)" value="${esc(note)}">
+            </div>
+        `;
+        const select = bodyEl.querySelector('.sensor-entity-modal');
+        initDropdownOptions(select, 'binary_sensor,sensor,input_boolean', entity);
+        
+    } else if (type === 'projection') {
+        titleEl.textContent = '外部デバイスの編集';
+        const id = tr.dataset.id || '';
+        const slug = id.replace(/^external:\/\//, '');
+        const displayName = tr.dataset.displayName || '';
+        const room = tr.dataset.room || '';
+        
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">IDスラグ</label>
+                <div class="input-prefix-group" style="display:flex; align-items:center;">
+                    <span class="input-prefix" style="
+                        padding: 0 8px;
+                        background: var(--claude-bg);
+                        border: 1px solid var(--claude-border);
+                        border-right: none;
+                        border-radius: 6px 0 0 6px;
+                        color: var(--claude-text-sub, #888);
+                        font-size: 13px;
+                        height: 36px;
+                        line-height: 36px;
+                        white-space: nowrap;
+                    ">external://</span>
+                    <input type="text" class="pt-slug-modal form-input" placeholder="device_name" value="${esc(slug)}" style="
+                        border-radius: 0 6px 6px 0;
+                        flex: 1;
+                    ">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">表示名</label>
+                <input type="text" class="pt-name-modal form-input" placeholder="例: Astrolabe（スタディ）" value="${esc(displayName)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">部屋</label>
+                <select class="pt-room-modal form-input">
+                    <option value="">指定なし（モバイル等）</option>
+                </select>
+            </div>
+        `;
+        
+        const slugInput = bodyEl.querySelector('.pt-slug-modal');
+        const nameInput = bodyEl.querySelector('.pt-name-modal');
+        const roomSelect = bodyEl.querySelector('.pt-room-modal');
+        
+        if (!id) {
+            slugInput.dataset.autoGenerated = 'true';
+        } else {
+            slugInput.dataset.autoGenerated = 'false';
+        }
+        
+        nameInput.addEventListener('input', () => {
+            if (!slugInput.value || slugInput.dataset.autoGenerated === 'true') {
+                const generatedSlug = nameInput.value
+                    .toLowerCase()
+                    .replace(/[\s　]+/g, '_')
+                    .replace(/[^\w]/g, '')
+                    .replace(/^_+|_+$/g, '');
+                slugInput.value = generatedSlug;
+                slugInput.dataset.autoGenerated = 'true';
+            }
+        });
+        
+        slugInput.addEventListener('input', () => {
+            slugInput.dataset.autoGenerated = 'false';
+        });
+        
+        populateRoomSelect(roomSelect, room, 'pt-room-modal');
+    }
+    
+    modal.style.display = 'flex';
+}
+
+function handleEntitySelectChangeModal(select) {
+    const modal = select.closest('#edit-modal');
+    const nameInput = modal.querySelector('.entity-name-modal');
     if (nameInput && !nameInput.value.trim()) {
         nameInput.value = findFriendlyName(select.value);
     }
 }
 
-function addEntityRow() {
-    createEntityCard({ name: '', entity_id: '', note: '' }, true);
+function toggleSensorItemModeModal(checkbox) {
+    const modal = checkbox.closest('#edit-modal');
+    const entityContainer = modal.querySelector('.sensor-entity-container-modal');
+    const templateContainer = modal.querySelector('.sensor-template-container-modal');
+    if (checkbox.checked) {
+        entityContainer.style.display = 'none';
+        templateContainer.style.display = 'block';
+    } else {
+        entityContainer.style.display = 'block';
+        templateContainer.style.display = 'none';
+    }
+}
+
+function closeEditModal() {
+    const modal = document.getElementById('edit-modal');
+    if (modal) modal.style.display = 'none';
+    _currentEditTr = null;
+    _currentEditType = null;
+}
+
+function saveEditModal() {
+    if (!_currentEditTr || !_currentEditType) return;
+    
+    const modal = document.getElementById('edit-modal');
+    if (!modal) return;
+    
+    if (_currentEditType === 'entity') {
+        const select = modal.querySelector('.entity-eid-modal');
+        const entityId = select.value;
+        const name = modal.querySelector('.entity-name-modal').value.trim();
+        const note = modal.querySelector('.entity-note-modal').value.trim();
+        
+        _currentEditTr.dataset.entityId = entityId;
+        _currentEditTr.dataset.name = name;
+        _currentEditTr.dataset.note = note;
+        
+        _currentEditTr.querySelector('td:nth-child(1) .view-mode-element').textContent = entityId || '(未選択)';
+        _currentEditTr.querySelector('td:nth-child(2) .view-mode-element').textContent = name;
+        _currentEditTr.querySelector('td:nth-child(3) .view-mode-element').textContent = note;
+        
+    } else if (_currentEditType === 'sensor') {
+        const label = modal.querySelector('.sensor-label-modal').value.trim();
+        const isTemplate = modal.querySelector('.sensor-is-template-modal').checked;
+        const entity = modal.querySelector('.sensor-entity-modal').value;
+        const template = modal.querySelector('.sensor-template-modal').value.trim();
+        const note = modal.querySelector('.sensor-note-modal').value.trim();
+        
+        _currentEditTr.dataset.label = label;
+        _currentEditTr.dataset.isTemplate = isTemplate ? 'true' : 'false';
+        _currentEditTr.dataset.entity = entity;
+        _currentEditTr.dataset.template = template;
+        _currentEditTr.dataset.note = note;
+        
+        const valueDisplay = isTemplate ? template : entity;
+        
+        _currentEditTr.querySelector('td:nth-child(1) .view-mode-element').textContent = label;
+        _currentEditTr.querySelector('td:nth-child(2) .view-mode-element').textContent = valueDisplay || '(未選択)';
+        _currentEditTr.querySelector('td:nth-child(3) .view-mode-element').textContent = note;
+        
+    } else if (_currentEditType === 'projection') {
+        const slug = modal.querySelector('.pt-slug-modal').value.trim();
+        const id = slug ? `external://${slug}` : '';
+        const displayName = modal.querySelector('.pt-name-modal').value.trim();
+        const roomSelect = modal.querySelector('.pt-room-modal');
+        
+        let roomText = '指定なし';
+        let roomValue = '';
+        if (roomSelect) {
+            if (roomSelect.tagName.toLowerCase() === 'select') {
+                const selectedOpt = roomSelect.options[roomSelect.selectedIndex];
+                roomText = selectedOpt ? (selectedOpt.value ? selectedOpt.textContent : '指定なし') : '指定なし';
+                roomValue = selectedOpt ? selectedOpt.value : '';
+            } else {
+                roomText = roomSelect.value || '指定なし';
+                roomValue = roomSelect.value || '';
+            }
+        }
+        
+        _currentEditTr.dataset.id = id;
+        _currentEditTr.dataset.displayName = displayName;
+        _currentEditTr.dataset.room = roomValue;
+        
+        _currentEditTr.querySelector('td:nth-child(1) .view-mode-element').textContent = id || '(新規デバイス)';
+        _currentEditTr.querySelector('td:nth-child(2) .view-mode-element').textContent = displayName;
+        
+        const roomDisplayEl = _currentEditTr.querySelector('.room-display');
+        if (roomDisplayEl) {
+            roomDisplayEl.textContent = roomText;
+        }
+    }
+    
+    isSettingsDirty = true;
+    closeEditModal();
 }
 
 function createPolicyRow(policy = '') {
@@ -2844,71 +2961,40 @@ function createSensorGroupCard(group = { title: '', contexts: [], items: [] }) {
 function renderSensorItemRow(container, item = { label: '', entity: '', template: '', note: '' }, isNew = false) {
     const tr = document.createElement('tr');
     tr.className = 'sensor-item-row';
-    if (isNew === true) {
-        tr.classList.add('edit-mode');
-    }
 
-    const isTemplate = !!item.template;
-    const initialValDisplay = isTemplate ? (item.template || '') : (item.entity || '');
+    // Set dataset attributes
+    tr.dataset.label = item.label || '';
+    tr.dataset.entity = item.entity || '';
+    tr.dataset.template = item.template || '';
+    tr.dataset.note = item.note || '';
+    tr.dataset.isTemplate = item.template ? 'true' : 'false';
+
+    const initialValDisplay = item.template ? (item.template || '') : (item.entity || '');
 
     tr.innerHTML = `
         <td>
             <div class="view-mode-element">${esc(item.label || '')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <input type="text" class="sensor-item-label form-input" placeholder="ラベル (例: リビング)" value="${esc(item.label)}">
-            </div>
         </td>
         <td>
             <div class="view-mode-element font-mono">${esc(initialValDisplay || '(未選択)')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <div class="sensor-entity-field-container" style="display: ${isTemplate ? 'none' : 'block'};">
-                    <select class="sensor-item-entity ha-entity-select-field form-input" data-domain="binary_sensor,sensor,input_boolean">
-                        <option value="">(ロード中...)</option>
-                    </select>
-                </div>
-                <div class="sensor-template-field-container" style="display: ${isTemplate ? 'block' : 'none'};">
-                    <input type="text" class="sensor-item-template form-input" placeholder="Template (例: {{ states('sensor.temp') }}℃)" value="${esc(item.template)}">
-                </div>
-                <div class="checkbox-group sensor-item-mode-checkbox" style="margin-top: 4px;">
-                    <label class="checkbox-label" style="font-size:11px;">
-                        <input type="checkbox" class="sensor-item-is-template" ${isTemplate ? 'checked' : ''} onchange="toggleSensorItemMode(this)"> 式(Template)
-                    </label>
-                </div>
-            </div>
         </td>
         <td>
             <div class="view-mode-element">${esc(item.note || '')}</div>
-            <div class="edit-mode-element" style="display: none;">
-                <input type="text" class="sensor-item-note form-input" placeholder="メモ (任意)" value="${esc(item.note)}">
-            </div>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+            <button type="button" class="btn-edit" onclick="openEditModal('sensor', this.closest('tr'))" title="編集">✏️</button>
         </td>
         <td style="text-align: center; vertical-align: middle;">
-            <button type="button" class="btn-remove-icon" onclick="this.closest('.sensor-item-row').remove(); isSettingsDirty = true;" title="削除">✕</button>
+            <button type="button" class="btn-remove-icon" onclick="if(confirm('このセンサーを削除しますか？')) { this.closest('.sensor-item-row').remove(); isSettingsDirty = true; }" title="削除">✕</button>
         </td>
     `;
 
     container.appendChild(tr);
 
-    const selectEntity = tr.querySelector('.sensor-item-entity');
-    initDropdownOptions(selectEntity, 'binary_sensor,sensor,input_boolean', item.entity);
-    setupInlineEditEvents(tr);
-}
-
-function toggleSensorItemMode(checkbox) {
-    const row = checkbox.closest('.sensor-item-row');
-    const entityContainer = row.querySelector('.sensor-entity-field-container');
-    const templateContainer = row.querySelector('.sensor-template-field-container');
-    
-    if (checkbox.checked) {
-        entityContainer.style.display = 'none';
-        templateContainer.style.display = 'block';
-    } else {
-        entityContainer.style.display = 'block';
-        templateContainer.style.display = 'none';
+    if (isNew) {
+        openEditModal('sensor', tr);
     }
+    return tr;
 }
 
 function addSensorItemRow(btn) {
