@@ -1767,20 +1767,24 @@ function serializeFormToPrefs() {
         const deviceEntityVal = card.querySelector('.speaker-entity').value.trim();
         if (!room) return;
 
-        const item = { room, label, type, note };
+        // ha_entity UI の場合、保存typeはentityのドメインから判定
+        let saveType = type;
+        if (type === 'tts' || type === 'notify') {
+            // 現在のentityからドメインを判定
+            const haSelectVal = card.querySelector('.speaker-ha-entity-select')?.value || deviceEntityVal;
+            if (haSelectVal.startsWith('notify.')) {
+                saveType = 'notify';
+            } else if (haSelectVal.startsWith('media_player.')) {
+                saveType = 'tts';
+            }
+        }
+
+        const item = { room, label, type: saveType, note };
         if (deviceEntityVal) {
             item.entity = deviceEntityVal;
         }
 
-        if (type === 'notify') {
-            const notifyEntityVal = card.querySelector('.speaker-notify-entity').value;
-            item.notify_entity = notifyEntityVal;
-            if (!deviceEntityVal && notifyEntityVal) {
-                item.entity = notifyEntityVal;
-            }
-            const title = card.querySelector('.speaker-notify-title').value.trim();
-            if (title) item.title = title;
-        } else if (type === 'tcp') {
+        if (saveType === 'tcp') {
             item.host = card.querySelector('.speaker-tcp-host').value.trim();
             const portVal = card.querySelector('.speaker-tcp-port').value.trim();
             item.port = portVal ? parseInt(portVal, 10) : 3334;
@@ -2130,6 +2134,58 @@ function addProjectionTargetRow(target = {}) {
     populateRoomSelect(roomSelect, room);
 }
 
+function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
+    selectEl.innerHTML = '<option value="">(選択してください)</option>';
+    const entities = entityList || {};
+    const mpList = (entities['media_player'] || []).map(e => ({...e, _domain: 'media_player'}));
+    const notifyList = (entities['notify'] || []).map(e => ({...e, _domain: 'notify'}));
+    
+    [[mpList, 'media_player'], [notifyList, 'notify']].forEach(([list, domain]) => {
+        if (!list.length) return;
+        const group = document.createElement('optgroup');
+        group.label = domain === 'media_player' ? 'スピーカー (media_player)' : '通知サービス (notify)';
+        list.sort((a, b) => {
+            const areaA = a.area || '';
+            const areaB = b.area || '';
+            if (areaA !== areaB) return areaA.localeCompare(areaB, 'ja');
+            return (a.friendly_name || '').localeCompare(b.friendly_name || '', 'ja');
+        });
+        list.forEach(ent => {
+            const opt = document.createElement('option');
+            opt.value = ent.entity_id;
+            const areaStr = ent.area ? `[${ent.area}] ` : '';
+            opt.textContent = `${areaStr}${ent.friendly_name} (${ent.entity_id})`;
+            if (ent.entity_id === currentValue) opt.selected = true;
+            group.appendChild(opt);
+        });
+        selectEl.appendChild(group);
+    });
+    
+    if (currentValue && !Array.from(selectEl.options).some(o => o.value === currentValue)) {
+        const opt = document.createElement('option');
+        opt.value = currentValue;
+        opt.textContent = `⚠️ ${currentValue} (未発見)`;
+        opt.selected = true;
+        selectEl.appendChild(opt);
+    }
+}
+window.populateSpeakerHaEntityDropdown = populateSpeakerHaEntityDropdown;
+
+function handleSpeakerHaEntityChange(select) {
+    const card = select.closest('.speaker-item');
+    const entityInput = card.querySelector('.speaker-entity');
+    if (select.value) {
+        entityInput.value = select.value;
+        entityInput.readOnly = true;
+        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+    } else {
+        entityInput.value = '';
+        entityInput.readOnly = false;
+        entityInput.style.background = '';
+    }
+}
+window.handleSpeakerHaEntityChange = handleSpeakerHaEntityChange;
+
 function createSpeakerCard(item = {}) {
     const speakersList = document.getElementById('speakers-list');
     const card = document.createElement('div');
@@ -2140,20 +2196,13 @@ function createSpeakerCard(item = {}) {
     const note = item.note || '';
     const type = item.type || 'tts';
 
+    const uiType = (type === 'tts' || type === 'notify') ? 'ha_entity' : type;
+
+    let haEntityVal = '';
     let deviceEntity = '';
-    let notifyEntity = '';
-    if (type === 'notify') {
-        if (item.notify_entity) {
-            notifyEntity = item.notify_entity;
-            deviceEntity = item.entity || '';
-        } else {
-            if (item.entity && item.entity.startsWith('notify.')) {
-                notifyEntity = item.entity;
-                deviceEntity = '';
-            } else {
-                deviceEntity = item.entity || '';
-            }
-        }
+    if (type === 'tts' || type === 'notify') {
+        haEntityVal = item.entity || item.notify_entity || '';
+        deviceEntity = haEntityVal;
     } else {
         deviceEntity = item.entity || '';
     }
@@ -2193,33 +2242,24 @@ function createSpeakerCard(item = {}) {
         </div>
         
         <div class="type-selector">
-            <button type="button" class="type-btn ${type === 'tts' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tts')">TTS (音声合成)</button>
-            <button type="button" class="type-btn ${type === 'notify' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'notify')">Notify (通知発話)</button>
-            <button type="button" class="type-btn ${type === 'tcp' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tcp')">TCP (PCM Push)</button>
+            <button type="button" class="type-btn ${uiType === 'ha_entity' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'ha_entity')">HAエンティティ</button>
+            <button type="button" class="type-btn ${uiType === 'tcp' ? 'active' : ''}" onclick="toggleSpeakerType(this, 'tcp')">TCP (PCM Push)</button>
             <input type="hidden" class="speaker-type" value="${esc(type)}">
         </div>
 
-        <div class="speaker-fields-tts" style="display: ${type === 'tts' ? 'block' : 'none'};">
-            <p class="form-hint" style="margin-top: 4px;">
-                TTSエンジンはグローバル設定の「TTSエンジン」を使用します。<br>
-                再生スピーカーには「デバイスID」に media_player の entity_id を設定してください。
-            </p>
-        </div>
-
-        <div class="speaker-fields-notify config-grid-2" style="display: ${type === 'notify' ? 'grid' : 'none'};">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>通知サービス (entity)</label>
-                <select class="speaker-notify-entity ha-entity-select-field form-input" data-domain="notify">
+        <div class="speaker-fields-ha-entity" style="display: ${uiType === 'ha_entity' ? 'grid' : 'none'}; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
+                <label>HAエンティティ (media_player.xxx / notify.xxx)</label>
+                <select class="speaker-ha-entity-select ha-entity-select-field form-input" data-domain="media_player" onchange="handleSpeakerHaEntityChange(this)">
                     <option value="">(ロード中...)</option>
                 </select>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>通知タイトル (title - 任意)</label>
-                <input type="text" class="speaker-notify-title form-input" placeholder="Embodied HA" value="${esc(item.title || '')}">
+                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">
+                    media_player → TTSで再生。notify → Alexa等の通知発話。TTSエンジンはグローバル設定を使用。
+                </p>
             </div>
         </div>
 
-        <div class="speaker-fields-tcp config-grid-2" style="display: ${type === 'tcp' ? 'grid' : 'none'};">
+        <div class="speaker-fields-tcp config-grid-2" style="display: ${uiType === 'tcp' ? 'grid' : 'none'};">
             <div class="form-group" style="margin-bottom:0;">
                 <label>ホスト (host)</label>
                 <input type="text" class="speaker-tcp-host form-input" placeholder="192.168.1.xxx" value="${esc(item.host || '')}">
@@ -2236,9 +2276,14 @@ function createSpeakerCard(item = {}) {
 
     speakersList.appendChild(card);
 
-    const selectNotify = card.querySelector('.speaker-notify-entity');
+    const selectHaEntity = card.querySelector('.speaker-ha-entity-select');
+    populateSpeakerHaEntityDropdown(selectHaEntity, haEntityVal);
 
-    initDropdownOptions(selectNotify, 'notify', notifyEntity);
+    if (uiType === 'ha_entity' && deviceEntity && deviceEntity.includes('.')) {
+        const entityInput = card.querySelector('.speaker-entity');
+        entityInput.readOnly = true;
+        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+    }
 }
 
 function toggleSpeakerType(btn, targetType) {
@@ -2247,10 +2292,32 @@ function toggleSpeakerType(btn, targetType) {
     buttons.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
-    card.querySelector('.speaker-type').value = targetType;
-    card.querySelector('.speaker-fields-tts').style.display = targetType === 'tts' ? 'block' : 'none';
-    card.querySelector('.speaker-fields-notify').style.display = targetType === 'notify' ? 'grid' : 'none';
+    const typeInput = card.querySelector('.speaker-type');
+    const entityInput = card.querySelector('.speaker-entity');
+
+    if (targetType !== 'tcp') {
+        typeInput.value = 'tts';
+    } else {
+        typeInput.value = 'tcp';
+    }
+
+    card.querySelector('.speaker-fields-ha-entity').style.display = targetType === 'ha_entity' ? 'grid' : 'none';
     card.querySelector('.speaker-fields-tcp').style.display = targetType === 'tcp' ? 'grid' : 'none';
+
+    const selectHaEntity = card.querySelector('.speaker-ha-entity-select');
+    if (targetType === 'ha_entity') {
+        if (selectHaEntity.value) {
+            entityInput.value = selectHaEntity.value;
+            entityInput.readOnly = true;
+            entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+        } else {
+            entityInput.readOnly = false;
+            entityInput.style.background = '';
+        }
+    } else {
+        entityInput.readOnly = false;
+        entityInput.style.background = '';
+    }
 }
 
 function addSpeakerRow() {
@@ -2318,17 +2385,41 @@ function createCameraCard(cam = { source: '', label: '', note: '' }) {
         opt.textContent = "✍️ 手動入力 (go2rtc名など)";
         selectSource.appendChild(opt);
     }
+
+    // 初期値がHAエンティティ（source.includes('.')）ならentityをreadonly
+    if (cam.source && cam.source.includes('.') && cam.source !== '__custom__') {
+        const entityInput = card.querySelector('.camera-entity');
+        // entityが未設定なら sourceと同じ値を自動入力
+        if (!entityInput.value) entityInput.value = cam.source;
+        entityInput.readOnly = true;
+        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+    }
 }
 
 function handleCameraSourceChange(select) {
     const card = select.closest('.camera-item');
     const customInput = card.querySelector('.camera-source-custom');
+    const entityInput = card.querySelector('.camera-entity');
+
     if (select.value === '__custom__') {
         customInput.style.display = 'block';
         customInput.focus();
+        // カスタム入力のときはentityを編集可能に戻す
+        entityInput.readOnly = false;
+        entityInput.style.background = '';
     } else {
         customInput.style.display = 'none';
         customInput.value = select.value;
+
+        // sourceがHAエンティティ（camera.xxxなど）ならentityを自動入力してreadonly
+        if (select.value.includes('.')) {
+            entityInput.value = select.value;
+            entityInput.readOnly = true;
+            entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+        } else {
+            entityInput.readOnly = false;
+            entityInput.style.background = '';
+        }
     }
 }
 
