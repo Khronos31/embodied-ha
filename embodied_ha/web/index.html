@@ -140,8 +140,9 @@
                     <div class="settings-tabs">
                         <button type="button" class="settings-tab-btn active" onclick="switchSettingsTab('general')">基本設定</button>
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('io')">入出力</button>
-                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">家電・その他デバイス</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">デバイス・センサー</button>
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('advanced')">高度な設定</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('other')">その他の機能</button>
                         <button type="button" class="settings-tab-btn experimental" onclick="switchSettingsTab('experimental')">実験中機能</button>
                     </div>
                 </header>
@@ -304,43 +305,93 @@
 
                     <!-- Tab 3: Devices & Sensors -->
                     <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
-                        <!-- Section: Entities (操作できる家電) -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>操作できる家電 (entities)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addEntityRow()">家電を追加</button>
+                        <!-- Section 1: 操作できる家電 (entities) -->
+                        <section class="settings-section card accordion-section" id="accordion-entities">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>操作できる家電 (entities)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add" onclick="event.stopPropagation(); addEntityRowAndOpen(this)">＋ 追加</button>
                             </div>
-                            <p class="section-desc">「リビングの電気つけて」のような操作を頼まれたとき、呼び方から entity_id を引くための対応表です。エンティティを選ぶと名前が自動で入ります（編集可）。同名が複数あるものは備考に「要確認」が付くので、不要な行は削除してください。</p>
-                            <div id="entities-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">「リビングの電気つけて」のような操作を頼まれたとき、呼び方から entity_id を引くための対応表です。エンティティを選ぶと名前が自動で入ります（編集可）。同名が複数あるものは備考に「要確認」が付くので、不要な行は削除してください。</p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>エンティティ (entity_id)</th>
+                                                <th>呼び方 (name)</th>
+                                                <th>備考 (note)</th>
+                                                <th style="width: 50px; text-align: center;">編集</th>
+                                                <th style="width: 50px; text-align: center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="entities-list">
+                                            <!-- Dynamically generated rows -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="table-actions">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addEntityRow()">＋ 家電を追加</button>
+                                </div>
                             </div>
                         </section>
 
-                        <!-- Section: Sensors -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>おもなデバイス (sensors)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addSensorGroup()">グループを追加</button>
+                        <!-- Section 2: 特に気にするセンサー (sensors) -->
+                        <section class="settings-section card accordion-section" id="accordion-sensors">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>特に気にするセンサー (sensors)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add" onclick="event.stopPropagation(); addSensorGroupAndOpen(this)">＋ 追加</button>
                             </div>
-                            <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
-                            <div id="sensors-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">観察ループ(watch)や会話(chat)で毎回コンテキストに渡す「おもなデバイス」センサーの定義です。</p>
+                                <div id="sensors-list" class="settings-list">
+                                    <!-- Dynamically generated groups -->
+                                </div>
+                                <div class="table-actions">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addSensorGroup()">＋ グループを追加</button>
+                                </div>
                             </div>
                         </section>
 
-                        <!-- Section: Projection Targets (電脳体の投射先デバイス) -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>電脳体の投射先デバイス (projection_targets)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addProjectionTargetRow()">デバイスを追加</button>
+                        <!-- Section 3: 外部デバイス (projection_targets) -->
+                        <section class="settings-section card accordion-section" id="accordion-projection-targets">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>外部デバイス (projection_targets)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add" onclick="event.stopPropagation(); addProjectionTargetRowAndOpen(this)">＋ 追加</button>
                             </div>
-                            <p class="section-desc">
-                                電脳体として侵入できる HA 管理外のデバイスを登録します。
-                                ID は <code>external://</code> で始まる識別子で、表示名と設置部屋を設定します。
-                                スマートフォンなど持ち歩くデバイスは部屋を「指定なし」にしてください。
-                            </p>
-                            <div id="projection-targets-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">
+                                    電脳体として侵入できる HA 管理外のデバイスを登録します。
+                                    ID は <code>external://</code> で始まる識別子で、表示名と設置部屋を設定します。
+                                    スマートフォンなど持ち歩くデバイスは部屋を「指定なし」にしてください。
+                                </p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ID (external://...)</th>
+                                                <th>表示名</th>
+                                                <th>部屋</th>
+                                                <th style="width: 50px; text-align: center;">編集</th>
+                                                <th style="width: 50px; text-align: center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="projection-targets-list">
+                                            <!-- Dynamically generated rows -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="table-actions">
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="addProjectionTargetRow()">＋ デバイスを追加</button>
+                                </div>
                             </div>
                         </section>
                     </div>
@@ -354,6 +405,10 @@
                                 <textarea id="setting-json-editor" placeholder="設定JSONを読み込み中..."></textarea>
                             </div>
                         </section>
+                    </div>
+
+                    <!-- Tab 5: Other Settings -->
+                    <div class="settings-tab-content" id="settings-tab-other" style="display:none;">
                     </div>
                     <!-- Tab 5: Experimental Features -->
                     <div class="settings-tab-content" id="settings-tab-experimental" style="display:none;">

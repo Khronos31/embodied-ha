@@ -1073,22 +1073,7 @@ select.ha-entity-select {
 }
 
 .sensor-item-row {
-    display: grid;
-    grid-template-columns: 1.2fr 1.5fr 1.2fr auto auto;
-    gap: 8px;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-@media (max-width: 768px) {
-    .sensor-item-row {
-        grid-template-columns: 1fr;
-        border-bottom: 1px dashed var(--claude-border);
-        padding-bottom: 12px;
-    }
-    .sensor-item-row:last-child {
-        border-bottom: none;
-    }
+    /* Inherits standard table row display */
 }
 
 .sensor-item-row input, .sensor-item-row select {
@@ -1981,3 +1966,178 @@ pre.terminal-log::-webkit-scrollbar-thumb {
 pre.terminal-log::-webkit-scrollbar-thumb:hover {
     background: #4e453d;
 }
+
+/* ==========================================================================
+   Table, Accordion & Inline Editing Styles
+   ========================================================================== */
+
+/* Settings Tables */
+.settings-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+    font-size: 14px;
+    background-color: var(--claude-card-bg);
+}
+
+.settings-table th,
+.settings-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--claude-border);
+    vertical-align: middle;
+}
+
+.settings-table th {
+    font-weight: 600;
+    color: var(--claude-text-main);
+    background-color: rgba(0, 0, 0, 0.02);
+    font-size: 12px;
+    border-bottom: 2px solid var(--claude-border);
+}
+
+.settings-table td input[type="text"],
+.settings-table td select {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    background-color: var(--claude-bg);
+}
+
+/* Edit and remove icon buttons */
+.btn-edit {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 6px;
+    border-radius: 4px;
+    transition: background-color 0.2s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--claude-text-sub);
+}
+
+.btn-edit:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: var(--claude-text-main);
+}
+
+.btn-remove-icon {
+    background: none;
+    border: none;
+    color: #dc2626;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 6px;
+    border-radius: 4px;
+    transition: background-color 0.2s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-remove-icon:hover {
+    background-color: rgba(220, 38, 38, 0.08);
+    color: #b91c1c;
+}
+
+/* Inline Edit modes */
+.entity-item:not(.edit-mode) .edit-mode-element,
+.sensor-item-row:not(.edit-mode) .edit-mode-element,
+.projection-target-item:not(.edit-mode) .edit-mode-element {
+    display: none !important;
+}
+
+.entity-item.edit-mode .view-mode-element,
+.sensor-item-row.edit-mode .view-mode-element,
+.projection-target-item.edit-mode .view-mode-element {
+    display: none !important;
+}
+
+.entity-item:not(.edit-mode) .view-mode-element,
+.sensor-item-row:not(.edit-mode) .view-mode-element,
+.projection-target-item:not(.edit-mode) .view-mode-element {
+    display: block;
+}
+
+.entity-item.edit-mode .edit-mode-element,
+.sensor-item-row.edit-mode .edit-mode-element,
+.projection-target-item.edit-mode .edit-mode-element {
+    display: block;
+}
+
+.sensor-item-mode-checkbox {
+    margin-top: 6px;
+}
+
+/* Accordions */
+.accordion-section {
+    margin-bottom: 16px;
+    padding: 0 !important;
+    overflow: hidden;
+}
+
+.accordion-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding: 16px 20px;
+    user-select: none;
+    background-color: rgba(0, 0, 0, 0.015);
+    transition: background-color 0.2s;
+}
+
+.accordion-header:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+.accordion-title-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.accordion-icon {
+    font-size: 11px;
+    color: var(--claude-text-sub);
+    width: 14px;
+    display: inline-block;
+    transition: transform 0.2s ease;
+}
+
+.accordion-header h3 {
+    margin: 0 !important;
+    font-family: var(--font-serif);
+    font-size: 16px !important;
+    font-weight: 600;
+    color: var(--claude-text-main);
+}
+
+.accordion-content {
+    padding: 20px;
+    border-top: 1px solid var(--claude-border);
+    background-color: var(--claude-card-bg);
+}
+
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    margin-bottom: 12px;
+}
+
+.table-actions {
+    display: flex;
+    justify-content: flex-start;
+    margin-top: 8px;
+}
+
+.btn-accordion-add {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+}
+

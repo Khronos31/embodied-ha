@@ -1724,12 +1724,14 @@ async function switchSettingsTab(tabName) {
     const tabIo = document.getElementById('settings-tab-io');
     const tabDevices = document.getElementById('settings-tab-devices');
     const tabAdvanced = document.getElementById('settings-tab-advanced');
+    const tabOther = document.getElementById('settings-tab-other');
     const tabExperimental = document.getElementById('settings-tab-experimental');
 
     if (tabGeneral) tabGeneral.style.display = tabName === 'general' ? 'block' : 'none';
     if (tabIo) tabIo.style.display = tabName === 'io' ? 'block' : 'none';
     if (tabDevices) tabDevices.style.display = tabName === 'devices' ? 'block' : 'none';
     if (tabAdvanced) tabAdvanced.style.display = tabName === 'advanced' ? 'block' : 'none';
+    if (tabOther) tabOther.style.display = tabName === 'other' ? 'block' : 'none';
     if (tabExperimental) tabExperimental.style.display = tabName === 'experimental' ? 'block' : 'none';
     if (tabName === 'experimental') {
         await refreshAntigravityStatus();
@@ -2049,67 +2051,74 @@ function renderProjectionTargetList(targets) {
     if (!listEl) return;
     listEl.innerHTML = '';
     if (Array.isArray(targets)) {
-        targets.forEach(t => addProjectionTargetRow(t));
+        targets.forEach(t => addProjectionTargetRow(t, false));
     }
 }
 
-function addProjectionTargetRow(target = {}) {
+function addProjectionTargetRow(target = {}, isNew = false) {
     const listEl = document.getElementById('projection-targets-list');
     if (!listEl) return;
-    const card = document.createElement('div');
-    card.className = 'setting-item-card projection-target-item';
+    const tr = document.createElement('tr');
+    tr.className = 'projection-target-item';
+    if (isNew === true) {
+        tr.classList.add('edit-mode');
+    }
 
     const id = target.id || '';
     const slug = (target.id || '').replace(/^external:\/\//, '');
     const displayName = target.display_name || '';
     const room = target.room || '';
 
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title">外部デバイス</span>
-            <button type="button" class="btn-remove" onclick="this.closest('.projection-target-item').remove()">
-                ✕ 削除
-            </button>
-        </div>
-        <div class="config-grid-3">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>表示名 (display_name)</label>
-                <input type="text" class="pt-display-name form-input" placeholder="例: Astrolabe（スタディ）" value="${esc(displayName)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ID スラグ (id)</label>
+    tr.innerHTML = `
+        <td>
+            <div class="view-mode-element font-mono">${esc(id || '(新規デバイス)')}</div>
+            <div class="edit-mode-element" style="display: none;">
                 <div class="input-prefix-group" style="display:flex; align-items:center;">
                     <span class="input-prefix" style="
-        padding: 0 8px;
-        background: var(--claude-bg);
-        border: 1px solid var(--claude-border);
-        border-right: none;
-        border-radius: 6px 0 0 6px;
-        color: var(--claude-text-sub, #888);
-        font-size: 13px;
-        height: 36px;
-        line-height: 36px;
-        white-space: nowrap;
-    ">external://</span>
+                        padding: 0 8px;
+                        background: var(--claude-bg);
+                        border: 1px solid var(--claude-border);
+                        border-right: none;
+                        border-radius: 6px 0 0 6px;
+                        color: var(--claude-text-sub, #888);
+                        font-size: 13px;
+                        height: 36px;
+                        line-height: 36px;
+                        white-space: nowrap;
+                    ">external://</span>
                     <input type="text" class="pt-id-slug form-input" placeholder="device_name" value="${esc(slug)}" style="
-        border-radius: 0 6px 6px 0;
-        flex: 1;
-    ">
+                        border-radius: 0 6px 6px 0;
+                        flex: 1;
+                    ">
                 </div>
             </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>設置部屋 (room)</label>
+        </td>
+        <td>
+            <div class="view-mode-element">${esc(displayName || '')}</div>
+            <div class="edit-mode-element" style="display: none;">
+                <input type="text" class="pt-display-name form-input" placeholder="例: Astrolabe（スタディ）" value="${esc(displayName)}">
+            </div>
+        </td>
+        <td>
+            <div class="view-mode-element">${esc(room || '指定なし')}</div>
+            <div class="edit-mode-element" style="display: none;">
                 <select class="pt-room form-input">
                     <option value="">指定なし（モバイル等）</option>
                 </select>
             </div>
-        </div>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-remove-icon" onclick="this.closest('.projection-target-item').remove(); isSettingsDirty = true;" title="削除">✕</button>
+        </td>
     `;
 
-    listEl.appendChild(card);
+    listEl.appendChild(tr);
 
-    const nameInput = card.querySelector('.pt-display-name');
-    const slugInput = card.querySelector('.pt-id-slug');
+    const nameInput = tr.querySelector('.pt-display-name');
+    const slugInput = tr.querySelector('.pt-id-slug');
     if (!id) {
         slugInput.dataset.autoGenerated = 'true';
     } else {
@@ -2130,8 +2139,9 @@ function addProjectionTargetRow(target = {}) {
         slugInput.dataset.autoGenerated = 'false';
     });
 
-    const roomSelect = card.querySelector('.pt-room');
+    const roomSelect = tr.querySelector('.pt-room');
     populateRoomSelect(roomSelect, room);
+    setupInlineEditEvents(tr);
 }
 
 function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
@@ -2580,41 +2590,170 @@ function findFriendlyName(eid) {
     return '';
 }
 
-function createEntityCard(ent = { name: '', entity_id: '', note: '' }) {
+// --- Accordion & Inline Edit Helpers ---
+function toggleAccordion(header) {
+    const section = header.closest('.accordion-section');
+    const content = section.querySelector('.accordion-content');
+    const icon = section.querySelector('.accordion-icon');
+    
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.textContent = '▼';
+    } else {
+        content.style.display = 'none';
+        icon.textContent = '▶';
+    }
+}
+
+function addEntityRowAndOpen(btn) {
+    const section = document.getElementById('accordion-entities');
+    const content = section.querySelector('.accordion-content');
+    const icon = section.querySelector('.accordion-icon');
+    content.style.display = 'block';
+    icon.textContent = '▼';
+    addEntityRow();
+}
+
+function addSensorGroupAndOpen(btn) {
+    const section = document.getElementById('accordion-sensors');
+    const content = section.querySelector('.accordion-content');
+    const icon = section.querySelector('.accordion-icon');
+    content.style.display = 'block';
+    icon.textContent = '▼';
+    addSensorGroup();
+}
+
+function addProjectionTargetRowAndOpen(btn) {
+    const section = document.getElementById('accordion-projection-targets');
+    const content = section.querySelector('.accordion-content');
+    const icon = section.querySelector('.accordion-icon');
+    content.style.display = 'block';
+    icon.textContent = '▼';
+    addProjectionTargetRow();
+}
+
+function toggleRowEdit(btn) {
+    const tr = btn.closest('tr');
+    if (!tr) return;
+    
+    const isEditing = tr.classList.contains('edit-mode');
+    if (isEditing) {
+        tr.classList.remove('edit-mode');
+        btn.textContent = '✏️';
+        updateRowViewText(tr);
+        isSettingsDirty = true;
+    } else {
+        tr.classList.add('edit-mode');
+        btn.textContent = '✓';
+        const firstInput = tr.querySelector('input, select');
+        if (firstInput) {
+            firstInput.focus();
+        }
+    }
+}
+
+function updateRowViewText(tr) {
+    if (tr.classList.contains('entity-item')) {
+        const select = tr.querySelector('.entity-eid');
+        const nameVal = tr.querySelector('.entity-name').value;
+        const noteVal = tr.querySelector('.entity-note').value;
+        
+        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = select.value || '(未選択)';
+        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = nameVal;
+        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = noteVal;
+    } else if (tr.classList.contains('sensor-item-row')) {
+        const labelVal = tr.querySelector('.sensor-item-label').value;
+        const isTemplate = tr.querySelector('.sensor-item-is-template').checked;
+        const noteVal = tr.querySelector('.sensor-item-note').value;
+        let valueDisplay = '';
+        if (isTemplate) {
+            valueDisplay = tr.querySelector('.sensor-item-template').value;
+        } else {
+            valueDisplay = tr.querySelector('.sensor-item-entity').value;
+        }
+        
+        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = labelVal;
+        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = valueDisplay || '(未選択)';
+        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = noteVal;
+    } else if (tr.classList.contains('projection-target-item')) {
+        const slugVal = tr.querySelector('.pt-id-slug').value.trim();
+        const idVal = slugVal ? `external://${slugVal}` : '';
+        const nameVal = tr.querySelector('.pt-display-name').value.trim();
+        const roomSelect = tr.querySelector('.pt-room');
+        let roomText = '指定なし';
+        if (roomSelect) {
+            if (roomSelect.tagName.toLowerCase() === 'select') {
+                const selectedOpt = roomSelect.options[roomSelect.selectedIndex];
+                roomText = selectedOpt ? (selectedOpt.value ? selectedOpt.textContent : '指定なし') : '指定なし';
+            } else {
+                roomText = roomSelect.value || '指定なし';
+            }
+        }
+        
+        tr.querySelector('td:nth-child(1) .view-mode-element').textContent = idVal || '(新規デバイス)';
+        tr.querySelector('td:nth-child(2) .view-mode-element').textContent = nameVal;
+        tr.querySelector('td:nth-child(3) .view-mode-element').textContent = roomText;
+    }
+}
+
+function setupInlineEditEvents(tr) {
+    tr.addEventListener('focusout', (event) => {
+        setTimeout(() => {
+            if (!tr.contains(document.activeElement)) {
+                const editBtn = tr.querySelector('.btn-edit');
+                if (tr.classList.contains('edit-mode')) {
+                    tr.classList.remove('edit-mode');
+                    if (editBtn) editBtn.textContent = '✏️';
+                    updateRowViewText(tr);
+                    isSettingsDirty = true;
+                }
+            }
+        }, 50);
+    });
+}
+
+function createEntityCard(ent = { name: '', entity_id: '', note: '' }, isNew = false) {
     const entitiesList = document.getElementById('entities-list');
-    const card = document.createElement('div');
-    card.className = 'setting-item-card entity-item';
+    const tr = document.createElement('tr');
+    tr.className = 'entity-item';
+    if (isNew === true) {
+        tr.classList.add('edit-mode');
+    }
 
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title">家電</span>
-            <button type="button" class="btn-remove" onclick="this.closest('.entity-item').remove()">
-                ✕ 削除
-            </button>
-        </div>
-
-        <div class="config-grid-3">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>エンティティ (entity_id)</label>
+    tr.innerHTML = `
+        <td>
+            <div class="view-mode-element font-mono">${esc(ent.entity_id || '(未選択)')}</div>
+            <div class="edit-mode-element" style="display: none;">
                 <select class="entity-eid ha-entity-select-field form-input" data-domain="${ENTITY_CONTROLLABLE_DOMAINS}" onchange="handleEntitySelectChange(this)">
                     <option value="">(ロード中...)</option>
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>呼び方 (name)</label>
+        </td>
+        <td>
+            <div class="view-mode-element">${esc(ent.name || '')}</div>
+            <div class="edit-mode-element" style="display: none;">
                 <input type="text" class="entity-name form-input" placeholder="例: リビングのライト" value="${esc(ent.name)}">
             </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>備考 (note)</label>
-                <input type="text" class="entity-note form-input" placeholder="例: 要確認（同名複数）" value="${esc(ent.note)}">
+        </td>
+        <td>
+            <div class="view-mode-element">${esc(ent.note || '')}</div>
+            <div class="edit-mode-element" style="display: none;">
+                <input type="text" class="entity-note form-input" placeholder="例: 要確認" value="${esc(ent.note)}">
             </div>
-        </div>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-remove-icon" onclick="this.closest('.entity-item').remove(); isSettingsDirty = true;" title="削除">✕</button>
+        </td>
     `;
 
-    entitiesList.appendChild(card);
+    entitiesList.appendChild(tr);
 
-    const selectEid = card.querySelector('.entity-eid');
+    const selectEid = tr.querySelector('.entity-eid');
     initDropdownOptions(selectEid, ENTITY_CONTROLLABLE_DOMAINS, ent.entity_id);
+    setupInlineEditEvents(tr);
 }
 
 // エンティティを選んだとき、呼び方が空なら friendly_name を自動で入れる。
@@ -2627,7 +2766,7 @@ function handleEntitySelectChange(select) {
 }
 
 function addEntityRow() {
-    createEntityCard();
+    createEntityCard({ name: '', entity_id: '', note: '' }, true);
 }
 
 function createPolicyRow(policy = '') {
@@ -2670,12 +2809,25 @@ function createSensorGroupCard(group = { title: '', contexts: [], items: [] }) {
                 </label>
             </div>
 
-            <button type="button" class="btn btn-secondary btn-sm" onclick="addSensorItemRow(this)">項目追加</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="addSensorItemRow(this)">＋ 項目追加</button>
             <button type="button" class="btn-remove" onclick="this.closest('.sensor-group-card').remove()">✕ グループ削除</button>
         </div>
         
-        <div class="sensor-items-list">
-            <!-- Dynamic -->
+        <div class="table-responsive">
+            <table class="settings-table">
+                <thead>
+                    <tr>
+                        <th>ラベル (label)</th>
+                        <th>エンティティ or テンプレート</th>
+                        <th>メモ (note)</th>
+                        <th style="width: 50px; text-align: center;">編集</th>
+                        <th style="width: 50px; text-align: center;">削除</th>
+                    </tr>
+                </thead>
+                <tbody class="sensor-items-list">
+                    <!-- Dynamic rows -->
+                </tbody>
+            </table>
         </div>
     `;
 
@@ -2689,44 +2841,60 @@ function createSensorGroupCard(group = { title: '', contexts: [], items: [] }) {
     }
 }
 
-function renderSensorItemRow(container, item = { label: '', entity: '', template: '', note: '' }) {
-    const row = document.createElement('div');
-    row.className = 'sensor-item-row';
+function renderSensorItemRow(container, item = { label: '', entity: '', template: '', note: '' }, isNew = false) {
+    const tr = document.createElement('tr');
+    tr.className = 'sensor-item-row';
+    if (isNew === true) {
+        tr.classList.add('edit-mode');
+    }
 
     const isTemplate = !!item.template;
+    const initialValDisplay = isTemplate ? (item.template || '') : (item.entity || '');
 
-    row.innerHTML = `
-        <div class="form-group" style="margin-bottom:0;">
-            <input type="text" class="sensor-item-label form-input" placeholder="ラベル (例: リビング)" value="${esc(item.label)}">
-        </div>
-        
-        <div class="form-group sensor-entity-field-container" style="margin-bottom:0; display: ${isTemplate ? 'none' : 'block'};">
-            <select class="sensor-item-entity ha-entity-select-field form-input" data-domain="binary_sensor,sensor,input_boolean">
-                <option value="">(ロード中...)</option>
-            </select>
-        </div>
-        
-        <div class="form-group sensor-template-field-container" style="margin-bottom:0; display: ${isTemplate ? 'block' : 'none'};">
-            <input type="text" class="sensor-item-template form-input" placeholder="Template (例: {{ states('sensor.temp') }}℃)" value="${esc(item.template)}">
-        </div>
-
-        <div class="form-group" style="margin-bottom:0;">
-            <input type="text" class="sensor-item-note form-input" placeholder="メモ (任意)" value="${esc(item.note)}">
-        </div>
-
-        <div class="checkbox-group" style="margin-right: 6px;">
-            <label class="checkbox-label" style="font-size:11px;">
-                <input type="checkbox" class="sensor-item-is-template" ${isTemplate ? 'checked' : ''} onchange="toggleSensorItemMode(this)"> 式(Template)
-            </label>
-        </div>
-
-        <button type="button" class="btn-remove" onclick="this.closest('.sensor-item-row').remove()" style="padding: 4px;">✕</button>
+    tr.innerHTML = `
+        <td>
+            <div class="view-mode-element">${esc(item.label || '')}</div>
+            <div class="edit-mode-element" style="display: none;">
+                <input type="text" class="sensor-item-label form-input" placeholder="ラベル (例: リビング)" value="${esc(item.label)}">
+            </div>
+        </td>
+        <td>
+            <div class="view-mode-element font-mono">${esc(initialValDisplay || '(未選択)')}</div>
+            <div class="edit-mode-element" style="display: none;">
+                <div class="sensor-entity-field-container" style="display: ${isTemplate ? 'none' : 'block'};">
+                    <select class="sensor-item-entity ha-entity-select-field form-input" data-domain="binary_sensor,sensor,input_boolean">
+                        <option value="">(ロード中...)</option>
+                    </select>
+                </div>
+                <div class="sensor-template-field-container" style="display: ${isTemplate ? 'block' : 'none'};">
+                    <input type="text" class="sensor-item-template form-input" placeholder="Template (例: {{ states('sensor.temp') }}℃)" value="${esc(item.template)}">
+                </div>
+                <div class="checkbox-group sensor-item-mode-checkbox" style="margin-top: 4px;">
+                    <label class="checkbox-label" style="font-size:11px;">
+                        <input type="checkbox" class="sensor-item-is-template" ${isTemplate ? 'checked' : ''} onchange="toggleSensorItemMode(this)"> 式(Template)
+                    </label>
+                </div>
+            </div>
+        </td>
+        <td>
+            <div class="view-mode-element">${esc(item.note || '')}</div>
+            <div class="edit-mode-element" style="display: none;">
+                <input type="text" class="sensor-item-note form-input" placeholder="メモ (任意)" value="${esc(item.note)}">
+            </div>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-edit" onclick="toggleRowEdit(this)" title="編集">${isNew === true ? '✓' : '✏️'}</button>
+        </td>
+        <td style="text-align: center; vertical-align: middle;">
+            <button type="button" class="btn-remove-icon" onclick="this.closest('.sensor-item-row').remove(); isSettingsDirty = true;" title="削除">✕</button>
+        </td>
     `;
 
-    container.appendChild(row);
+    container.appendChild(tr);
 
-    const selectEntity = row.querySelector('.sensor-item-entity');
+    const selectEntity = tr.querySelector('.sensor-item-entity');
     initDropdownOptions(selectEntity, 'binary_sensor,sensor,input_boolean', item.entity);
+    setupInlineEditEvents(tr);
 }
 
 function toggleSensorItemMode(checkbox) {
@@ -2746,7 +2914,7 @@ function toggleSensorItemMode(checkbox) {
 function addSensorItemRow(btn) {
     const card = btn.closest('.sensor-group-card');
     const container = card.querySelector('.sensor-items-list');
-    renderSensorItemRow(container);
+    renderSensorItemRow(container, { label: '', entity: '', template: '', note: '' }, true);
 }
 
 function addSensorGroup() {
