@@ -1082,7 +1082,7 @@ async function loadSttLanguages(provider) {
 
     if (!provider) {
         sel.innerHTML = '<option value="">（プロバイダー未設定）</option>';
-        sel.disabled = false;
+        sel.disabled = true;
         sel.classList.remove('stt-loading');
         if (loading) loading.classList.remove('visible');
         return;
@@ -1107,7 +1107,7 @@ async function loadSttLanguages(provider) {
         sel.innerHTML = '<option value=""></option>';
         if (errorBnr) errorBnr.classList.add('visible');
     } finally {
-        sel.disabled = false;
+        sel.disabled = !provider;
         sel.classList.remove('stt-loading');
         if (loading) loading.classList.remove('visible');
     }
@@ -2231,9 +2231,9 @@ function createSpeakerCard(item = {}) {
                 <input type="text" class="speaker-label form-input" placeholder="例: 書斎（Nest Mini）" value="${esc(label)}">
             </div>
             <div class="form-group" style="margin-bottom:0;">
-                <label>デバイスID (entity)</label>
+                <label>ペアリングID (entity)</label>
                 <input type="text" class="speaker-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(deviceEntity)}">
-                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">対応する音声ソースと同じIDを設定すると、同一デバイス扱いになります。</p>
+                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">同じIDを持つ音声ソースと同一デバイス扱いになります。TCPスピーカーのみ設定が必要です。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>メモ (note)</label>
@@ -2253,9 +2253,6 @@ function createSpeakerCard(item = {}) {
                 <select class="speaker-ha-entity-select ha-entity-select-field form-input" data-domain="media_player" onchange="handleSpeakerHaEntityChange(this)">
                     <option value="">(ロード中...)</option>
                 </select>
-                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">
-                    media_player → TTSで再生。notify → Alexa等の通知発話。TTSエンジンはグローバル設定を使用。
-                </p>
             </div>
         </div>
 
@@ -2337,7 +2334,7 @@ function createCameraCard(cam = { source: '', label: '', note: '' }) {
             </button>
         </div>
         
-        <div class="config-grid-3">
+        <div class="config-grid-4">
             <div class="form-group" style="margin-bottom:0;">
                 <label>ソース名 (entity_id または go2rtc名)</label>
                 <select class="camera-source ha-entity-select-field form-input" data-domain="camera" onchange="handleCameraSourceChange(this)">
@@ -2346,11 +2343,11 @@ function createCameraCard(cam = { source: '', label: '', note: '' }) {
                 <input type="text" class="camera-source-custom form-input" placeholder="またはカスタム名を入力..." value="${esc(cam.source)}" style="margin-top: 6px; display:none;">
             </div>
             <div class="form-group" style="margin-bottom:0;">
-                <label>デバイスID (entity)</label>
+                <label>カメラID (entity)</label>
                 <input type="text" class="camera-entity form-input"
                        placeholder="例: camera_tv（go2rtcの場合）/ camera.xxx（HA統合の場合）"
                        value="${esc(cam.entity || '')}">
-                <p class="form-hint">電脳体として侵入するときの識別ID。go2rtcストリームは任意の短い名前、HA統合カメラは entity_id（camera.xxx）をそのまま使う。</p>
+                <p class="form-hint camera-entity-hint">HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>ラベル名 (label)</label>
@@ -2387,12 +2384,16 @@ function createCameraCard(cam = { source: '', label: '', note: '' }) {
     }
 
     // 初期値がHAエンティティ（source.includes('.')）ならentityをreadonly
+    const entityInput = card.querySelector('.camera-entity');
+    const entityHint = card.querySelector('.camera-entity-hint');
     if (cam.source && cam.source.includes('.') && cam.source !== '__custom__') {
-        const entityInput = card.querySelector('.camera-entity');
         // entityが未設定なら sourceと同じ値を自動入力
         if (!entityInput.value) entityInput.value = cam.source;
         entityInput.readOnly = true;
         entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+        if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
+    } else {
+        if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
     }
 }
 
@@ -2400,6 +2401,7 @@ function handleCameraSourceChange(select) {
     const card = select.closest('.camera-item');
     const customInput = card.querySelector('.camera-source-custom');
     const entityInput = card.querySelector('.camera-entity');
+    const entityHint = card.querySelector('.camera-entity-hint');
 
     if (select.value === '__custom__') {
         customInput.style.display = 'block';
@@ -2407,6 +2409,7 @@ function handleCameraSourceChange(select) {
         // カスタム入力のときはentityを編集可能に戻す
         entityInput.readOnly = false;
         entityInput.style.background = '';
+        if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
     } else {
         customInput.style.display = 'none';
         customInput.value = select.value;
@@ -2416,9 +2419,11 @@ function handleCameraSourceChange(select) {
             entityInput.value = select.value;
             entityInput.readOnly = true;
             entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+            if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
         } else {
             entityInput.readOnly = false;
             entityInput.style.background = '';
+            if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
         }
     }
 }
@@ -2479,18 +2484,14 @@ function addAudioSourceRow(source = {}) {
                 <input type="text" class="audio-source-label form-input" placeholder="例：台所（VoiceS3R）" value="${esc(labelVal)}">
             </div>
             <div class="form-group" style="margin-bottom:0;">
-                <label>デバイスID (entity)</label>
+                <label>ハードウェアID (entity)</label>
                 <input type="text" class="audio-source-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(source.entity || '')}">
-                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">電脳体として侵入するときの識別ID。VoiceS3R等の特殊デバイスのみ設定。</p>
+                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">VoiceS3R等の特殊デバイスのみ設定。スピーカー側の「ペアリングID」と揃えることで同一デバイスとして扱われます。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>メモ (note)</label>
                 <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(noteVal)}">
             </div>
-        </div>
-
-        <div class="form-hint" style="margin-top:8px;">
-            💡 RTSP / TCP / ALSA の接続先を URI で指定します。（例: <code>rtsp://192.168.1.130:8558/mic_only</code>, <code>tcp://192.168.1.153:3333</code>, <code>alsa://default</code>）
         </div>
 
         <div class="config-grid-3" style="margin-top:12px;">
@@ -2752,6 +2753,32 @@ function addSensorGroup() {
     createSensorGroupCard();
 }
 
+function highlightAndFocusValidationError(element, message) {
+    showSaveStatus(message, 'error');
+    if (!element) return;
+
+    // 祖先タブコンテンツを探す
+    const tabContent = element.closest('.settings-tab-content');
+    if (tabContent && tabContent.id) {
+        const tabName = tabContent.id.replace('settings-tab-', '');
+        switchSettingsTab(tabName);
+    }
+
+    // 一時的に赤いボーダーを付ける
+    element.style.outline = '2px solid red';
+    element.focus();
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // input/changeイベントでボーダーを消す
+    const removeOutline = () => {
+        element.style.outline = '';
+        element.removeEventListener('input', removeOutline);
+        element.removeEventListener('change', removeOutline);
+    };
+    element.addEventListener('input', removeOutline);
+    element.addEventListener('change', removeOutline);
+}
+
 async function handleSaveSettings(e) {
     e.preventDefault();
     
@@ -2765,7 +2792,7 @@ async function handleSaveSettings(e) {
     const newExtraContext = document.getElementById('setting-extra-context')?.value || "";
     
     if (!newCharacter || newCharacter.trim().length < 10) {
-        showSaveStatus('キャラクター定義が短すぎるか空です。保存を中断しました。', 'error');
+        highlightAndFocusValidationError(document.getElementById('setting-character'), 'キャラクター定義が短すぎるか空です。保存を中断しました。');
         return;
     }
 
@@ -2786,14 +2813,17 @@ async function handleSaveSettings(e) {
         // フォームタブがアクティブな場合
         const speakerCards = document.querySelectorAll('.speaker-item');
         let validationError = null;
+        let errorInput = null;
         speakerCards.forEach(card => {
-            const roomName = card.querySelector('.speaker-room-name').value.trim();
-            if (!roomName) {
+            const roomInput = card.querySelector('.speaker-room-name');
+            const roomName = roomInput.value.trim();
+            if (!roomName && !validationError) {
                 validationError = "スピーカー設定で部屋名が空の項目があります。";
+                errorInput = roomInput;
             }
         });
         if (validationError) {
-            showSaveStatus(validationError, 'error');
+            highlightAndFocusValidationError(errorInput, validationError);
             return;
         }
         nextPrefs = serializeFormToPrefs();
@@ -2802,7 +2832,8 @@ async function handleSaveSettings(e) {
     const spk = nextPrefs.speakers;
     const hasSpeakers = Array.isArray(spk) ? spk.length > 0 : Object.keys(spk || {}).length > 0;
     if (!hasSpeakers) {
-        showSaveStatus('スピーカーが1つも登録されていません。', 'error');
+        const addSpeakerBtn = document.querySelector('button[onclick="addSpeakerRow()"]');
+        highlightAndFocusValidationError(addSpeakerBtn, 'スピーカーが1つも登録されていません。');
         return;
     }
 

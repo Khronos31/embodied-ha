@@ -984,7 +984,7 @@ select.ha-entity-select {
     gap: 12px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
     .config-grid-2, .config-grid-3, .config-grid-4 {
         grid-template-columns: 1fr;
     }
@@ -1074,7 +1074,7 @@ select.ha-entity-select {
 
 .sensor-item-row {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr auto;
+    grid-template-columns: 1.2fr 1.5fr 1.2fr auto auto;
     gap: 8px;
     align-items: center;
     margin-bottom: 8px;
@@ -1708,7 +1708,7 @@ select.stt-loading {
     margin-bottom: 12px;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
     .dashboard-grid {
         grid-template-columns: 1fr;
     }
