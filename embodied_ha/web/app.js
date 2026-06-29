@@ -41,7 +41,7 @@ const FEATURE_CATALOG = [
     id: "aozora",
     icon: "📚",
     name: "青空文庫",
-    description: "あかねが読みたい本を申請し、読書進捗・感想を記録します。（近日公開）",
+    descriptionTemplate: "{name}が読みたい本を申請し、読書進捗・感想を記録します。（近日公開）",
     disabled: true,
   },
 ];
@@ -4214,7 +4214,7 @@ function renderOtherFeaturesCatalog() {
                 <div class="feature-catalog-icon">${feature.icon}</div>
                 <div class="feature-catalog-info">
                     <div class="feature-catalog-name">${feature.name}</div>
-                    <div class="feature-catalog-desc">${feature.description}</div>
+                    <div class="feature-catalog-desc">${(feature.descriptionTemplate || feature.description || '').replace('{name}', characterName)}</div>
                 </div>
                 <div class="feature-catalog-action">
                     ${btnHtml}
