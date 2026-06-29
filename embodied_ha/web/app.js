@@ -4043,13 +4043,9 @@ async function handleToggleAutoApprove(checkbox) {
     
     try {
         await fetch(`${base}/api/preferences`, {
-            method: 'PATCH',
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                ai_lounge: {
-                    auto_approve: autoApprove
-                }
-            })
+            body: JSON.stringify(prefsData)
         });
     } catch (err) {
         console.warn("Failed to patch preferences for auto_approve", err);
@@ -4119,7 +4115,7 @@ async function addFeature(featureId) {
     } else {
         try {
             const response = await fetch(`${base}/api/preferences`, {
-                method: 'POST',
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(prefsData)
             });
