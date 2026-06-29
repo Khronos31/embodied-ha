@@ -259,6 +259,8 @@ def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snap
             "ANOMALY_CONTEXT": anomaly_state.format_context_block(anomaly_state_snapshot),
             "ANOMALY_URGENCY": str(anomaly_state.compute_explore_urgency(anomaly_state_snapshot)),
         }
+        if mode:
+            env["MODE"] = mode
         if active_desires:
             env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
