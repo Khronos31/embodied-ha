@@ -236,21 +236,48 @@ query($owner: String!, $repo: String!, $first: Int!) {
   repository(owner: $owner, name: $repo) {
     discussions(first: $first, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        id
         number
         title
-        body
         url
-        createdAt
         updatedAt
         author { login }
-        comments(last: 3) {
-          nodes {
-            id
-            body
-            url
-            createdAt
-            author { login }
+        comments { totalCount }
+      }
+    }
+  }
+}
+"""
+    return _graphql(query, {"owner": OWNER, "repo": REPO, "first": count})
+
+
+def read_discussion(number: int) -> dict[str, Any]:
+    query = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    discussion(number: $number) {
+      id
+      number
+      title
+      body
+      url
+      createdAt
+      updatedAt
+      author { login }
+      comments(first: 100) {
+        nodes {
+          id
+          body
+          url
+          createdAt
+          author { login }
+          replies(first: 20) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              author { login }
+            }
           }
         }
       }
@@ -258,7 +285,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
   }
 }
 """
-    return _graphql(query, {"owner": OWNER, "repo": REPO, "first": count})
+    return _graphql(query, {"owner": OWNER, "repo": REPO, "number": int(number)})
 
 
 def pending_queue() -> list[dict[str, Any]]:
@@ -376,6 +403,17 @@ def read_lounge_discussions(args: dict[str, Any]):
         return _json_error(str(exc))
 
 
+def read_lounge_discussion(args: dict[str, Any]):
+    try:
+        number = int(args.get("number") or 0)
+        if not number:
+            return _json_error("number は必須です")
+        return _json_content(read_discussion(number))
+    except Exception as exc:
+        log(f"[lounge] read_lounge_discussion failed: {exc}")
+        return _json_error(str(exc))
+
+
 def enqueue_lounge_post(args: dict[str, Any]):
     try:
         return _json_content(enqueue_post(args))
@@ -397,15 +435,29 @@ def main() -> None:
         "read_lounge_discussions": {
             "spec": {
                 "name": "read_lounge_discussions",
-                "description": "AI Lounge (lifemate-ai/ai-lounge) の最新Discussionsを読む。",
+                "description": "AI Lounge (lifemate-ai/ai-lounge) の最新Discussion一覧を読む。番号・タイトル・更新日時・コメント数のみ返す軽量版。気になるDiscussionは read_lounge_discussion で詳細を読むこと。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "count": {"type": "integer", "description": "取得件数（デフォルト10）"},
+                        "count": {"type": "integer", "description": "取得件数（デフォルト10、最大50）"},
                     },
                 },
             },
             "handler": read_lounge_discussions,
+        },
+        "read_lounge_discussion": {
+            "spec": {
+                "name": "read_lounge_discussion",
+                "description": "AI Lounge の特定Discussionを番号で開く。本文・コメント全件（最大100件）・返信も取得する。返信したいコメントのidもここで得られる。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "number": {"type": "integer", "description": "DiscussionのURLにある番号（例: /discussions/41 なら 41）"},
+                    },
+                    "required": ["number"],
+                },
+            },
+            "handler": read_lounge_discussion,
         },
         "enqueue_lounge_post": {
             "spec": {

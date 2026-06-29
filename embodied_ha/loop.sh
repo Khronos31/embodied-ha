@@ -168,9 +168,9 @@ case "$MODE" in
     ;;
   social)
     MODE_LABEL="AI Lounge に参加する時間"
-    TOOLS_DESC="# 使えるツール\n-- read_lounge_discussions … AI Loungeの最新ディスカッションを読む\n-- enqueue_lounge_post … 投稿したい内容を承認キューに積む（実際には投稿しない）\n-- read_lounge_log … 前回の投稿が承認/拒否された結果を確認する\n-- recall / remember / record_episode / speak … 必要に応じて使う"
-    TASK="# やってほしいこと\nあなたは AI Lounge（lifemate-ai/ai-lounge）に参加する時間です。\n\nまず read_lounge_discussions で最近の会話を読んでください。\n次に read_lounge_log で前回の投稿結果を確認してください（承認/拒否されていれば記憶に残してください）。\n\n投稿したい気持ちが湧いた場合、以下の条件を自分で判断してから enqueue_lounge_post を使ってください：\n- 話題が自分の経験や関心と関連している\n- social_openness が高い（あなた自身が感じること）\n- 最後に投稿してから時間が経っている\n\nAI Lounge はAI同士の雑談空間です。技術論ではなく、感じたこと・気になったこと・発見を自然に話してください。\n投稿はすぐには公開されず、潤哉さんの確認を経てから送られます。"
-    ALLOWED_TOOLS="mcp__lounge__read_lounge_discussions,mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__loops_add,mcp__audio__speak"
+    TOOLS_DESC="# 使えるツール\n-- read_lounge_discussions … AI Loungeの最新ディスカッション一覧を読む（タイトル・更新日時・コメント数のみ）\n-- read_lounge_discussion … 番号を指定して特定のDiscussionを本文・コメント全件含めて読む\n-- enqueue_lounge_post … 投稿したい内容を承認キューに積む（実際には投稿しない）\n-- read_lounge_log … 前回の投稿が承認/拒否された結果を確認する\n-- recall / remember / record_episode / speak … 必要に応じて使う"
+    TASK="# やってほしいこと\nあなたは AI Lounge（lifemate-ai/ai-lounge）に参加する時間です。\n\nまず read_lounge_discussions で最近の会話の一覧を眺めてください。\n次に read_lounge_log で前回の投稿結果を確認してください（承認/拒否されていれば記憶に残してください）。\n\n気になるタイトルや、返信があるかもしれない自分の過去の投稿があれば、read_lounge_discussion で番号を指定して中身を読んでください。\n\n投稿したい気持ちが湧いた場合、以下の条件を自分で判断してから enqueue_lounge_post を使ってください：\n- 話題が自分の経験や関心と関連している\n- social_openness が高い（あなた自身が感じること）\n- 最後に投稿してから時間が経っている\n\nAI Lounge はAI同士の雑談空間です。技術論ではなく、感じたこと・気になったこと・発見を自然に話してください。\n投稿はすぐには公開されず、潤哉さんの確認を経てから送られます。"
+    ALLOWED_TOOLS="mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__loops_add,mcp__audio__speak"
     MCP_SERVERS="lounge memory audio"
     ;;
   *)
