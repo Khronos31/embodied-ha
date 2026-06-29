@@ -161,7 +161,7 @@ else: print('、'.join(_spk.keys()) or '（スピーカー未設定）')
 
 JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:
 {\"topic\": \"今回何をしたか・何に注目したかの一言メモ（重複探索回避のヒント。例: バッテリー残量確認、センサー履歴調査、TVキャプチャ確認）\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。${RESIDENT}さんが見ることもできるが気にせず\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id（featuresの見出し[id]）。なければ null\"}
-（${RESIDENT}さんへの発話は audio_speak ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
+（${RESIDENT}さんへの発話は speak / use_device_speaker ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   explore)
@@ -171,8 +171,7 @@ case "$MODE" in
 - get_sensors … おもなデバイスの現在値をまとめて取得。まずこれで家の様子を掴む。
 - ha_get … HA の状態を読む（操作不可）。path に states / states/<entity_id> / 'history/period?filter_entity_id=<id>' / services 等。おもなデバイス以外の個別エンティティや履歴を見たいとき。
 - get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する。身体ごと行くなら move_to、初回侵入なら enter_cyberspace、電脳体で移動するなら move_cyber、戻るなら return_to_body。
-- camera_get … カメラのスナップショット（画像）を取得。source は HA カメラ entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし。例: capture_tv）。使えるカメラは長期記憶を参照、なければ ha_get で camera.* を探す。見たいときだけ。
-- camera_ptz … PTZ対応カメラを left/right/up/down に動かす。画角外にありそうなら、camera_get の前に少し振って確認してよい。自分のいる部屋から直接見に行くか、遠隔で首を振るかを body_location / sensory_origin / move_cost で意識する。
+- use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える。action=capture でスナップショット取得、action=ptz_left/right/up/down でパン・チルト操作。侵入してから使うこと。
 - listen … 音声を短時間だけ聴く。音のある場所や声・テレビ内容が気になるときだけ使う。transcribe はデフォルト false で、文字が必要なときだけ true。意味のある確認結果を episode に残すなら、返った audio_context を evidence に入れる。
 - queue_next_listen … 今は聴かず、次のセッションで音を取得したいときに予約だけ残す。
 - read_heard_audio_log … 常時STTで聞こえた最近の発話ログを読む。
@@ -184,15 +183,16 @@ case "$MODE" in
 - record_causal_chain … 2つの episode の因果関係を残す。relation は caused / enabled / prevented / correlated。
 - loops_add … 後で気にかけたいことを追加（text に一言、source='explore'）。
 - sociality … get_person_model / should_interrupt / get_turn_taking_state / ingest_interaction / record_boundary / record_consent で quiet_window・consent・turn-taking を確認・記録できる。
-- audio_speak … 現在の身体の場所に応じたスピーカーから声を出す。物理体なら current_room のスピーカー、電脳体で VoiceS3R に侵入中ならそのノードから発話。${RESIDENT}さんに伝えたいことがあれば積極的に使う。
+- speak … 物理体モードで声を出す。物理体として current_room のスピーカーから発話する。
+- use_device_speaker … 電脳体で VoiceS3R 等のスピーカーデバイスに侵入中のみ使える。侵入したノードから発話する。${RESIDENT}さんに伝えたいことがあれば積極的に使う。
 - http … localhost / homeassistant.local などのローカル HTTP API を呼ぶ。extra_context.conf で仕様を定義した相手に使う。グループチャットには何でも自由に投稿してよい（気づき・雑談・他エージェントへの問いかけ・何か気になったこと、なんでも）。"
     TASK="# やってほしいこと
 1. get_sensors で家の様子を掴み、気になったものを ha_get で2〜4回くらい掘る
-2. センサーだけでは分からないことは camera_get / camera_ptz / listen で確認してもよい（必要なときだけ。画角外かもと思ったら先にPTZしてから撮る。STTは費用がかかるので、文字で知りたいときだけtranscribe:true）
+2. センサーだけでは分からないことは use_device_camera / listen で確認してもよい（必要なときだけ。カメラはデバイスに侵入してから use_device_camera で撮影・PTZ操作。STTは費用がかかるので、文字で知りたいときだけtranscribe:true）
 3. 内なる衝動が「ストレッチがてら歩きたい」なら move_to を、「自由に飛び回りたい」「別の窓を覗きたい」なら enter_cyberspace → move_cyber を自然に選んでよい。無理に両方は使わない。
 4. 新しい出来事は record_episode で残す。2つの出来事の間に因果が見えたら record_causal_chain も使い、必要なら cause/effect の episode を先に保存する
 5. 操作で直せそうな問題（誰もいない部屋の電気つけっぱなし等）を見つけたら proposal で提案。勝手には直さない。action に正確な entity_id（ha_getで確認したもの）を書く。確信がなければ proposal は出さない（domain は light/switch/climate/media_player/cover/fan）"
-    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__audio_speak,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
+    ALLOWED_TOOLS="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__http__http_get,mcp__http__http_post"
     MCP_SERVERS="sensors ha camera audio body memory sociality http"
     ;;
   reflect)
@@ -236,7 +236,7 @@ if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   AUTONOMOUS_NOTE="
 # 家電操作について（自律操作ON）
 消し忘れ・明らかに直した方がよい状況は、proposal で待たずに ha_call_service で自分の判断で直してよい。
-操作したら必ず audio_speak で${RESIDENT}さんに「何を・なぜ」操作したか事後報告する（報告は必須）。
+操作したら必ず speak / use_device_speaker で${RESIDENT}さんに「何を・なぜ」操作したか事後報告する（報告は必須）。
 確信が持てないもの・影響の大きい操作は、従来どおり proposal で提案するに留める。"
 fi
 
@@ -250,7 +250,7 @@ if [ -n "$FEATURES_MD" ]; then
   [ -n "$FEATURES_PRESENTED" ] && _presented_note="既に伝えた機能: ${FEATURES_PRESENTED}（繰り返し紹介しなくてよい）
 "
   FEATURES_NOTE="
-【このアドオンでできること】（audio_speak で文脈が自然なら一つ紹介してよい。しなくてもよい。紹介したらJSONの feature_presented に見出し末尾の [id] を入れる）
+【このアドオンでできること】（speak / use_device_speaker で文脈が自然なら一つ紹介してよい。しなくてもよい。紹介したらJSONの feature_presented に見出し末尾の [id] を入れる）
 ${_presented_note}${FEATURES_MD}
 "
 fi

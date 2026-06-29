@@ -978,8 +978,14 @@ select.ha-entity-select {
     gap: 12px;
 }
 
+.config-grid-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 12px;
+}
+
 @media (max-width: 600px) {
-    .config-grid-2, .config-grid-3 {
+    .config-grid-2, .config-grid-3, .config-grid-4 {
         grid-template-columns: 1fr;
     }
 }

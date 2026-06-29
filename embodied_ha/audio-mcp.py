@@ -21,7 +21,7 @@ from embodied_action import action_fields_for_sensory, apply_action_to_body_stat
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import serve, text
 from sensory_origin import classify_sensory_origin
-from state_utils import clean, now, parse_ts
+from state_utils import clean, get_device_capabilities, load_prefs, now, parse_ts
 
 DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
@@ -777,16 +777,12 @@ def _find_speakers_by_room(speakers, room: str) -> list:
     return []
 
 
-TOOL_AUDIO_SPEAK = {
-    "name": "audio_speak",
+TOOL_SPEAK = {
+    "name": "speak",
     "description": (
-        "現在の身体の場所に応じて適切なスピーカーから声を出す。\n"
-        "room 指定は不要——body_location.json を参照して自動ルーティングする:\n"
-        "- 物理体モード: 現在の部屋のスピーカーへ（VoiceS3R TCP スピーカー優先）\n"
-        "- 電脳体で VoiceS3R スピーカーに侵入中: そのノードから直接発話\n"
-        "- 電脳体で HA スピーカー（media_player 等）に侵入中: そのエンティティ経由で発話\n"
-        "- 電脳体で非スピーカーデバイスに侵入中: 発話失敗（物理体に戻る必要あり）\n"
-        "観察・探索ループで家人に声をかけたいときに使う。"
+        "物理体として声を出す。物理体モード専用。\n"
+        "現在の部屋に応じた最近傍スピーカーへ自動ルーティングする（デバイスを意識不要）。\n"
+        "電脳体モードの場合はエラーを返す。電脳体でスピーカーから発話したい場合は use_device_speaker を使う。"
     ),
     "inputSchema": {
         "type": "object",
@@ -797,109 +793,105 @@ TOOL_AUDIO_SPEAK = {
     },
 }
 
+TOOL_USE_DEVICE_SPEAKER = {
+    "name": "use_device_speaker",
+    "description": (
+        "現在侵入中のスピーカーデバイスから声を出す。電脳体でスピーカーデバイスに侵入中のみ使用可能。\n"
+        "物理体モード、またはスピーカー以外のデバイスに侵入中の場合はエラーを返す。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "message": {"type": "string", "description": "話す内容"},
+        },
+        "required": ["message"],
+    },
+}
 
-def audio_speak(args: dict):
-    message = (args.get("message") or "").strip()
-    if not message:
-        return [text("message が必要です")], True
+TOOL_USE_DEVICE_MICROPHONE = {
+    "name": "use_device_microphone",
+    "description": (
+        "現在侵入中のマイクデバイスで音声を取得する。電脳体でマイクデバイスに侵入中のみ使用可能。\n"
+        "物理体モード、またはマイク以外のデバイスに侵入中の場合はエラーを返す。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "duration": {"type": "integer", "description": "録音秒数（デフォルト5）"},
+            "transcribe": {"type": "boolean", "description": "STT文字起こしを行うか（デフォルト false）"},
+        },
+        "required": [],
+    },
+}
 
+TOOL_CONCENTRATE_HEARING = {
+    "name": "concentrate_hearing",
+    "description": (
+        "耳を澄ます。Antigravity による WAV ファイルのマルチモーダル処理を次セッションへキューする。\n"
+        "物理体モード専用。電脳体モードでは使用不可。\n"
+        "非同期: このツールは即座に「キューしました」と返す。次回セッション開始時に音声が処理される。\n"
+        "通常の listen（テキスト返却・即時）よりも深い聴覚的注意が必要なときに使う。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+
+def _current_body_state() -> tuple[dict, str, str, str]:
     loc = _load_body_location()
-    prefs = load_preferences()
-    speakers = prefs.get("speakers", [])
+    current_entity = clean(loc.get("current_entity"))
+    current_room = clean(loc.get("current_room"))
+    projected_room = clean(loc.get("projected_room"))
+    return loc, current_entity, current_room, projected_room
 
-    current_entity = (loc.get("current_entity") or "").strip()
-    current_room = (loc.get("current_room") or "").strip()
-    projected_room = (loc.get("projected_room") or "").strip()
 
-    speak_room = ""
-    speak_host = ""
-    label = ""
+def _resolve_room_speaker(speakers: list, room: str) -> dict:
+    room_speakers = _find_speakers_by_room(speakers, room)
+    if not room_speakers:
+        return {}
+    tcp_in_room = [s for s in room_speakers if s.get("type") == "tcp"]
+    return tcp_in_room[0] if tcp_in_room else room_speakers[0]
 
-    if projected_room and current_entity:
-        # 電脳体モード
-        if current_entity.startswith("tcp://"):
-            entity_host = _extract_tcp_host(current_entity)
-            if not entity_host:
-                return [text(f"電脳体モードですが current_entity の形式が不明です: {current_entity}")], True
-            tcp_speaker = _find_tcp_speaker_by_host(speakers, entity_host)
-            if not tcp_speaker:
-                return [text(
-                    f"侵入中のデバイス（{current_entity}）はスピーカーとして登録されていません。"
-                    "発話するには物理体に戻るか、スピーカーノードに侵入し直してください。"
-                )], True
-            speak_room = tcp_speaker.get("room", "")
-            speak_host = entity_host
-            label = tcp_speaker.get("label", speak_host)
-        else:
-            # HA エンティティ: media_player / tts_entity で照合
-            ha_speaker = _find_ha_speaker_by_entity(speakers, current_entity)
-            if not ha_speaker:
-                return [text(
-                    f"侵入中のデバイス（{current_entity}）はスピーカーとして登録されていません。"
-                    "発話するには物理体に戻るか、スピーカーエンティティに侵入し直してください。"
-                )], True
-            speak_room = ha_speaker.get("room", "")
-            speak_host = ""
-            label = ha_speaker.get("label", current_entity)
-    else:
-        # 物理体モード
-        if not current_room:
-            return [text("現在位置が不明です（body_location.json の current_room が空）")], True
-        room_speakers = _find_speakers_by_room(speakers, current_room)
-        if not room_speakers:
-            return [text(
-                f"現在の部屋（{current_room}）にスピーカーが登録されていません。"
-                "preferences.json の speakers に部屋を追加してください。"
-            )], True
-        tcp_in_room = [s for s in room_speakers if s.get("type") == "tcp"]
-        chosen = tcp_in_room[0] if tcp_in_room else room_speakers[0]
-        speak_room = chosen.get("room", current_room)
-        speak_host = chosen.get("host", "") if chosen.get("type") == "tcp" else ""
-        label = chosen.get("label", speak_room)
 
+def _run_speak(speak_room: str, message: str, speak_host: str = "") -> tuple[list, bool]:
     cmd = ["python3", _SPEAK_PY, speak_room, message]
     if speak_host:
         cmd += ["--host", speak_host]
-
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     detail = (r.stdout or "").strip() or (r.stderr or "").strip()
     if r.returncode != 0:
         return [text(f"発話できませんでした: {detail}")], True
+    return [], False
 
-    mode_desc = f"電脳体→{speak_host or current_entity}" if projected_room else f"物理体@{current_room}"
-    log(f"[audio-mcp] audio_speak [{mode_desc}] room={speak_room}: {message[:40]}")
 
+def _speak_with_entry(entry: dict, message: str, *, mode_desc: str = "") -> tuple[list, bool]:
+    speak_room = clean(entry.get("room")) or ""
+    speak_host = clean(entry.get("host")) if entry.get("type") == "tcp" else ""
+    label = clean(entry.get("label")) or speak_room or speak_host
+    result, is_error = _run_speak(speak_room, message, speak_host)
+    if is_error:
+        return result, True
+    log(f"[audio-mcp] speak [{mode_desc}] room={speak_room}: {message[:40]}")
     log_dir = os.environ.get("EHA_LOG_DIR", "")
     if log_dir:
         try:
             ts = now().isoformat(timespec="seconds")
-            chat_log_path = os.path.join(log_dir, "chat_log.jsonl")
-            entry = json.dumps(
+            log_entry = json.dumps(
                 {"timestamp": ts, "source": "speak", "claude": message, "user": None},
                 ensure_ascii=False,
             )
-            with open(chat_log_path, "a", encoding="utf-8") as f:
-                f.write(entry + "\n")
+            with open(os.path.join(log_dir, "chat_log.jsonl"), "a", encoding="utf-8") as f:
+                f.write(log_entry + "\n")
         except Exception:
             pass
+    return [text(f"発話しました（{label}）")], False
 
-    return [text(f"発話しました（{label}）")]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def listen(args: dict):
-    source_arg = clean(args.get("source"))
-    if source_arg:
-        source = normalize_source_uri(source_arg)
-    else:
-        _body_loc = _load_body_location()
-        _src_cfgs = load_audio_source_configs()
-        source = normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
-
-    duration = normalize_duration(args.get("duration"))
-    transcribe_arg = args.get("transcribe", False)
-    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+def _audio_listen_from_source(source: str, duration: int, transcribe: bool):
+    source = normalize_source_uri(source)
     timestamp = now().isoformat(timespec="seconds")
     actor = clean(os.environ.get("EHA_ACTOR")) or "unknown"
     source_label = label_for_source(source)
@@ -920,7 +912,6 @@ def listen(args: dict):
             **action_fields_for_sensory(sensory, host=source),
         }
 
-    # 未登録でも rtsp:// / alsa:// / tcp:// なら直接使用する
     if source not in _source_map() and not (source.startswith("rtsp://") or source.startswith("alsa://") or source.startswith("tcp://")):
         payload = {**base_payload(), "error": f"unknown source: {source}"}
         record_active_listen(payload, source)
@@ -941,19 +932,19 @@ def listen(args: dict):
             try:
                 request_daemon_capture_to_wav(source, duration, tmp_path)
             except Exception as exc:
-                message = clean(str(exc)) or "tcp recording failed"
-                payload = {**base_payload(), "error": message}
+                err_msg = clean(str(exc)) or "tcp recording failed"
+                payload = {**base_payload(), "error": err_msg}
                 record_active_listen(payload, source)
-                return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
+                return [text(json.dumps({"error": err_msg, "source": source}, ensure_ascii=False))], True
         else:
             command = build_record_command(source, duration) + [tmp_path]
             command[0] = ffmpeg
             record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
             if record.returncode != 0:
-                message = clean(record.stderr) or clean(record.stdout) or "recording failed"
-                payload = {**base_payload(), "error": message}
+                err_msg = clean(record.stderr) or clean(record.stdout) or "recording failed"
+                payload = {**base_payload(), "error": err_msg}
                 record_active_listen(payload, source)
-                return [text(json.dumps({"error": message, "source": source}, ensure_ascii=False))], True
+                return [text(json.dumps({"error": err_msg, "source": source}, ensure_ascii=False))], True
 
         peak_db, mean_db = analyze_volume(tmp_path)
         payload = {
@@ -990,6 +981,90 @@ def listen(args: dict):
                 pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+
+def speak(args: dict):
+    message = (args.get("message") or "").strip()
+    if not message:
+        return [text("message が必要です")], True
+    _, current_entity, current_room, _ = _current_body_state()
+    if current_entity:
+        return [text("電脳体モードでは speak は使えません。use_device_speaker を使ってください。")], True
+    if not current_room:
+        return [text("現在位置が不明です（body_location.json の current_room が空）")], True
+    speakers = load_preferences().get("speakers", [])
+    chosen = _resolve_room_speaker(speakers, current_room)
+    if not chosen:
+        return [text(
+            f"現在の部屋（{current_room}）にスピーカーが登録されていません。"
+            "preferences.json の speakers に部屋を追加してください。"
+        )], True
+    return _speak_with_entry(chosen, message, mode_desc=f"物理体@{current_room}")
+
+
+def use_device_speaker(args: dict):
+    message = (args.get("message") or "").strip()
+    if not message:
+        return [text("message が必要です")], True
+    _, current_entity, current_room, _ = _current_body_state()
+    if not current_entity:
+        return [text("物理体モードでは use_device_speaker は使えません。speak を使ってください。")], True
+    prefs = load_preferences()
+    caps = get_device_capabilities(current_entity, prefs)
+    speaker = caps.get("speaker")
+    if not caps.get("is_speaker") or not isinstance(speaker, dict):
+        return [text(f"現在侵入中のデバイス（{current_entity}）はスピーカーデバイスではありません。")], True
+    return _speak_with_entry(speaker, message, mode_desc=f"電脳体@{current_entity}")
+
+
+def listen(args: dict):
+    _, current_entity, _, _ = _current_body_state()
+    if current_entity:
+        return [text("電脳体モードでは listen は使えません。use_device_microphone を使ってください。")], True
+    _body_loc = _load_body_location()
+    _src_cfgs = load_audio_source_configs()
+    source = normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
+    duration = normalize_duration(args.get("duration"))
+    transcribe_arg = args.get("transcribe", False)
+    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    return _audio_listen_from_source(source, duration, transcribe)
+
+
+def use_device_microphone(args: dict):
+    _, current_entity, _, _ = _current_body_state()
+    if not current_entity:
+        return [text("物理体モードでは use_device_microphone は使えません。listen を使ってください。")], True
+    prefs = load_preferences()
+    caps = get_device_capabilities(current_entity, prefs)
+    source = clean(caps.get("mic_source"))
+    if not caps.get("is_mic") or not source:
+        return [text(f"現在侵入中のデバイス（{current_entity}）はマイクデバイスではありません。")], True
+    duration = normalize_duration(args.get("duration"))
+    transcribe_arg = args.get("transcribe", False)
+    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    return _audio_listen_from_source(source, duration, transcribe)
+
+
+def concentrate_hearing(args: dict):
+    _, current_entity, _, _ = _current_body_state()
+    if current_entity:
+        return [text("電脳体モードでは concentrate_hearing は使えません。")], True
+    ok, reason = check_listen_queue_cooldown()
+    if not ok:
+        return [text(reason)], True
+    request = {
+        "timestamp": now().isoformat(timespec="seconds"),
+        "request_id": uuid.uuid4().hex,
+        "duration": 5,
+        "transcribe": False,
+        "mode": clean(os.environ.get("EHA_ACTOR")) or "unknown",
+        "reason": "concentrate_hearing",
+        "note": "",
+    }
+    queue_next_listen_request(request)
+    return [text("キューしました")]
+
+
 if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
@@ -999,5 +1074,8 @@ if __name__ == "__main__":
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
         "read_non_speech_audio_events": {"spec": TOOL_READ_NON_SPEECH_AUDIO_EVENTS, "handler": read_non_speech_audio_events},
         "read_audio_event_tags": {"spec": TOOL_READ_AUDIO_EVENT_TAGS, "handler": read_audio_event_tags},
-        "audio_speak": {"spec": TOOL_AUDIO_SPEAK, "handler": audio_speak},
+        "speak": {"spec": TOOL_SPEAK, "handler": speak},
+        "use_device_speaker": {"spec": TOOL_USE_DEVICE_SPEAKER, "handler": use_device_speaker},
+        "use_device_microphone": {"spec": TOOL_USE_DEVICE_MICROPHONE, "handler": use_device_microphone},
+        "concentrate_hearing": {"spec": TOOL_CONCENTRATE_HEARING, "handler": concentrate_hearing},
     })

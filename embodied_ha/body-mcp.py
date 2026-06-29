@@ -16,7 +16,7 @@ from typing import Any
 
 from embodied_action import action_fields_for_move, apply_action_to_body_state
 from mcp_lib import serve, text
-from state_utils import clean, now, read_json, write_json
+from state_utils import clean, load_prefs, now, read_json, write_json
 
 DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
@@ -59,6 +59,47 @@ def resolve_external_room(entity: str) -> str | None:
         if isinstance(target, dict) and target.get("id") == entity:
             return clean(target.get("room")) or None
     return None
+
+
+def load_preferences() -> dict[str, Any]:
+    return load_prefs(prefs_path())
+
+
+def _tcp_host(entity: str) -> str:
+    entity = clean(entity)
+    if entity.startswith("tcp://"):
+        return entity[6:].split(":")[0]
+    return ""
+
+
+def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str, str | None]:
+    entity = clean(entity)
+    if not entity:
+        return "", None
+
+    for item in prefs.get("audio_sources", []):
+        if not isinstance(item, dict):
+            continue
+        if clean(item.get("source")) == entity:
+            normalized = clean(item.get("entity")) or entity
+            return normalized, clean(item.get("room")) or None
+
+    host = _tcp_host(entity)
+    if host:
+        for item in prefs.get("speakers", []):
+            if not isinstance(item, dict):
+                continue
+            if clean(item.get("host")) == host:
+                normalized = clean(item.get("entity")) or entity
+                return normalized, clean(item.get("room")) or None
+
+    for item in prefs.get("camera_devices", []):
+        if not isinstance(item, dict):
+            continue
+        if clean(item.get("entity")) == entity:
+            return entity, clean(item.get("room")) or None
+
+    return entity, None
 
 
 def _json_text(data: Any) -> list[dict[str, str]]:
@@ -370,18 +411,19 @@ def enter_cyberspace(args: dict[str, Any]):
             "projected_room": state.get("projected_room"),
             "current_entity": state.get("current_entity"),
         }), True
-    entity = clean(args.get("entity"))
-    if not entity:
+    raw_entity = clean(args.get("entity"))
+    if not raw_entity:
         return _json_text({"error": "missing entity"}), True
+    prefs = load_preferences()
+    entity, entry_room = normalize_cyberspace_entity(raw_entity, prefs)
     room_arg = clean(args.get("room"))
     target_room: str | None = None
-    if entity.startswith("external://"):
-        target_room = resolve_external_room(entity)
+    if raw_entity.startswith("external://"):
+        target_room = resolve_external_room(raw_entity)
         if not target_room:
-            return _json_text({"error": "unknown external projection target", "entity": entity}), True
+            return _json_text({"error": "unknown external projection target", "entity": raw_entity}), True
     else:
         if room_arg:
-            # 明示的に room が渡された場合はそちらを優先
             target_room = resolve_room(room_arg, graph)
             if not target_room:
                 return _json_text({
@@ -390,16 +432,17 @@ def enter_cyberspace(args: dict[str, Any]):
                     "available_rooms": list(rooms(graph).keys()),
                 }), True
         else:
-            # room 省略時は HA エリア API で自動解決を試みる
-            from sensory_origin import area_for_entity, resolve_area_room
+            target_room = entry_room
+            if not target_room:
+                from sensory_origin import area_for_entity, resolve_area_room
 
-            area = area_for_entity(entity)
-            target_room = resolve_area_room(area, graph) if area else None
+                area = area_for_entity(raw_entity)
+                target_room = resolve_area_room(area, graph) if area else None
             if not target_room:
                 return _json_text({
                     "error": "HAエンティティの部屋を自動解決できませんでした。room パラメータで部屋を指定してください",
-                    "entity": entity,
-                    "resolved_area": area,
+                    "entity": raw_entity,
+                    "normalized_entity": entity,
                     "available_rooms": list(rooms(graph).keys()),
                 }), True
     body_room = state["current_room"]
@@ -467,21 +510,24 @@ def move_cyber(args: dict[str, Any]):
             "error": "not in cyberspace",
             "projected_room": state.get("projected_room"),
         }), True
-    entity = clean(args.get("entity"))
-    if not entity:
+    raw_entity = clean(args.get("entity"))
+    if not raw_entity:
         return _json_text({"error": "missing entity"}), True
+    prefs = load_preferences()
+    entity, entry_room = normalize_cyberspace_entity(raw_entity, prefs)
     room_arg = clean(args.get("room"))
     target_room: str | None = None
-    if entity.startswith("external://"):
-        target_room = resolve_external_room(entity)
+    if raw_entity.startswith("external://"):
+        target_room = resolve_external_room(raw_entity)
     elif room_arg:
         target_room = resolve_room(room_arg, graph)
     else:
-        # room 省略時は HA エリア API で自動解決を試みる（失敗しても続行）
-        from sensory_origin import area_for_entity, resolve_area_room
+        target_room = entry_room
+        if not target_room:
+            from sensory_origin import area_for_entity, resolve_area_room
 
-        area = area_for_entity(entity)
-        target_room = resolve_area_room(area, graph) if area else None
+            area = area_for_entity(raw_entity)
+            target_room = resolve_area_room(area, graph) if area else None
     current_projected_room = state["projected_room"]
     final_projected_room = target_room or current_projected_room
     cost = 0.0
@@ -538,7 +584,6 @@ def move_cyber(args: dict[str, Any]):
     except Exception:
         pass
     return _json_text({"state": new_state, "event": event})
-
 
 
 def return_to_body(args: dict[str, Any]):

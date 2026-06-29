@@ -81,3 +81,49 @@ def read_json(path: str, default: Any = None) -> Any:
             return json.load(f)
     except Exception:
         return default
+
+
+
+def load_prefs(prefs_file: str) -> dict[str, Any]:
+    """Read ``preferences.json`` and return a dict on failure."""
+    prefs = read_json(prefs_file, {})
+    return prefs if isinstance(prefs, dict) else {}
+
+
+
+def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[str, Any]:
+    """Return device capability metadata for ``current_entity``.
+
+    The result includes boolean capability flags and the matching manifest
+    entries when available.
+    """
+    entity = clean(current_entity)
+    if not entity:
+        return {
+            "is_mic": False,
+            "is_speaker": False,
+            "is_camera": False,
+            "mic_source": None,
+            "speaker": None,
+            "camera": None,
+        }
+
+    def _find_entry(items: Any) -> dict[str, Any] | None:
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if isinstance(item, dict) and clean(item.get("entity")) == entity:
+                return item
+        return None
+
+    mic_entry = _find_entry(prefs.get("audio_sources"))
+    speaker_entry = _find_entry(prefs.get("speakers"))
+    camera_entry = _find_entry(prefs.get("camera_devices"))
+    return {
+        "is_mic": mic_entry is not None,
+        "is_speaker": speaker_entry is not None,
+        "is_camera": camera_entry is not None,
+        "mic_source": clean(mic_entry.get("source")) if mic_entry else None,
+        "speaker": speaker_entry,
+        "camera": camera_entry,
+    }

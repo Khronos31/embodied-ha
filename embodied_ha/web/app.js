@@ -1628,6 +1628,8 @@ async function renderSettingsForm() {
 
     renderAudioSourceList(prefsData.audio_sources || []);
 
+    renderCameraDeviceList(prefsData.camera_devices || []);
+
     const entitiesList = document.getElementById('entities-list');
     if (entitiesList) {
         entitiesList.innerHTML = '';
@@ -1762,15 +1764,23 @@ function serializeFormToPrefs() {
         const label = card.querySelector('.speaker-label').value.trim();
         const note = card.querySelector('.speaker-note').value.trim();
         const type = card.querySelector('.speaker-type').value;
+        const deviceEntityVal = card.querySelector('.speaker-entity').value.trim();
         if (!room) return;
 
         const item = { room, label, type, note };
+        if (deviceEntityVal) {
+            item.entity = deviceEntityVal;
+        }
 
         if (type === 'tts') {
             item.tts_entity = card.querySelector('.speaker-tts-entity').value;
             item.media_player = card.querySelector('.speaker-media-player').value;
         } else if (type === 'notify') {
-            item.entity = card.querySelector('.speaker-notify-entity').value;
+            const notifyEntityVal = card.querySelector('.speaker-notify-entity').value;
+            item.notify_entity = notifyEntityVal;
+            if (!deviceEntityVal && notifyEntityVal) {
+                item.entity = notifyEntityVal;
+            }
             const title = card.querySelector('.speaker-notify-title').value.trim();
             if (title) item.title = title;
         } else if (type === 'tcp') {
@@ -1797,6 +1807,24 @@ function serializeFormToPrefs() {
             if (label) camObj.label = label;
             if (note) camObj.note = note;
             cameras.push(camObj);
+        }
+    });
+
+    const camera_devices = [];
+    const cameraDeviceCards = document.querySelectorAll('.camera-device-item');
+    cameraDeviceCards.forEach(card => {
+        const entity = card.querySelector('.cd-entity').value.trim();
+        const roomSelect = card.querySelector('.cd-room');
+        const room = roomSelect ? roomSelect.value.trim() : '';
+        const label = card.querySelector('.cd-label').value.trim();
+        const ha_entity = card.querySelector('.cd-ha-entity').value.trim();
+        
+        if (entity) {
+            const devObj = { entity };
+            if (room) devObj.room = room;
+            if (label) devObj.label = label;
+            if (ha_entity) devObj.ha_entity = ha_entity;
+            camera_devices.push(devObj);
         }
     });
 
@@ -1886,6 +1914,7 @@ function serializeFormToPrefs() {
         ...prefsData,
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
+        camera_devices,
         audio_sources,
         stt_provider,
         stt_language,
@@ -1980,13 +2009,13 @@ async function getRoomGraphData() {
     return window.roomGraphDataPromise;
 }
 
-function populateRoomSelect(selectEl, selectedRoom) {
+function populateRoomSelect(selectEl, selectedRoom, customClass = 'pt-room') {
     if (!selectEl) return;
     const fallbackToText = () => {
         if (selectEl.dataset.fallbackInput === 'true') return;
         const input = document.createElement('input');
         input.type = 'text';
-        input.className = `${selectEl.className} pt-room`;
+        input.className = `${selectEl.className} ${customClass}`;
         input.placeholder = '例: study';
         input.value = selectedRoom || '';
         input.dataset.fallbackInput = 'true';
@@ -2120,6 +2149,64 @@ function addProjectionTargetRow(target = {}) {
     const roomSelect = card.querySelector('.pt-room');
     populateRoomSelect(roomSelect, room);
 }
+
+function renderCameraDeviceList(devices) {
+    const listEl = document.getElementById('camera-devices-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (Array.isArray(devices)) {
+        devices.forEach(d => addCameraDeviceRow(d));
+    }
+}
+
+function addCameraDeviceRow(device = {}) {
+    const listEl = document.getElementById('camera-devices-list');
+    if (!listEl) return;
+    const card = document.createElement('div');
+    card.className = 'setting-item-card camera-device-item';
+
+    const entityVal = device.entity || '';
+    const roomVal = device.room || '';
+    const labelVal = device.label || '';
+    const haEntityVal = device.ha_entity || '';
+
+    card.innerHTML = `
+        <div class="setting-item-header">
+            <span class="setting-item-title">カメラデバイス</span>
+            <button type="button" class="btn-remove" onclick="this.closest('.camera-device-item').remove()">
+                ✕ 削除
+            </button>
+        </div>
+        <div class="config-grid-2">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>デバイスID (entity) <span style="color:red;">*</span></label>
+                <input type="text" class="cd-entity form-input" placeholder="例: camera.rihinkunokamera_live_view" value="${esc(entityVal)}" required>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>部屋名 (room)</label>
+                <select class="cd-room form-input">
+                    <option value="">指定なし</option>
+                </select>
+            </div>
+        </div>
+        <div class="config-grid-2" style="margin-top:12px;">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>表示名 (label)</label>
+                <input type="text" class="cd-label form-input" placeholder="例: リビングカメラ" value="${esc(labelVal)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>HAカメラエンティティID (ha_entity - 任意)</label>
+                <input type="text" class="cd-ha-entity form-input" placeholder="例: camera.living_room_ptz" value="${esc(haEntityVal)}">
+            </div>
+        </div>
+    `;
+
+    listEl.appendChild(card);
+
+    const roomSelect = card.querySelector('.cd-room');
+    populateRoomSelect(roomSelect, roomVal, 'cd-room');
+}
+window.addCameraDeviceRow = addCameraDeviceRow;
 function createSpeakerCard(item = {}) {
     const speakersList = document.getElementById('speakers-list');
     const card = document.createElement('div');
@@ -2129,6 +2216,24 @@ function createSpeakerCard(item = {}) {
     const label = item.label || '';
     const note = item.note || '';
     const type = item.type || 'tts';
+
+    let deviceEntity = '';
+    let notifyEntity = '';
+    if (type === 'notify') {
+        if (item.notify_entity) {
+            notifyEntity = item.notify_entity;
+            deviceEntity = item.entity || '';
+        } else {
+            if (item.entity && item.entity.startsWith('notify.')) {
+                notifyEntity = item.entity;
+                deviceEntity = '';
+            } else {
+                deviceEntity = item.entity || '';
+            }
+        }
+    } else {
+        deviceEntity = item.entity || '';
+    }
 
     card.innerHTML = `
         <div class="setting-item-header">
@@ -2144,7 +2249,7 @@ function createSpeakerCard(item = {}) {
             </div>
         </div>
         
-        <div class="config-grid-3" style="margin-bottom: 12px;">
+        <div class="config-grid-4" style="margin-bottom: 12px;">
             <div class="form-group" style="margin-bottom:0;">
                 <label>部屋名 (room)</label>
                 <input type="text" class="speaker-room-name form-input" placeholder="部屋名 (例: study)" value="${esc(roomName)}" style="font-weight:600;">
@@ -2152,6 +2257,11 @@ function createSpeakerCard(item = {}) {
             <div class="form-group" style="margin-bottom:0;">
                 <label>表示名 (label)</label>
                 <input type="text" class="speaker-label form-input" placeholder="例: 書斎（Nest Mini）" value="${esc(label)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>デバイスID (entity)</label>
+                <input type="text" class="speaker-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(deviceEntity)}">
+                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">対応する音声ソースと同じIDを設定すると、同一デバイス扱いになります。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>メモ (note)</label>
@@ -2217,7 +2327,7 @@ function createSpeakerCard(item = {}) {
 
     initDropdownOptions(selectTts, 'tts', item.tts_entity);
     initDropdownOptions(selectMp, 'media_player', item.media_player);
-    initDropdownOptions(selectNotify, 'notify', item.entity);
+    initDropdownOptions(selectNotify, 'notify', notifyEntity);
 }
 
 function toggleSpeakerType(btn, targetType) {
@@ -2354,10 +2464,15 @@ function addAudioSourceRow(source = {}) {
             </div>
         </div>
 
-        <div class="config-grid-2" style="margin-top:12px;">
+        <div class="config-grid-3" style="margin-top:12px;">
             <div class="form-group" style="margin-bottom:0;">
                 <label>ラベル名 (label)</label>
                 <input type="text" class="audio-source-label form-input" placeholder="例：台所（VoiceS3R）" value="${esc(labelVal)}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>デバイスID (entity)</label>
+                <input type="text" class="audio-source-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(source.entity || '')}">
+                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">電脳体として侵入するときの識別ID。VoiceS3R等の特殊デバイスのみ設定。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>メモ (note)</label>
@@ -2418,6 +2533,7 @@ function getAudioSourcesFromUI() {
         const room = card.querySelector('.audio-source-room').value.trim();
         const label = card.querySelector('.audio-source-label').value.trim();
         const note = card.querySelector('.audio-source-note').value.trim();
+        const entity = card.querySelector('.audio-source-entity')?.value?.trim() || '';
         const stt_enabled = card.querySelector('.audio-source-stt-enabled').checked;
         const sttRetentionRaw = parseInt(card.querySelector('.audio-source-stt-retention').value, 10);
         const stt_retention_hours = Number.isNaN(sttRetentionRaw) ? 60 : Math.max(0, sttRetentionRaw);
@@ -2435,6 +2551,7 @@ function getAudioSourcesFromUI() {
             if (room) srcObj.room = room;
             if (label) srcObj.label = label;
             if (note) srcObj.note = note;
+            if (entity) srcObj.entity = entity;
             sources.push(srcObj);
         }
     });
