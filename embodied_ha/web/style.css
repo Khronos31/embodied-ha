@@ -2005,6 +2005,25 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 }
 
 /* Edit and remove icon buttons */
+.btn-icon {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 6px;
+    border-radius: 4px;
+    transition: background-color 0.2s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--claude-text-sub);
+}
+
+.btn-icon:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: var(--claude-text-main);
+}
+
 .btn-edit {
     background: none;
     border: none;
