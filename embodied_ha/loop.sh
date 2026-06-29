@@ -3,7 +3,7 @@ set -euo pipefail
 export PATH="${EHA_TOOLS_PATH:-/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin}:$PATH"
 
 # 自律ループ。動機（モード）を選んで過ごす。
-#   observe … カメラで家を観察し scene grounding を行う（旧 watch.sh の役割）
+#   observe … カメラで家を観察し scene grounding を行う（旧観察ループの役割）
 #   explore … ha_get で家を自由に調べる
 #   reflect … recall で過去を思い返し、静かに内省する
 #   web     … WebSearch で気になったことを調べる

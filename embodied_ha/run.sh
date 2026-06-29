@@ -15,10 +15,10 @@ RESIDENT=$(python3 -c "import json; print(json.load(open('/data/options.json')).
 echo "[run] RESIDENT=${RESIDENT}"
 
 # --- 自律操作ゲート（デフォルトOFF）---
-# ON のときだけ loop/explore に家電操作サーバー(ha-control)を繋ぐ＝物理的なゲート。
+# ON のときだけ loop に家電操作サーバー(ha-control)を繋ぐ＝物理的なゲート。
 export EHA_AUTONOMOUS
 EHA_AUTONOMOUS=$(python3 -c "import json; print('1' if json.load(open('/data/options.json')).get('autonomous_control', False) else '0')" 2>/dev/null || echo "0")
-echo "[run] 自律操作: $([ "$EHA_AUTONOMOUS" = "1" ] && echo "ON（loop/explore が家電操作可）" || echo "OFF（観察・提案のみ）")"
+echo "[run] 自律操作: $([ "$EHA_AUTONOMOUS" = "1" ] && echo "ON（loop が家電操作可）" || echo "OFF（観察・提案のみ）")"
 
 # --- Claude 認証 ---
 # 優先順位: 1) options.json の claude_api_key → 2) サブスク認証（.credentials.json）
@@ -364,6 +364,6 @@ if ! _auth_ok; then
     echo "[run] 認証完了。daemon 起動..."
 fi
 
-# --- daemon.py 起動（loop / explore / chat ループを管理）---
+# --- daemon.py 起動（loop / chat ループを管理）---
 echo "[run] daemon.py 起動"
 exec python3 "$SCRIPT_DIR/daemon.py"

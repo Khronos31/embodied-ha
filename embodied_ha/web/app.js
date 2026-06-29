@@ -733,9 +733,9 @@ function runMockSimulations() {
         }, 3000);
     }, 6000);
 
-    // Daemon starting explore.sh (Exploration loop)
+    // Daemon starting loop.sh (Exploration loop)
     setTimeout(() => {
-        console.log("[DEMO] Daemon starting explore.sh (Exploration loop)...");
+        console.log("[DEMO] Daemon starting loop.sh (Exploration loop)...");
         
         // 1. Show explore thinking in Conversation
         showTypingIndicator('explore');
@@ -977,8 +977,7 @@ async function fetchSettings() {
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
                 speakers: {
-                    study: { type: "tts", entity: "media_player.study_speaker" },
-                    living: { type: "notify", entity: "notify.living_alexa_speak" }
+                    study: { type: "tts", entity: "media_player.study_speaker" }
                 },
                 entities: [
                     { name: "リビングのライト", entity_id: "light.living_room", note: "" }
@@ -1007,10 +1006,7 @@ async function fetchSettings() {
                 tts: [
                     { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null }
                 ],
-                notify: [
-                    { entity_id: "notify.living_alexa_speak", friendly_name: "リビングAlexa", area: null },
-                    { entity_id: "notify.mobile_app_phone", friendly_name: "スマホ通知", area: null }
-                ],
+
                 camera: [
                     { entity_id: "camera.living_room", friendly_name: "リビングカメラ", area: "リビング" }
                 ],
@@ -1032,7 +1028,7 @@ async function fetchSettings() {
         const [prefsRes, charRes, entitiesRes, extraContextRes] = await Promise.all([
             fetch(`${base}/api/preferences`),
             fetch(`${base}/api/character`),
-            fetch(`${base}/api/ha-entities?domain=media_player,tts,notify,camera,binary_sensor,sensor,input_boolean,device_tracker,person,light,switch,climate,cover,fan,script`),
+            fetch(`${base}/api/ha-entities?domain=media_player,tts,camera,binary_sensor,sensor,input_boolean,device_tracker,person,light,switch,climate,cover,fan,script`),
             fetch(`${base}/api/extra-context`).catch(err => {
                 console.warn("Failed to fetch extra context:", err);
                 return null;
@@ -1623,13 +1619,7 @@ async function renderSettingsForm() {
         });
     }
 
-    const camerasList = document.getElementById('cameras-list');
-    camerasList.innerHTML = '';
-    if (prefsData.cameras && Array.isArray(prefsData.cameras)) {
-        prefsData.cameras.forEach(cam => {
-            createCameraCard(cam);
-        });
-    }
+    renderCameraList(prefsData.cameras || []);
 
     renderAudioSourceList(prefsData.audio_sources || []);
 
@@ -1773,17 +1763,7 @@ function serializeFormToPrefs() {
         const deviceEntityVal = card.querySelector('.speaker-entity').value.trim();
         if (!room) return;
 
-        // ha_entity UI の場合、保存typeはentityのドメインから判定
         let saveType = type;
-        if (type === 'tts' || type === 'notify') {
-            // 現在のentityからドメインを判定
-            const haSelectVal = card.querySelector('.speaker-ha-entity-select')?.value || deviceEntityVal;
-            if (haSelectVal.startsWith('notify.')) {
-                saveType = 'notify';
-            } else if (haSelectVal.startsWith('media_player.')) {
-                saveType = 'tts';
-            }
-        }
 
         const item = { room, label, type: saveType, note };
         if (deviceEntityVal) {
@@ -1800,21 +1780,13 @@ function serializeFormToPrefs() {
     });
 
     const cameras = [];
-    const cameraCards = document.querySelectorAll('.camera-item');
-    cameraCards.forEach(card => {
-        const selectSource = card.querySelector('.camera-source').value;
-        const customSource = card.querySelector('.camera-source-custom').value.trim();
-        const source = selectSource === '__custom__' ? customSource : selectSource;
-        
-        const label = card.querySelector('.camera-label').value.trim();
-        const note = card.querySelector('.camera-note').value.trim();
-        const entityVal = card.querySelector('.camera-entity').value.trim();
-        
+    document.querySelectorAll('#cameras-tbody .camera-item').forEach(tr => {
+        const source = tr.dataset.source || '';
         if (source) {
             const camObj = { source };
-            if (entityVal) camObj.entity = entityVal;
-            if (label) camObj.label = label;
-            if (note) camObj.note = note;
+            if (tr.dataset.entity) camObj.entity = tr.dataset.entity;
+            if (tr.dataset.label) camObj.label = tr.dataset.label;
+            if (tr.dataset.note) camObj.note = tr.dataset.note;
             cameras.push(camObj);
         }
     });
@@ -2111,19 +2083,17 @@ function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
     selectEl.innerHTML = '<option value="">(選択してください)</option>';
     const entities = entityList || {};
     const mpList = (entities['media_player'] || []).map(e => ({...e, _domain: 'media_player'}));
-    const notifyList = (entities['notify'] || []).map(e => ({...e, _domain: 'notify'}));
-    
-    [[mpList, 'media_player'], [notifyList, 'notify']].forEach(([list, domain]) => {
-        if (!list.length) return;
+
+    if (mpList.length) {
         const group = document.createElement('optgroup');
-        group.label = domain === 'media_player' ? 'スピーカー (media_player)' : '通知サービス (notify)';
-        list.sort((a, b) => {
+        group.label = 'スピーカー (media_player)';
+        mpList.sort((a, b) => {
             const areaA = a.area || '';
             const areaB = b.area || '';
             if (areaA !== areaB) return areaA.localeCompare(areaB, 'ja');
             return (a.friendly_name || '').localeCompare(b.friendly_name || '', 'ja');
         });
-        list.forEach(ent => {
+        mpList.forEach(ent => {
             const opt = document.createElement('option');
             opt.value = ent.entity_id;
             const areaStr = ent.area ? `[${ent.area}] ` : '';
@@ -2132,7 +2102,7 @@ function populateSpeakerHaEntityDropdown(selectEl, currentValue) {
             group.appendChild(opt);
         });
         selectEl.appendChild(group);
-    });
+    }
     
     if (currentValue && !Array.from(selectEl.options).some(o => o.value === currentValue)) {
         const opt = document.createElement('option');
@@ -2169,12 +2139,12 @@ function createSpeakerCard(item = {}) {
     const note = item.note || '';
     const type = item.type || 'tts';
 
-    const uiType = (type === 'tts' || type === 'notify') ? 'ha_entity' : type;
+    const uiType = type === 'tts' ? 'ha_entity' : type;
 
     let haEntityVal = '';
     let deviceEntity = '';
-    if (type === 'tts' || type === 'notify') {
-        haEntityVal = item.entity || item.notify_entity || '';
+    if (type === 'tts') {
+        haEntityVal = item.entity || '';
         deviceEntity = haEntityVal;
     } else {
         deviceEntity = item.entity || '';
@@ -2222,7 +2192,7 @@ function createSpeakerCard(item = {}) {
 
         <div class="speaker-fields-ha-entity" style="display: ${uiType === 'ha_entity' ? 'grid' : 'none'}; grid-template-columns: 1fr 1fr; gap: 12px;">
             <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
-                <label>HAエンティティ (media_player.xxx / notify.xxx)</label>
+                <label>HAエンティティ (media_player.xxx)</label>
                 <select class="speaker-ha-entity-select ha-entity-select-field form-input" data-domain="media_player" onchange="handleSpeakerHaEntityChange(this)">
                     <option value="">(ロード中...)</option>
                 </select>
@@ -2294,121 +2264,54 @@ function addSpeakerRow() {
     createSpeakerCard({ type: 'tts' });
 }
 
-function createCameraCard(cam = { source: '', label: '', note: '' }) {
-    const camerasList = document.getElementById('cameras-list');
-    const card = document.createElement('div');
-    card.className = 'setting-item-card camera-item';
-
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title">カメラ設定</span>
-            <button type="button" class="btn-remove" onclick="this.closest('.camera-item').remove()">
-                ✕ 削除
-            </button>
-        </div>
-        
-        <div class="config-grid-4">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ソース名 (entity_id または go2rtc名)</label>
-                <select class="camera-source ha-entity-select-field form-input" data-domain="camera" onchange="handleCameraSourceChange(this)">
-                    <option value="">(ロード中...)</option>
-                </select>
-                <input type="text" class="camera-source-custom form-input" placeholder="またはカスタム名を入力..." value="${esc(cam.source)}" style="margin-top: 6px; display:none;">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>カメラID (entity)</label>
-                <input type="text" class="camera-entity form-input"
-                       placeholder="例: camera_tv（go2rtcの場合）/ camera.xxx（HA統合の場合）"
-                       value="${esc(cam.entity || '')}">
-                <p class="form-hint camera-entity-hint">HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。</p>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ラベル名 (label)</label>
-                <input type="text" class="camera-label form-input" placeholder="例: リビング" value="${esc(cam.label)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>メモ (note)</label>
-                <input type="text" class="camera-note form-input" placeholder="例: リビングの広角カメラ" value="${esc(cam.note)}">
-            </div>
-        </div>
+function createCameraRow(cam = {}) {
+    const tbody = document.getElementById('cameras-tbody');
+    const tr = document.createElement('tr');
+    tr.className = 'camera-item';
+    // データはすべて dataset に保持
+    tr.dataset.source = cam.source || '';
+    tr.dataset.entity = cam.entity || '';
+    tr.dataset.label = cam.label || '';
+    tr.dataset.note = cam.note || '';
+    tr.innerHTML = `
+        <td>${esc(cam.source || '（未設定）')}</td>
+        <td>${esc(cam.label || '')}</td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon" title="編集"
+                    onclick="openEditModal('camera', this.closest('tr'))">✏️</button>
+        </td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon btn-remove-icon" title="削除"
+                    onclick="if(confirm('このカメラを削除しますか？')) this.closest('tr').remove()">✕</button>
+        </td>
     `;
+    tbody.appendChild(tr);
+}
 
-    camerasList.appendChild(card);
-
-    const selectSource = card.querySelector('.camera-source');
-    // go2rtc ストリーム名は HAエンティティでないので「未発見」フォールバックは抑制し、
-    // 一致しなければ下の手動入力（__custom__）に振り分ける。
-    initDropdownOptions(selectSource, 'camera', cam.source, true);
-
-    const hasMatch = Array.from(selectSource.options).some(opt => opt.value === cam.source);
-    const customInput = card.querySelector('.camera-source-custom');
-    if (!hasMatch && cam.source) {
-        const opt = document.createElement('option');
-        opt.value = "__custom__";
-        opt.textContent = "✍️ 手動入力 (go2rtc名など)";
-        opt.selected = true;
-        selectSource.appendChild(opt);
-        customInput.style.display = 'block';
-    } else {
-        const opt = document.createElement('option');
-        opt.value = "__custom__";
-        opt.textContent = "✍️ 手動入力 (go2rtc名など)";
-        selectSource.appendChild(opt);
-    }
-
-    // 初期値がHAエンティティ（source.includes('.')）ならentityをreadonly
-    const entityInput = card.querySelector('.camera-entity');
-    const entityHint = card.querySelector('.camera-entity-hint');
-    if (cam.source && cam.source.includes('.') && cam.source !== '__custom__') {
-        // entityが未設定なら sourceと同じ値を自動入力
-        if (!entityInput.value) entityInput.value = cam.source;
-        entityInput.readOnly = true;
-        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
-        if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
-    } else {
-        if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
+function addCameraRowAndOpen() {
+    createCameraRow();
+    const rows = document.querySelectorAll('#cameras-tbody .camera-item');
+    const last = rows[rows.length - 1];
+    if (last) {
+        const accordion = document.getElementById('accordion-cameras');
+        if (accordion) openAccordion(accordion);
+        openEditModal('camera', last);
     }
 }
 
-function handleCameraSourceChange(select) {
-    const card = select.closest('.camera-item');
-    const customInput = card.querySelector('.camera-source-custom');
-    const entityInput = card.querySelector('.camera-entity');
-    const entityHint = card.querySelector('.camera-entity-hint');
-
-    if (select.value === '__custom__') {
-        customInput.style.display = 'block';
-        customInput.focus();
-        // カスタム入力のときはentityを編集可能に戻す
-        entityInput.readOnly = false;
-        entityInput.style.background = '';
-        if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
-    } else {
-        customInput.style.display = 'none';
-        customInput.value = select.value;
-
-        // sourceがHAエンティティ（camera.xxxなど）ならentityを自動入力してreadonly
-        if (select.value.includes('.')) {
-            entityInput.value = select.value;
-            entityInput.readOnly = true;
-            entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
-            if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
-        } else {
-            entityInput.readOnly = false;
-            entityInput.style.background = '';
-            if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
-        }
+function renderCameraList(cameras) {
+    const tbody = document.getElementById('cameras-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (cameras && Array.isArray(cameras)) {
+        cameras.forEach(cam => createCameraRow(cam));
     }
-}
-
-function addCameraRow() {
-    createCameraCard();
 }
 
 function renderAudioSourceList(sources) {
-    const listEl = document.getElementById('audio-sources-list');
-    if (listEl) {
-        listEl.innerHTML = '';
+    const tbody = document.getElementById('audio-sources-tbody');
+    if (tbody) {
+        tbody.innerHTML = '';
         if (sources && Array.isArray(sources)) {
             sources.forEach(src => {
                 addAudioSourceRow(src);
@@ -2418,127 +2321,65 @@ function renderAudioSourceList(sources) {
 }
 
 function addAudioSourceRow(source = {}) {
-    const listEl = document.getElementById('audio-sources-list');
-    if (!listEl) return;
-    const card = document.createElement('div');
-    card.className = 'setting-item-card audio-source-item';
-
-    const sourceVal = source.source || '';
-    const labelVal = source.label || '';
-    const roomVal = source.room || '';
-    const noteVal = source.note || '';
-    const sttEnabledVal = !!source.stt_enabled;
-    const sttRetentionVal = source.stt_retention_hours !== undefined ? source.stt_retention_hours : 60;
-    const wakeWordEnabledVal = !!source.wake_word_enabled;
-    const backgroundHearingEnabledVal = source.background_hearing_enabled !== false;
-
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title">音声ソース設定</span>
-            <button type="button" class="btn-remove" onclick="this.closest('.audio-source-item').remove()">
-                ✕ 削除
-            </button>
-        </div>
-        
-        <div class="config-grid-2">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>音声ソースURI (source)</label>
-                <input type="text" class="audio-source-path form-input" placeholder="例: rtsp://192.168.1.130:8558/mic_only, tcp://192.168.1.153:3333, alsa://default" value="${esc(sourceVal)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>部屋名 (room)</label>
-                <input type="text" class="audio-source-room form-input" placeholder="例：study" value="${esc(roomVal)}">
-            </div>
-        </div>
-
-        <div class="config-grid-3" style="margin-top:12px;">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ラベル名 (label)</label>
-                <input type="text" class="audio-source-label form-input" placeholder="例：台所（VoiceS3R）" value="${esc(labelVal)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>ハードウェアID (entity)</label>
-                <input type="text" class="audio-source-entity form-input" placeholder="例: voice_s3r_kitchen" value="${esc(source.entity || '')}">
-                <p class="form-hint" style="margin-top:4px; margin-bottom:0; font-size:11px;">VoiceS3R等の特殊デバイスのみ設定。スピーカー側の「ペアリングID」と揃えることで同一デバイスとして扱われます。</p>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>メモ (note)</label>
-                <input type="text" class="audio-source-note form-input" placeholder="メモ（任意）" value="${esc(noteVal)}">
-            </div>
-        </div>
-
-        <div class="config-grid-3" style="margin-top:12px;">
-            <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
-                <label class="checkbox-label" style="margin-bottom: 0;">
-                    <input type="checkbox" class="audio-source-stt-enabled" ${sttEnabledVal ? 'checked' : ''} onchange="toggleAudioSttRetention(this)">
-                    STTを許可
-                </label>
-            </div>
-            <div class="form-group audio-source-retention-group" style="margin-bottom:0; display: ${sttEnabledVal ? 'block' : 'none'};">
-                <label>常時監視ログの保存期間 (時間・0で常時監視停止)</label>
-                <input type="number" class="audio-source-stt-retention form-input" min="0" step="1" value="${sttRetentionVal}">
-                <small class="form-hint">0にすると常時STTは行いません。AIが必要に応じてこの音声ソースを聞くことはできます。</small>
-            </div>
-            <div class="form-group" style="margin-bottom:0; display: flex; align-items: center; height: 100%;">
-                <label class="checkbox-label" style="margin-bottom: 0;">
-                    <input type="checkbox" class="audio-source-wake-word-enabled" ${wakeWordEnabledVal ? 'checked' : ''}>
-                    ウェイクワード有効
-                </label>
-            </div>
-        </div>
-
-        <div class="form-group" style="margin-top:12px; margin-bottom:0;">
-            <label class="checkbox-label" style="margin-bottom: 4px;">
-                <input type="checkbox" class="audio-source-background-hearing-enabled" ${backgroundHearingEnabledVal ? 'checked' : ''}>
-                背景音として気配を拾う
-            </label>
-            <small class="form-hint">保存期間が0のとき、STTは行わず音量/VADだけを背景聴覚ログに残します。レコーダーなど「見たい・聞きたいときだけ接続する」音源はOFFにしてください。</small>
-        </div>
+    const tbody = document.getElementById('audio-sources-tbody');
+    if (!tbody) return;
+    const tr = document.createElement('tr');
+    tr.className = 'audio-source-item';
+    // すべてのフィールドを dataset に保持
+    tr.dataset.source = source.source || '';
+    tr.dataset.room = source.room || '';
+    tr.dataset.label = source.label || '';
+    tr.dataset.entity = source.entity || '';
+    tr.dataset.note = source.note || '';
+    tr.dataset.sttEnabled = source.stt_enabled ? '1' : '0';
+    tr.dataset.sttRetention = source.stt_retention_hours !== undefined ? String(source.stt_retention_hours) : '60';
+    tr.dataset.wakeWordEnabled = source.wake_word_enabled ? '1' : '0';
+    tr.dataset.backgroundHearingEnabled = source.background_hearing_enabled !== false ? '1' : '0';
+    tr.innerHTML = `
+        <td>${esc(source.source || '（未設定）')}</td>
+        <td>${esc(source.label || '')}</td>
+        <td>${esc(source.room || '')}</td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon" title="編集"
+                    onclick="openEditModal('audio-source', this.closest('tr'))">✏️</button>
+        </td>
+        <td style="text-align:center;">
+            <button type="button" class="btn-icon btn-remove-icon" title="削除"
+                    onclick="if(confirm('この音声ソースを削除しますか？')) this.closest('tr').remove()">✕</button>
+        </td>
     `;
-
-    listEl.appendChild(card);
-}
-
-function toggleAudioSttRetention(checkbox) {
-    const card = checkbox.closest('.audio-source-item');
-    if (!card) return;
-    const retentionGroup = card.querySelector('.audio-source-retention-group');
-    if (retentionGroup) {
-        retentionGroup.style.display = checkbox.checked ? 'block' : 'none';
-    }
+    tbody.appendChild(tr);
 }
 
 function getAudioSourcesFromUI() {
-    const sources = [];
-    const items = document.querySelectorAll('.audio-source-item');
-    items.forEach(card => {
-        const source = card.querySelector('.audio-source-path').value.trim();
-        const room = card.querySelector('.audio-source-room').value.trim();
-        const label = card.querySelector('.audio-source-label').value.trim();
-        const note = card.querySelector('.audio-source-note').value.trim();
-        const entity = card.querySelector('.audio-source-entity')?.value?.trim() || '';
-        const stt_enabled = card.querySelector('.audio-source-stt-enabled').checked;
-        const sttRetentionRaw = parseInt(card.querySelector('.audio-source-stt-retention').value, 10);
-        const stt_retention_hours = Number.isNaN(sttRetentionRaw) ? 60 : Math.max(0, sttRetentionRaw);
-        const wake_word_enabled = card.querySelector('.audio-source-wake-word-enabled').checked;
-        const background_hearing_enabled = card.querySelector('.audio-source-background-hearing-enabled').checked;
-
-        if (source) {
-            const srcObj = {
-                source,
-                stt_enabled,
-                stt_retention_hours,
-                wake_word_enabled,
-                background_hearing_enabled
-            };
-            if (room) srcObj.room = room;
-            if (label) srcObj.label = label;
-            if (note) srcObj.note = note;
-            if (entity) srcObj.entity = entity;
-            sources.push(srcObj);
-        }
+    const items = [];
+    document.querySelectorAll('#audio-sources-tbody .audio-source-item').forEach(tr => {
+        const source = tr.dataset.source || '';
+        if (!source) return;
+        const obj = { source };
+        if (tr.dataset.room) obj.room = tr.dataset.room;
+        if (tr.dataset.label) obj.label = tr.dataset.label;
+        if (tr.dataset.entity) obj.entity = tr.dataset.entity;
+        if (tr.dataset.note) obj.note = tr.dataset.note;
+        obj.stt_enabled = tr.dataset.sttEnabled === '1';
+        obj.stt_retention_hours = parseInt(tr.dataset.sttRetention || '60', 10);
+        obj.wake_word_enabled = tr.dataset.wakeWordEnabled === '1';
+        obj.background_hearing_enabled = tr.dataset.backgroundHearingEnabled !== '0';
+        items.push(obj);
     });
-    return sources;
+    return items;
+}
+
+function addAudioSourceRowAndOpen() {
+    addAudioSourceRow();
+    const rows = document.querySelectorAll('#audio-sources-tbody .audio-source-item');
+    const last = rows[rows.length - 1];
+    if (last) {
+        // アコーディオンを開いてからモーダルを開く
+        const accordion = document.getElementById('accordion-audio-sources');
+        if (accordion) openAccordion(accordion);
+        openEditModal('audio-source', last);
+    }
 }
 
 const ENTITY_CONTROLLABLE_DOMAINS = 'light,switch,climate,media_player,cover,fan,script';
@@ -2637,6 +2478,42 @@ function addEntityRow() {
 }
 
 // --- Edit Modal Functions ---
+function openAccordion(accordion) {
+    const content = accordion.querySelector('.accordion-content');
+    const icon = accordion.querySelector('.accordion-icon');
+    if (content) content.style.display = 'block';
+    if (icon) icon.textContent = '▼';
+}
+
+function updateCameraModalEntityState(modal) {
+    const sourceInput = modal.querySelector('.camera-source-modal');
+    const entityInput = modal.querySelector('.camera-entity-modal');
+    const entityHint = modal.querySelector('.camera-entity-hint-modal');
+    if (!sourceInput || !entityInput) return;
+    
+    const sourceVal = sourceInput.value.trim();
+    if (sourceVal.includes('.')) {
+        entityInput.value = sourceVal;
+        entityInput.readOnly = true;
+        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
+        if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
+    } else {
+        entityInput.readOnly = false;
+        entityInput.style.background = '';
+        if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
+    }
+}
+
+function toggleAudioSttRetentionModal(checkbox) {
+    const modal = checkbox.closest('#edit-modal');
+    if (!modal) return;
+    const group = modal.querySelector('.audio-source-retention-group-modal');
+    if (group) {
+        group.style.display = checkbox.checked ? 'block' : 'none';
+    }
+}
+
+// --- Edit Modal Functions ---
 function openEditModal(type, tr) {
     _currentEditTr = tr;
     _currentEditType = type;
@@ -2673,6 +2550,94 @@ function openEditModal(type, tr) {
         `;
         const select = bodyEl.querySelector('.entity-eid-modal');
         initDropdownOptions(select, ENTITY_CONTROLLABLE_DOMAINS, entityId);
+        
+    } else if (type === 'camera') {
+        titleEl.textContent = 'カメラを編集';
+        const source = tr.dataset.source || '';
+        const entity = tr.dataset.entity || '';
+        const label = tr.dataset.label || '';
+        const note = tr.dataset.note || '';
+        
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">ソース (source)</label>
+                <input type="text" class="camera-source-modal form-input" placeholder="例: camera.living_room または capture_tv" value="${esc(source)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">カメラID (entity)</label>
+                <input type="text" class="camera-entity-modal form-input" placeholder="例: camera.living_room または camera_tv" value="${esc(entity)}">
+                <p class="form-hint camera-entity-hint-modal" style="margin-top: 4px; font-size: 11px;"></p>
+            </div>
+            <div class="form-group">
+                <label class="form-label">ラベル (label)</label>
+                <input type="text" class="camera-label-modal form-input" placeholder="例: リビング" value="${esc(label)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">メモ (note)</label>
+                <input type="text" class="camera-note-modal form-input" placeholder="例: リビングの広角カメラ (任意)" value="${esc(note)}">
+            </div>
+        `;
+        
+        const sourceInput = bodyEl.querySelector('.camera-source-modal');
+        sourceInput.addEventListener('input', () => updateCameraModalEntityState(bodyEl));
+        updateCameraModalEntityState(bodyEl);
+        
+    } else if (type === 'audio-source') {
+        titleEl.textContent = '音声ソースを編集';
+        const source = tr.dataset.source || '';
+        const room = tr.dataset.room || '';
+        const label = tr.dataset.label || '';
+        const entity = tr.dataset.entity || '';
+        const note = tr.dataset.note || '';
+        const sttEnabled = tr.dataset.sttEnabled === '1';
+        const sttRetention = tr.dataset.sttRetention || '60';
+        const wakeWordEnabled = tr.dataset.wakeWordEnabled === '1';
+        const backgroundHearingEnabled = tr.dataset.backgroundHearingEnabled !== '0';
+        
+        bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">ソースURI (source)</label>
+                <input type="text" class="audio-source-modal form-input" placeholder="例: rtsp://192.168.1.130:8558/mic_only, alsa://default" value="${esc(source)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">部屋名 (room)</label>
+                <input type="text" class="audio-room-modal form-input" placeholder="例: study" value="${esc(room)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">ラベル (label)</label>
+                <input type="text" class="audio-label-modal form-input" placeholder="例: スタディマイク" value="${esc(label)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">デバイスID (entity)</label>
+                <input type="text" class="audio-entity-modal form-input" placeholder="VoiceS3R等の特殊デバイスのみ" value="${esc(entity)}">
+                <p class="form-hint" style="margin-top: 4px; font-size: 11px;">VoiceS3R等の特殊デバイスのみ設定。スピーカー側の「ペアリングID」と揃えることで同一デバイスとして扱われます。</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label">メモ (note)</label>
+                <input type="text" class="audio-note-modal form-input" placeholder="メモ (任意)" value="${esc(note)}">
+            </div>
+            <div class="checkbox-group" style="margin-top: 12px;">
+                <label class="checkbox-label" style="font-size: 13px;">
+                    <input type="checkbox" class="audio-stt-enabled-modal" ${sttEnabled ? 'checked' : ''} onchange="toggleAudioSttRetentionModal(this)"> STTを許可 (STT有効)
+                </label>
+            </div>
+            <div class="form-group audio-source-retention-group-modal" style="margin-top: 8px; display: ${sttEnabled ? 'block' : 'none'};">
+                <label class="form-label">常時STTログ保存期間（時間）</label>
+                <input type="number" class="audio-stt-retention-modal form-input" min="0" step="1" value="${esc(sttRetention)}">
+                <small class="form-hint">0にすると常時STTは行いません。AIが必要に応じてこの音声ソースを聞くことはできます。</small>
+            </div>
+            <div class="checkbox-group" style="margin-top: 8px;">
+                <label class="checkbox-label" style="font-size: 13px;">
+                    <input type="checkbox" class="audio-wake-word-enabled-modal" ${wakeWordEnabled ? 'checked' : ''}> ウェイクワード有効
+                </label>
+            </div>
+            <div class="checkbox-group" style="margin-top: 8px; margin-bottom: 12px;">
+                <label class="checkbox-label" style="font-size: 13px;">
+                    <input type="checkbox" class="audio-bg-hearing-enabled-modal" ${backgroundHearingEnabled ? 'checked' : ''}> 背景音として気配を拾う
+                </label>
+                <small class="form-hint" style="display: block; margin-top: 2px; color: var(--claude-text-sub); font-size: 11px;">保存期間が0のとき、STTは行わず音量/VADだけを背景聴覚ログに残します。</small>
+            </div>
+        `;
         
     } else if (type === 'sensor') {
         titleEl.textContent = 'センサーの編集';
@@ -2830,6 +2795,45 @@ function saveEditModal() {
         _currentEditTr.querySelector('td:nth-child(1) .view-mode-element').textContent = entityId || '(未選択)';
         _currentEditTr.querySelector('td:nth-child(2) .view-mode-element').textContent = name;
         _currentEditTr.querySelector('td:nth-child(3) .view-mode-element').textContent = note;
+        
+    } else if (_currentEditType === 'camera') {
+        const source = modal.querySelector('.camera-source-modal').value.trim();
+        const entity = modal.querySelector('.camera-entity-modal').value.trim();
+        const label = modal.querySelector('.camera-label-modal').value.trim();
+        const note = modal.querySelector('.camera-note-modal').value.trim();
+        
+        _currentEditTr.dataset.source = source;
+        _currentEditTr.dataset.entity = entity;
+        _currentEditTr.dataset.label = label;
+        _currentEditTr.dataset.note = note;
+        
+        _currentEditTr.querySelector('td:nth-child(1)').textContent = source || '（未設定）';
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = label;
+        
+    } else if (_currentEditType === 'audio-source') {
+        const source = modal.querySelector('.audio-source-modal').value.trim();
+        const room = modal.querySelector('.audio-room-modal').value.trim();
+        const label = modal.querySelector('.audio-label-modal').value.trim();
+        const entity = modal.querySelector('.audio-entity-modal').value.trim();
+        const note = modal.querySelector('.audio-note-modal').value.trim();
+        const sttEnabled = modal.querySelector('.audio-stt-enabled-modal').checked;
+        const sttRetention = modal.querySelector('.audio-stt-retention-modal').value.trim();
+        const wakeWordEnabled = modal.querySelector('.audio-wake-word-enabled-modal').checked;
+        const backgroundHearingEnabled = modal.querySelector('.audio-bg-hearing-enabled-modal').checked;
+        
+        _currentEditTr.dataset.source = source;
+        _currentEditTr.dataset.room = room;
+        _currentEditTr.dataset.label = label;
+        _currentEditTr.dataset.entity = entity;
+        _currentEditTr.dataset.note = note;
+        _currentEditTr.dataset.sttEnabled = sttEnabled ? '1' : '0';
+        _currentEditTr.dataset.sttRetention = sttRetention !== '' ? sttRetention : '60';
+        _currentEditTr.dataset.wakeWordEnabled = wakeWordEnabled ? '1' : '0';
+        _currentEditTr.dataset.backgroundHearingEnabled = backgroundHearingEnabled ? '1' : '0';
+        
+        _currentEditTr.querySelector('td:nth-child(1)').textContent = source || '（未設定）';
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = label;
+        _currentEditTr.querySelector('td:nth-child(3)').textContent = room;
         
     } else if (_currentEditType === 'sensor') {
         const label = modal.querySelector('.sensor-label-modal').value.trim();

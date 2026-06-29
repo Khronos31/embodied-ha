@@ -37,7 +37,7 @@ MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_USER = os.environ.get("MQTT_USER", "")
 MQTT_PASS = os.environ.get("MQTT_PASS", "")
 # 各スクリプトの最大実行時間（秒）。Claude呼び出しがレート競合でハングしても
-# ロックを永久に握りっぱなしにしないための上限。watch/exploreはClaude複数回＋
+# ロックを永久に握りっぱなしにしないための上限。loopはClaude複数回＋
 # ロールアップ/daybookで長くなりうるので余裕を持たせる。
 CHAT_TIMEOUT = 300
 LOOP_TIMEOUT = 600
@@ -222,7 +222,7 @@ def tick_desires(body_state_snapshot=None, loop_name="loop", trigger_reason="", 
         print(f"[daemon] tick_desires error: {e}", flush=True)
         return [], 0.0
 
-def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snapshot=None, anomaly_state_snapshot=None, is_sensor=False):
+def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snapshot=None, anomaly_state_snapshot=None, mode=None):
     if not _loop_lock.acquire(blocking=False):
         print(f"[daemon] loop already running, skip: {trigger_reason}", flush=True)
         return
@@ -282,7 +282,7 @@ def on_loop_trigger(payload):
     reason = (payload or "").strip()
     if not reason or reason.upper() == "LOOP":
         reason = "手動実行"
-    run_loop(reason, is_sensor=False)
+    run_loop(reason, mode="observe")
 
 
 def run_chat(message, source="chat"):
@@ -404,9 +404,7 @@ def run_chance(schedule=None, body_state_snapshot=None, loop_name="loop", desire
     if desire_pressure:
         if loop_name == "loop":
             chance += round(desire_pressure * 16)
-        elif loop_name == "explore":
-            chance += round(desire_pressure * 14)
-        else:
+        elif loop_name == "chat":
             chance += round(desire_pressure * 18)
     if loop_name == "loop" and anomaly_urgency:
         chance += int(anomaly_urgency)

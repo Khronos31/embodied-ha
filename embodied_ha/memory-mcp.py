@@ -162,7 +162,7 @@ def loops_list(args: dict[str, Any]):
 
 def loops_add(args: dict[str, Any]):
     note = _clean(args.get("text"))
-    source = _clean(args.get("source")) or "explore"
+    source = _clean(args.get("source")) or "loop"
     if not note:
         return [text("text が空です")], True
     r = subprocess.run(["bash", LOOPS, "add", source, note], capture_output=True, text=True, timeout=10, env=_child_env())
@@ -300,7 +300,7 @@ def build_daybook(args: dict[str, Any]):
         highlights=highlights,
         open_questions=open_questions,
         importance_cutoff=importance_cutoff,
-        source=_clean(payload.get("source")) or "watch",
+        source=_clean(payload.get("source")) or "loop",
         raw_entry_count=raw_entry_count,
         overwrite=_truthy(payload.get("overwrite")),
     )
@@ -445,7 +445,7 @@ def main() -> None:
                     "type": "object",
                     "properties": {
                         "text": {"type": "string", "description": "ループの内容"},
-                        "source": {"type": "string", "description": "watch/explore/chat のいずれか（既定 explore）"},
+                        "source": {"type": "string", "description": "loop/chat のいずれか（既定 loop）"},
                     },
                     "required": ["text"],
                 },
@@ -507,7 +507,7 @@ def main() -> None:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "loop": {"type": "string", "description": "watch/explore/chat"},
+                        "loop": {"type": "string", "description": "loop/chat"},
                         "intent": {"type": "string", "description": "speak/act/propose"},
                         "summary": {"type": "string", "description": "しようとしたことの短い説明"},
                         "rejected_because": {"type": "string", "description": "quiet_window/low_confidence/turn_taking など"},

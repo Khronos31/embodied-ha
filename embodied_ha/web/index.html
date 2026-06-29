@@ -206,99 +206,140 @@
                     <!-- Tab 2: Input / Output -->
                     <div class="settings-tab-content" id="settings-tab-io" style="display:none;">
                         <!-- Section: Cameras -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>カメラ (cameras)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addCameraRow()">カメラを追加</button>
+                        <section class="settings-section card accordion-section" id="accordion-cameras">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>カメラ (cameras)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
+                                        onclick="event.stopPropagation(); addCameraRowAndOpen()">＋ 追加</button>
                             </div>
-                            <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
-                            <div id="cameras-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ソース (source)</th>
+                                                <th>ラベル (label)</th>
+                                                <th style="width:50px; text-align:center;">編集</th>
+                                                <th style="width:50px; text-align:center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="cameras-tbody"></tbody>
+                                    </table>
+                                </div>
                             </div>
                         </section>
 
                         <!-- Section: Audio Sources -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>音声ソース (audio_sources)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addAudioSourceRow()">ソースを追加</button>
+                        <section class="settings-section card accordion-section" id="accordion-audio-sources">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>音声ソース (audio_sources)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
+                                        onclick="event.stopPropagation(); addAudioSourceRowAndOpen()">＋ 追加</button>
                             </div>
-                            <p class="section-desc">
-                                エージェントが「聴く」ことができる音声ソースを定義します。
-                                RTSPストリームURL（go2rtc経由）またはUSBマイク直接録音（<code>alsa</code>）を指定します。
-                                デフォルトソース（最初の行）は省略時に使用されます。
-                            </p>
-                            <div id="audio-sources-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">エージェントが「聴く」ことができる音声ソースを定義します。RTSPストリームURL（go2rtc経由）またはTCP/ALSAを指定します。デフォルトソース（最初の行）は省略時に使用されます。</p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ソース (source)</th>
+                                                <th>ラベル (label)</th>
+                                                <th>部屋 (room)</th>
+                                                <th style="width:50px; text-align:center;">編集</th>
+                                                <th style="width:50px; text-align:center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="audio-sources-tbody"></tbody>
+                                    </table>
+                                </div>
                             </div>
                         </section>
 
                         <!-- Section: STT -->
-                        <section class="settings-section card">
-                            <h3>音声認識 (STT)</h3>
-                            <p class="section-desc">
-                                音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
-                                <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
-                                空欄の場合は音量検出のみ行います（文字起こしなし）。
-                            </p>
-                            <div class="form-group">
-                                <label class="form-label">STTプロバイダー (stt_provider)</label>
-                                <div class="stt-select-wrapper">
-                                    <select id="setting-stt-provider" class="form-input stt-loading">
-                                        <option value=""></option>
-                                    </select>
+                        <section class="settings-section card accordion-section" id="accordion-stt">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>音声認識 (STT)</h3>
                                 </div>
-                                <div class="stt-loading-indicator visible" id="stt-provider-loading">
-                                    <span class="stt-spinner"></span>
-                                    <span>プロバイダー一覧を読み込んでいます…</span>
-                                </div>
-                                <div class="stt-error-banner" id="stt-provider-error">
-                                    <span class="stt-error-icon">⚠️</span>
-                                    <span>プロバイダー一覧の取得に失敗しました。HAの接続を確認してください。</span>
-                                </div>
-                                <p class="form-hint">HA統合で利用可能なSTTプロバイダー。</p>
                             </div>
-                            <div class="form-group">
-                                <label class="form-label">STT言語 (stt_language)</label>
-                                <div class="stt-select-wrapper">
-                                    <select id="setting-stt-language" class="form-input stt-loading">
-                                        <option value=""></option>
-                                    </select>
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">
+                                    音声を聴くときにテキスト変換（Speech-to-Text）を行う場合、使用するHA STTプロバイダーを指定します。
+                                    <code>ha_stt</code> や <code>wyoming</code> などのプロバイダーIDを入力してください。
+                                    空欄の場合は音量検出のみ行います（文字起こしなし）。
+                                </p>
+                                <div class="form-group">
+                                    <label class="form-label">STTプロバイダー (stt_provider)</label>
+                                    <div class="stt-select-wrapper">
+                                        <select id="setting-stt-provider" class="form-input stt-loading">
+                                            <option value=""></option>
+                                        </select>
+                                    </div>
+                                    <div class="stt-loading-indicator visible" id="stt-provider-loading">
+                                        <span class="stt-spinner"></span>
+                                        <span>プロバイダー一覧を読み込んでいます…</span>
+                                    </div>
+                                    <div class="stt-error-banner" id="stt-provider-error">
+                                        <span class="stt-error-icon">⚠️</span>
+                                        <span>プロバイダー一覧の取得に失敗しました。HAの接続を確認してください。</span>
+                                    </div>
+                                    <p class="form-hint">HA統合で利用可能なSTTプロバイダー。</p>
                                 </div>
-                                <div class="stt-loading-indicator visible" id="stt-language-loading">
-                                    <span class="stt-spinner"></span>
-                                    <span>言語一覧を読み込んでいます…</span>
+                                <div class="form-group">
+                                    <label class="form-label">STT言語 (stt_language)</label>
+                                    <div class="stt-select-wrapper">
+                                        <select id="setting-stt-language" class="form-input stt-loading">
+                                            <option value=""></option>
+                                        </select>
+                                    </div>
+                                    <div class="stt-loading-indicator visible" id="stt-language-loading">
+                                        <span class="stt-spinner"></span>
+                                        <span>言語一覧を読み込んでいます…</span>
+                                    </div>
+                                    <div class="stt-error-banner" id="stt-language-error">
+                                        <span class="stt-error-icon">⚠️</span>
+                                        <span>言語一覧の取得に失敗しました。STTプロバイダーを確認してください。</span>
+                                    </div>
+                                    <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
                                 </div>
-                                <div class="stt-error-banner" id="stt-language-error">
-                                    <span class="stt-error-icon">⚠️</span>
-                                    <span>言語一覧の取得に失敗しました。STTプロバイダーを確認してください。</span>
+                                <div class="form-group">
+                                    <label class="form-label">ウェイクワード (wake_words)</label>
+                                    <input type="text" id="setting-wake-words" class="form-input" placeholder="例: ウェイクワード" style="max-width:320px;">
+                                    <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
                                 </div>
-                                <p class="form-hint">音声認識時の言語コード。STTプロバイダーを入力すると言語一覧が更新されます。</p>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">ウェイクワード (wake_words)</label>
-                                <input type="text" id="setting-wake-words" class="form-input" placeholder="例: ウェイクワード" style="max-width:320px;">
-                                <p class="form-hint">音声認識開始のためのウェイクワード。カンマ区切りで入力します。</p>
                             </div>
                         </section>
 
 
                         <!-- Section: Speakers -->
-                        <section class="settings-section card">
-                            <div class="section-header">
-                                <h3>発話先スピーカー (speakers)</h3>
-                                <button type="button" class="btn btn-primary btn-sm" onclick="addSpeakerRow()">部屋を追加</button>
+                        <section class="settings-section card accordion-section" id="accordion-speakers">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>発話先スピーカー (speakers)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add" onclick="event.stopPropagation(); addSpeakerRow()">＋ 部屋を追加</button>
                             </div>
-                            <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるか、TCPで直接PCMを送るかを選択できます。</p>
-                            <div class="form-group" style="max-width:480px; margin-bottom:16px;">
-                                <label class="form-label">TTSプロバイダー (tts_provider)</label>
-                                <select id="setting-tts-provider" class="form-input">
-                                    <option value="">（未設定）</option>
-                                </select>
-                                <p class="form-hint">TCP スピーカーが音声合成に使用するプロバイダー。TTS タイプのスピーカーは各カード内の TTSエンジン で個別指定します。</p>
-                            </div>
-                            <div id="speakers-list" class="settings-list">
-                                <!-- Dynamically generated -->
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">部屋ごとの発話方法を設定します。TTSエンジンで喋らせるか、通知サービスでAlexa等に喋らせるか、TCPで直接PCMを送るかを選択できます。</p>
+                                <div class="form-group" style="max-width:480px; margin-bottom:16px;">
+                                    <label class="form-label">TTSプロバイダー (tts_provider)</label>
+                                    <select id="setting-tts-provider" class="form-input">
+                                        <option value="">（未設定）</option>
+                                    </select>
+                                    <p class="form-hint">TCP スピーカーが音声合成に使用するプロバイダー。TTS タイプのスピーカーは各カード内の TTSエンジン で個別指定します。</p>
+                                </div>
+                                <div id="speakers-list" class="settings-list">
+                                    <!-- Dynamically generated -->
+                                </div>
                             </div>
                         </section>
                     </div>

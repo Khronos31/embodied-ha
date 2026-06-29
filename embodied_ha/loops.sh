@@ -9,7 +9,7 @@ set -euo pipefail
 #   loops add <source> <text...>  … 新規ループを追加し、採番したidを出力
 #   loops close <id> [reason]      … ループをクローズ
 #
-# source: chat / watch / explore のいずれか（どこで生まれたやりかけ・約束か）
+# source: chat / loop / explore のいずれか（どこで生まれたやりかけ・約束か）
 
 # symlink(/config/.tools/bin/loops 等)経由でも実体ディレクトリ基準で log を引く。
 # 実行時は run.sh / config.sh が EHA_LOG_DIR を設定するのでそちらが優先される。

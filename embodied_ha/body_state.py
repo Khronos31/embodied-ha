@@ -256,10 +256,6 @@ def advance_tick(
     if loop_name == "loop":
         curiosity += 0.012
         stress += 0.004
-    elif loop_name == "explore":
-        curiosity += 0.015
-    elif loop_name == "watch":
-        stress += 0.004
     elif loop_name == "chat":
         social_openness += 0.012
         confidence += 0.006
@@ -311,20 +307,7 @@ def apply_feedback(
     energy_cost = 0.018 + min(0.080, duration / 1800.0 * 0.045)
     current["energy"] = round(_clamp(current["energy"] - energy_cost), 3)
 
-    if loop_name == "watch":
-        current["curiosity"] = round(
-            _clamp(current["curiosity"] - (0.040 if success else -0.010)),
-            3,
-        )
-        current["stress"] = round(
-            _clamp(current["stress"] + (-0.012 if success else 0.080)),
-            3,
-        )
-        current["confidence"] = round(
-            _clamp(current["confidence"] + (0.020 if success else -0.050)),
-            3,
-        )
-    elif loop_name in {"loop", "explore"}:
+    if loop_name == "loop":
         current["curiosity"] = round(
             _clamp(current["curiosity"] - (0.060 if success else -0.015)),
             3,
@@ -370,7 +353,6 @@ def apply_feedback(
     current["last_result"] = "success" if success else "failure"
     current["session_count"] = current.get("session_count", 0) + 1
     return current
-
 
 def apply_action_effect(
     state: Mapping[str, Any],
@@ -471,16 +453,6 @@ def compute_run_chance(base_chance: int, state: Mapping[str, Any], loop_name: st
     social_openness = current["social_openness"]
 
     if loop_name == "loop":
-        chance += round((curiosity - 0.5) * 30)
-        chance += round((confidence - 0.5) * 7)
-        chance += round((energy - 0.5) * 12)
-        chance -= round(max(0.0, stress - 0.32) * 26)
-    elif loop_name == "watch":
-        chance += round((curiosity - 0.5) * 26)
-        chance += round((confidence - 0.5) * 8)
-        chance += round((energy - 0.5) * 10)
-        chance -= round(max(0.0, stress - 0.35) * 24)
-    elif loop_name == "explore":
         chance += round((curiosity - 0.5) * 34)
         chance += round((energy - 0.55) * 16)
         chance += round((confidence - 0.5) * 6)
@@ -496,7 +468,6 @@ def compute_run_chance(base_chance: int, state: Mapping[str, Any], loop_name: st
         chance += 8
 
     return max(5, min(100, chance))
-
 
 def format_log_line(label: str, state: Mapping[str, Any], **fields: Any) -> str:
     """Return a compact, human-readable log line."""

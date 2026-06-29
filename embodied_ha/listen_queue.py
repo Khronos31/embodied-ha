@@ -2,7 +2,7 @@
 
 The model can ask for a future listening session instead of calling the
 immediate `listen` tool. We persist that intent as a small JSON file so the
-next chat/watch/explore session can inject the captured audio into the normal
+next chat/loop session can inject the captured audio into the normal
 prompt flow and, only for that session, swap the backend binary/model.
 """
 

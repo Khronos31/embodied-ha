@@ -319,7 +319,7 @@ def record_consent(args: dict[str, Any]):
 
 def should_interrupt(args: dict[str, Any]):
     person = _clean(args.get("person"))
-    mode = _clean(args.get("mode")) or "watch"
+    mode = _clean(args.get("mode")) or "loop"
     intent = _clean(args.get("intent")) or "speak"
     hour = args.get("hour", 12)
     metadata = _json_load(args.get("metadata") or args.get("metadata_json") or {})

@@ -83,7 +83,7 @@
     }
   ],
 
-  "_speakers_doc": "スピーカーデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。ttsタイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。",
+  "_speakers_doc": "スピーカーデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。tts タイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。tcp タイプは raw PCM を TCP ソケットに送信する（VoiceS3R 等）。",
   "speakers": [
     {
       "entity": "media_player.your_tts_media_player",
@@ -91,28 +91,6 @@
       "label": "書斎（Nest Mini）",
       "type": "tts",
       "note": "tts_entity はグローバル設定を使用"
-    },
-    {
-      "entity": "notify.living_alexa_speak",
-      "room": "living",
-      "label": "リビング（Alexa）",
-      "type": "notify",
-      "note": ""
-    },
-    {
-      "entity": "notify.bedroom_alexa_speak",
-      "room": "bedroom",
-      "label": "寝室（Alexa）",
-      "type": "notify",
-      "note": ""
-    },
-    {
-      "entity": "notify.mobile_app_your_phone",
-      "room": "away",
-      "label": "外出先（スマホ）",
-      "type": "notify",
-      "title": "Embodied HA",
-      "note": ""
     },
     {
       "entity": "mic_node_kitchen",

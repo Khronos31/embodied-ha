@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mcp-config.py <output_path> <server>...  — claude の --mcp-config 用 JSON を生成。
 
-各ループ（loop/explore/chat）が必要なMCPサーバーだけを指定して設定を書き出す。
+各ループ（loop/chat）が必要なMCPサーバーだけを指定して設定を書き出す。
 サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
 明示的に env ブロックへ注入する（env継承に依存しない）。
 

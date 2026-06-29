@@ -175,21 +175,6 @@ def speak(room, message, host=""):
         print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
         return ok
 
-    elif config.get("type") == "notify":
-        # Alexa/mobile_app などは notify エンティティ（notify.xxx）になっており、
-        # 旧形式 services/notify/<name> は 400 になる（2026-06-23 実機で確認）。
-        entity = config.get("entity", "")
-        # 旧設定（notify. を外したサービス名）でも動くよう notify. を補完する
-        if entity and not entity.startswith("notify."):
-            entity = "notify." + entity
-        data = {"entity_id": entity, "message": message}
-        if config.get("title"):
-            data["title"] = config["title"]
-        payload = json.dumps(data, ensure_ascii=False)
-        ok = curl_post(f"{ha_url}/services/notify/send_message", payload, ha_token)
-        print(f"[speak] notify:{room} {'OK' if ok else 'NG'}")
-        return ok
-
     elif config.get("type") == "tcp":
         # VoiceS3R 等の TCP スピーカーに raw mono s16le 16kHz PCM を push する。
         # デバイス側がサーバー（port 3334 listen）で、TCP 切断が終了合図。

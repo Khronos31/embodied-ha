@@ -2,12 +2,12 @@
 """HA 家電操作 MCP サーバー（embodied-ha 用・書き込み専用）。
 
 ha_get（読み取り）とは別サーバーに分離することで、「このサーバーを繋ぐ＝操作能力を持つ」
-という物理的なゲートを作る。自律操作 OFF のループ（watch/explore）にはこのサーバーを
+という物理的なゲートを作る。自律操作 OFF のループ（loop）にはこのサーバーを
 繋がないことで、ツール自体を渡さない（プロンプト頼みにしない多層防御）。
 
 全ての操作は log/actions.jsonl に記録する（事後報告・監査証跡）。
 
-env: HA_URL, SUPERVISOR_TOKEN, EHA_LOG_DIR, EHA_ACTOR(任意: watch/explore/chat 等)
+env: HA_URL, SUPERVISOR_TOKEN, EHA_LOG_DIR, EHA_ACTOR(任意: loop/chat 等)
 """
 import os
 import json

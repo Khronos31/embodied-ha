@@ -35,7 +35,7 @@ export EHA_MEMORY_DIR="${EHA_MEMORY_DIR:-/config/.tools/claude-home/projects/-co
 _EHA_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export EHA_PREFS_FILE="${EHA_PREFS_FILE:-$_EHA_SCRIPT_DIR/preferences.json}"
 
-# --- character.md（キャラクター定義。watch/chat/explore が cat して $CHARACTER に）---
+# --- character.md（キャラクター定義。loop/chat/explore が cat して $CHARACTER に）---
 # アドオンでは run.sh が EHA_DATA_DIR 配下のユーザー編集版を指す。dev/直接実行時は同梱版。
 export EHA_CHARACTER_FILE="${EHA_CHARACTER_FILE:-$_EHA_SCRIPT_DIR/character.md}"
 

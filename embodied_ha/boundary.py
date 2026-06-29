@@ -125,7 +125,7 @@ def check(
     if intent not in {"speak", "action"}:
         return {"allowed": False, "reason": f"未知のintent: {intent or '（空）'}", "fallback": None}
 
-    if intent == "action" and mode not in {"watch", "explore"}:
+    if intent == "action" and mode != "loop":
         return {"allowed": False, "reason": f"{mode or 'unknown'}モードでは家電操作しない", "fallback": None}
 
     if mode == "chat" and intent == "speak":
@@ -265,7 +265,7 @@ def _load_prefs(path: str) -> dict[str, Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default="watch")
+    parser.add_argument("--mode", default="loop")
     parser.add_argument("--intent", default="speak")
     parser.add_argument("--hour", default="12")
     parser.add_argument("--autonomous", default="0")

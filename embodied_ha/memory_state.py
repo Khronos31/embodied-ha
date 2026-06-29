@@ -200,7 +200,7 @@ def default_daybook(date: str = "") -> dict[str, Any]:
     return {
         "date": _clean(date),
         "generated_at": "",
-        "source": "watch",
+        "source": "loop",
         "episode_ids": [],
         "summary": "",
         "themes": [],
@@ -581,7 +581,7 @@ def build_daybook(
     highlights: Iterable[Mapping[str, Any]] | None = None,
     open_questions: Iterable[str] | None = None,
     importance_cutoff: float = 0.65,
-    source: str = "watch",
+    source: str = "loop",
     raw_entry_count: int | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -614,7 +614,7 @@ def build_daybook(
     daybook = default_daybook(date)
     daybook.update({
         "generated_at": _now().isoformat(timespec="seconds"),
-        "source": _clean(source) or "watch",
+        "source": _clean(source) or "loop",
         "episode_ids": episode_id_list,
         "summary": summary,
         "themes": _normalize_text_list(list(themes or [])),
