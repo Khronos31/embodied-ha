@@ -93,11 +93,12 @@ def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str
                 normalized = clean(item.get("entity")) or entity
                 return normalized, clean(item.get("room")) or None
 
-    for item in prefs.get("camera_devices", []):
-        if not isinstance(item, dict):
-            continue
-        if clean(item.get("entity")) == entity:
-            return entity, clean(item.get("room")) or None
+    for key in ("camera_devices", "cameras"):
+        for item in prefs.get(key, []):
+            if not isinstance(item, dict):
+                continue
+            if clean(item.get("entity")) == entity:
+                return entity, clean(item.get("room")) or None
 
     return entity, None
 

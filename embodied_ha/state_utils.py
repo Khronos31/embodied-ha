@@ -118,7 +118,7 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
 
     mic_entry = _find_entry(prefs.get("audio_sources"))
     speaker_entry = _find_entry(prefs.get("speakers"))
-    camera_entry = _find_entry(prefs.get("camera_devices"))
+    camera_entry = _find_entry(prefs.get("camera_devices")) or _find_entry(prefs.get("cameras"))
     return {
         "is_mic": mic_entry is not None,
         "is_speaker": speaker_entry is not None,
