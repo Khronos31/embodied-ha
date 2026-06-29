@@ -1,77 +1,109 @@
 {
   "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
   "character_name": "Claude",
+
+  "tts_entity": "tts.home_assistant_cloud",
+  "stt_provider": "stt.home_assistant_cloud",
+  "stt_language": "ja-JP",
+
+  "_cameras_doc": "entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。HAエンティティなら entity = source = ha_entity でよい。go2rtcの場合は entity に独自IDを設定し ha_entity で画像取得先のHAカメラを指定する。",
   "cameras": [
     {
-      "source": "capture_tv",
-      "label": "テレビ",
+      "entity": "camera_tv",
+      "source": "living_tv_stream",
       "room": "living",
-      "preset": "tv",
-      "direction": "front",
+      "label": "テレビ",
       "note": "HDDレコーダー出力。今何が放送されているか確認できる"
     },
     {
+      "entity": "camera.living_room_entity_id",
       "source": "camera.living_room_entity_id",
-      "label": "リビング",
+      "ha_entity": "camera.living_room_entity_id",
       "room": "living",
-      "preset": "wide",
-      "direction": "front",
+      "label": "リビング",
       "note": "リビングの広角カメラ"
     }
   ],
-  "stt_provider": null,
+
+  "_audio_sources_doc": "entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。rtsp/alsa/tcp など非HAのものは独自IDを設定する。",
   "audio_sources": [
     {
-      "source": "rtsp://localhost:8554/capture_tv",
+      "entity": "mic_tv",
+      "source": "rtsp://localhost:8554/living_tv_stream",
       "label": "TV・レコーダー",
       "room": "living",
-      "note": "go2rtc経由のTV/レコーダー音声"
+      "note": "go2rtc経由のTV/レコーダー音声",
+      "stt_enabled": false,
+      "stt_retention_hours": 0,
+      "wake_word_enabled": false,
+      "background_hearing_enabled": false
     },
     {
-      "source": "rtsp://localhost:8556/mic_only",
-      "label": "PC",
-      "room": "study",
-      "note": "PCマイク"
-    },
-    {
-      "source": "rtsp://localhost:8558/mic_only",
-      "label": "Google TV",
-      "room": "study",
-      "note": "Google TV Streamerマイク"
-    },
-    {
+      "entity": "mic_alsa",
       "source": "alsa://default",
       "label": "スタディマイク",
       "room": "study",
-      "note": "USBマイク直接録音（/dev/snd 必要）"
+      "note": "USBマイク直接録音（/dev/snd 必要）",
+      "stt_enabled": true,
+      "stt_retention_hours": 24,
+      "wake_word_enabled": true,
+      "background_hearing_enabled": true
     },
     {
-      "source": "tcp://192.168.1.31:3333",
+      "entity": "mic_node_kitchen",
+      "source": "tcp://192.168.1.xxx:3333",
       "label": "廊下 VoiceS3R",
       "room": "hallway",
-      "note": "常時計測用の固定IPノード"
+      "note": "常時計測用の固定IPノード",
+      "stt_enabled": true,
+      "stt_retention_hours": 24,
+      "wake_word_enabled": true,
+      "background_hearing_enabled": true
     }
   ],
-  "speakers": {
-    "study": {
+
+  "_speakers_doc": "entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。ttsタイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。",
+  "speakers": [
+    {
+      "entity": "media_player.your_tts_media_player",
+      "room": "study",
+      "label": "書斎（Nest Mini）",
       "type": "tts",
-      "tts_entity": "tts.home_assistant_cloud",
-      "media_player": "media_player.your_tts_media_player"
+      "note": ""
     },
-    "living": {
+    {
+      "entity": "notify.living_alexa_speak",
+      "room": "living",
+      "label": "リビング（Alexa）",
       "type": "notify",
-      "entity": "notify.living_alexa_speak"
+      "note": ""
     },
-    "bedroom": {
+    {
+      "entity": "notify.bedroom_alexa_speak",
+      "room": "bedroom",
+      "label": "寝室（Alexa）",
       "type": "notify",
-      "entity": "notify.bedroom_alexa_speak"
+      "note": ""
     },
-    "away": {
-      "type": "notify",
+    {
       "entity": "notify.mobile_app_your_phone",
-      "title": "Embodied HA"
+      "room": "away",
+      "label": "外出先（スマホ）",
+      "type": "notify",
+      "title": "Embodied HA",
+      "note": ""
+    },
+    {
+      "entity": "mic_node_kitchen",
+      "room": "hallway",
+      "label": "廊下（VoiceS3R）",
+      "type": "tcp",
+      "host": "192.168.1.xxx",
+      "port": 3334,
+      "note": ""
     }
-  },
+  ],
+
   "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
   "entities": [
     {

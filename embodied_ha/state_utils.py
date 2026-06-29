@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import uuid
 from typing import Any
 
 
@@ -68,7 +69,7 @@ def parse_ts(value: Any) -> _dt.datetime | None:
 def write_json(path: str, data: Any) -> None:
     """Atomically write ``data`` as pretty UTF-8 JSON (tmp file + ``os.replace``)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
@@ -108,17 +109,23 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
             "camera": None,
         }
 
-    def _find_entry(items: Any) -> dict[str, Any] | None:
+    def _find_entry(items: Any, extra_keys: tuple[str, ...] = ()) -> dict[str, Any] | None:
         if not isinstance(items, list):
             return None
         for item in items:
-            if isinstance(item, dict) and clean(item.get("entity")) == entity:
+            if not isinstance(item, dict):
+                continue
+            if clean(item.get("entity")) == entity:
                 return item
+            for key in extra_keys:
+                val = clean(item.get(key))
+                if val and val == entity:
+                    return item
         return None
 
-    mic_entry = _find_entry(prefs.get("audio_sources"))
-    speaker_entry = _find_entry(prefs.get("speakers"))
-    camera_entry = _find_entry(prefs.get("camera_devices")) or _find_entry(prefs.get("cameras"))
+    mic_entry = _find_entry(prefs.get("audio_sources"), extra_keys=("source",))
+    speaker_entry = _find_entry(prefs.get("speakers"), extra_keys=("media_player",))
+    camera_entry = _find_entry(prefs.get("cameras"), extra_keys=("source", "ha_entity"))
     return {
         "is_mic": mic_entry is not None,
         "is_speaker": speaker_entry is not None,

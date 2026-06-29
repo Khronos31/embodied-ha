@@ -160,7 +160,7 @@ def _default_tts(rows):
 
 def build_speakers_draft(rows):
     """media_player をエリア別に集約し、スピーカーらしきものを1つ選んで speakers 下書きを作る。
-    type は tts 固定（media_player + tts_entity）。Alexa を notify で鳴らす等は会話で調整する前提。"""
+    type は tts 固定。Alexa を notify で鳴らす等は会話で調整する前提。"""
     warnings = []
     default_tts = _default_tts(rows)
     by_area = {}
@@ -181,11 +181,11 @@ def build_speakers_draft(rows):
         if len(chosen) > 1:
             warnings.append(f"area『{area}』にスピーカー候補が複数。{pick['eid']} を仮選択"
                             f"（「{area}は○○で喋って」で変更可）。")
-        speakers[area] = {"type": "tts", "tts_entity": default_tts, "media_player": pick["eid"]}
+        speakers[area] = {"type": "tts", "entity": pick["eid"]}
 
     if speakers and not default_tts:
-        warnings.append("TTS エンジンが見つかりません。speakers の tts_entity を会話で設定してください。")
-    return speakers, warnings
+        warnings.append("TTS エンジンが見つかりません。グローバル設定の tts_entity を会話で設定してください。")
+    return speakers, default_tts, warnings
 
 
 def build_entities_draft(rows):
@@ -224,7 +224,7 @@ def main():
         sys.exit(1)
 
     draft, warnings = build_draft(rows, resident)
-    speakers_draft, speaker_warnings = build_speakers_draft(rows)
+    speakers_draft, default_tts, speaker_warnings = build_speakers_draft(rows)
     entities_draft, entity_warnings = build_entities_draft(rows)
 
     for w in warnings + speaker_warnings + entity_warnings:
@@ -237,6 +237,8 @@ def main():
         except Exception:
             prefs = {}
         prefs["sensors"] = draft
+        if default_tts:
+            prefs["tts_entity"] = default_tts
         # speakers は既存ユーザー設定を尊重し、未設定（空）のときだけ下書きを入れる。
         if not prefs.get("speakers") and speakers_draft:
             prefs["speakers"] = speakers_draft
@@ -253,8 +255,10 @@ def main():
         print(f"[discover] preferences.json に sensors を書き込みました（{len(draft['groups'])}グループ / {n}項目）",
               file=sys.stderr)
     else:
-        print(json.dumps({"sensors": draft, "speakers": speakers_draft, "entities": entities_draft},
-                         ensure_ascii=False, indent=2))
+        output = {"sensors": draft, "speakers": speakers_draft, "entities": entities_draft}
+        if default_tts:
+            output["tts_entity"] = default_tts
+        print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

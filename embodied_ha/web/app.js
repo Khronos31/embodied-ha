@@ -971,8 +971,9 @@ async function fetchSettings() {
                     }
                 ],
                 stt_provider: "wyoming",
+                tts_entity: "tts.home_assistant_cloud",
                 speakers: {
-                    study: { type: "tts", tts_entity: "tts.home_assistant_cloud", media_player: "media_player.study_speaker" },
+                    study: { type: "tts", entity: "media_player.study_speaker" },
                     living: { type: "notify", entity: "notify.living_alexa_speak" }
                 },
                 entities: [
@@ -1628,7 +1629,6 @@ async function renderSettingsForm() {
 
     renderAudioSourceList(prefsData.audio_sources || []);
 
-    renderCameraDeviceList(prefsData.camera_devices || []);
 
     const entitiesList = document.getElementById('entities-list');
     if (entitiesList) {
@@ -1772,10 +1772,7 @@ function serializeFormToPrefs() {
             item.entity = deviceEntityVal;
         }
 
-        if (type === 'tts') {
-            item.tts_entity = card.querySelector('.speaker-tts-entity').value;
-            item.media_player = card.querySelector('.speaker-media-player').value;
-        } else if (type === 'notify') {
+        if (type === 'notify') {
             const notifyEntityVal = card.querySelector('.speaker-notify-entity').value;
             item.notify_entity = notifyEntityVal;
             if (!deviceEntityVal && notifyEntityVal) {
@@ -1801,30 +1798,14 @@ function serializeFormToPrefs() {
         
         const label = card.querySelector('.camera-label').value.trim();
         const note = card.querySelector('.camera-note').value.trim();
+        const entityVal = card.querySelector('.camera-entity').value.trim();
         
         if (source) {
             const camObj = { source };
+            if (entityVal) camObj.entity = entityVal;
             if (label) camObj.label = label;
             if (note) camObj.note = note;
             cameras.push(camObj);
-        }
-    });
-
-    const camera_devices = [];
-    const cameraDeviceCards = document.querySelectorAll('.camera-device-item');
-    cameraDeviceCards.forEach(card => {
-        const entity = card.querySelector('.cd-entity').value.trim();
-        const roomSelect = card.querySelector('.cd-room');
-        const room = roomSelect ? roomSelect.value.trim() : '';
-        const label = card.querySelector('.cd-label').value.trim();
-        const ha_entity = card.querySelector('.cd-ha-entity').value.trim();
-        
-        if (entity) {
-            const devObj = { entity };
-            if (room) devObj.room = room;
-            if (label) devObj.label = label;
-            if (ha_entity) devObj.ha_entity = ha_entity;
-            camera_devices.push(devObj);
         }
     });
 
@@ -1914,7 +1895,6 @@ function serializeFormToPrefs() {
         ...prefsData,
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
-        camera_devices,
         audio_sources,
         stt_provider,
         stt_language,
@@ -2150,63 +2130,6 @@ function addProjectionTargetRow(target = {}) {
     populateRoomSelect(roomSelect, room);
 }
 
-function renderCameraDeviceList(devices) {
-    const listEl = document.getElementById('camera-devices-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    if (Array.isArray(devices)) {
-        devices.forEach(d => addCameraDeviceRow(d));
-    }
-}
-
-function addCameraDeviceRow(device = {}) {
-    const listEl = document.getElementById('camera-devices-list');
-    if (!listEl) return;
-    const card = document.createElement('div');
-    card.className = 'setting-item-card camera-device-item';
-
-    const entityVal = device.entity || '';
-    const roomVal = device.room || '';
-    const labelVal = device.label || '';
-    const haEntityVal = device.ha_entity || '';
-
-    card.innerHTML = `
-        <div class="setting-item-header">
-            <span class="setting-item-title">カメラデバイス</span>
-            <button type="button" class="btn-remove" onclick="this.closest('.camera-device-item').remove()">
-                ✕ 削除
-            </button>
-        </div>
-        <div class="config-grid-2">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>デバイスID (entity) <span style="color:red;">*</span></label>
-                <input type="text" class="cd-entity form-input" placeholder="例: camera.rihinkunokamera_live_view" value="${esc(entityVal)}" required>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>部屋名 (room)</label>
-                <select class="cd-room form-input">
-                    <option value="">指定なし</option>
-                </select>
-            </div>
-        </div>
-        <div class="config-grid-2" style="margin-top:12px;">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>表示名 (label)</label>
-                <input type="text" class="cd-label form-input" placeholder="例: リビングカメラ" value="${esc(labelVal)}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>HAカメラエンティティID (ha_entity - 任意)</label>
-                <input type="text" class="cd-ha-entity form-input" placeholder="例: camera.living_room_ptz" value="${esc(haEntityVal)}">
-            </div>
-        </div>
-    `;
-
-    listEl.appendChild(card);
-
-    const roomSelect = card.querySelector('.cd-room');
-    populateRoomSelect(roomSelect, roomVal, 'cd-room');
-}
-window.addCameraDeviceRow = addCameraDeviceRow;
 function createSpeakerCard(item = {}) {
     const speakersList = document.getElementById('speakers-list');
     const card = document.createElement('div');
@@ -2276,19 +2199,11 @@ function createSpeakerCard(item = {}) {
             <input type="hidden" class="speaker-type" value="${esc(type)}">
         </div>
 
-        <div class="speaker-fields-tts config-grid-2" style="display: ${type === 'tts' ? 'grid' : 'none'};">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>TTSエンジン (tts_entity)</label>
-                <select class="speaker-tts-entity ha-entity-select-field form-input" data-domain="tts">
-                    <option value="">(ロード中...)</option>
-                </select>
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>再生スピーカー (media_player)</label>
-                <select class="speaker-media-player ha-entity-select-field form-input" data-domain="media_player">
-                    <option value="">(ロード中...)</option>
-                </select>
-            </div>
+        <div class="speaker-fields-tts" style="display: ${type === 'tts' ? 'block' : 'none'};">
+            <p class="form-hint" style="margin-top: 4px;">
+                TTSエンジンはグローバル設定の「TTSエンジン」を使用します。<br>
+                再生スピーカーには「デバイスID」に media_player の entity_id を設定してください。
+            </p>
         </div>
 
         <div class="speaker-fields-notify config-grid-2" style="display: ${type === 'notify' ? 'grid' : 'none'};">
@@ -2321,12 +2236,8 @@ function createSpeakerCard(item = {}) {
 
     speakersList.appendChild(card);
 
-    const selectTts = card.querySelector('.speaker-tts-entity');
-    const selectMp = card.querySelector('.speaker-media-player');
     const selectNotify = card.querySelector('.speaker-notify-entity');
 
-    initDropdownOptions(selectTts, 'tts', item.tts_entity);
-    initDropdownOptions(selectMp, 'media_player', item.media_player);
     initDropdownOptions(selectNotify, 'notify', notifyEntity);
 }
 
@@ -2337,7 +2248,7 @@ function toggleSpeakerType(btn, targetType) {
     btn.classList.add('active');
 
     card.querySelector('.speaker-type').value = targetType;
-    card.querySelector('.speaker-fields-tts').style.display = targetType === 'tts' ? 'grid' : 'none';
+    card.querySelector('.speaker-fields-tts').style.display = targetType === 'tts' ? 'block' : 'none';
     card.querySelector('.speaker-fields-notify').style.display = targetType === 'notify' ? 'grid' : 'none';
     card.querySelector('.speaker-fields-tcp').style.display = targetType === 'tcp' ? 'grid' : 'none';
 }
@@ -2366,6 +2277,13 @@ function createCameraCard(cam = { source: '', label: '', note: '' }) {
                     <option value="">(ロード中...)</option>
                 </select>
                 <input type="text" class="camera-source-custom form-input" placeholder="またはカスタム名を入力..." value="${esc(cam.source)}" style="margin-top: 6px; display:none;">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>デバイスID (entity)</label>
+                <input type="text" class="camera-entity form-input"
+                       placeholder="例: camera_tv（go2rtcの場合）/ camera.xxx（HA統合の場合）"
+                       value="${esc(cam.entity || '')}">
+                <p class="form-hint">電脳体として侵入するときの識別ID。go2rtcストリームは任意の短い名前、HA統合カメラは entity_id（camera.xxx）をそのまま使う。</p>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>ラベル名 (label)</label>

@@ -154,10 +154,22 @@ def speak(room, message, host=""):
         return False
 
     if config.get("type") == "tts":
+        tts_entity = (
+            config.get("tts_entity")
+            or prefs.get("tts_entity")
+            or ""
+        ).strip()
+        if not tts_entity:
+            print(f"[speak] tts speaker '{room}': tts_entity が未設定", file=sys.stderr)
+            return False
+        media_player = (config.get("entity") or config.get("media_player") or "").strip()
+        if not media_player:
+            print(f"[speak] tts speaker '{room}': media_player が未設定", file=sys.stderr)
+            return False
         payload = json.dumps({
-            "entity_id": config["tts_entity"],
+            "entity_id": tts_entity,
             "message": message,
-            "media_player_entity_id": config["media_player"]
+            "media_player_entity_id": media_player
         }, ensure_ascii=False)
         ok = curl_post(f"{ha_url}/services/tts/speak", payload, ha_token)
         print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
@@ -190,9 +202,12 @@ def speak(room, message, host=""):
             print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
             return False
 
+        _global_tts_entity = (prefs.get("tts_entity") or "").strip()
+        _derived_provider = _global_tts_entity.removeprefix("tts.") if _global_tts_entity else ""
         tts_provider = (
             config.get("tts_provider")
             or prefs.get("tts_provider")
+            or _derived_provider
             or ""
         ).strip()
         tts_language = (

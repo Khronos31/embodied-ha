@@ -848,6 +848,12 @@ def _current_body_state() -> tuple[dict, str, str, str]:
     return loc, current_entity, current_room, projected_room
 
 
+def _broken_cyber_state_error(current_entity: str, projected_room: str) -> tuple[list, bool] | None:
+    if current_entity and not projected_room:
+        return [text("状態が壊れています（current_entity あり projected_room なし）。body_repair を呼んでください。")], True
+    return None
+
+
 def _resolve_room_speaker(speakers: list, room: str) -> dict:
     room_speakers = _find_speakers_by_room(speakers, room)
     if not room_speakers:
@@ -1006,7 +1012,10 @@ def use_device_speaker(args: dict):
     message = (args.get("message") or "").strip()
     if not message:
         return [text("message が必要です")], True
-    _, current_entity, current_room, _ = _current_body_state()
+    _, current_entity, current_room, projected_room = _current_body_state()
+    broken_state = _broken_cyber_state_error(current_entity, projected_room)
+    if broken_state:
+        return broken_state
     if not current_entity:
         return [text("物理体モードでは use_device_speaker は使えません。speak を使ってください。")], True
     prefs = load_preferences()
@@ -1018,7 +1027,10 @@ def use_device_speaker(args: dict):
 
 
 def listen(args: dict):
-    _, current_entity, _, _ = _current_body_state()
+    _, current_entity, _, projected_room = _current_body_state()
+    broken_state = _broken_cyber_state_error(current_entity, projected_room)
+    if broken_state:
+        return broken_state
     if current_entity:
         return [text("電脳体モードでは listen は使えません。use_device_microphone を使ってください。")], True
     _body_loc = _load_body_location()
@@ -1031,7 +1043,10 @@ def listen(args: dict):
 
 
 def use_device_microphone(args: dict):
-    _, current_entity, _, _ = _current_body_state()
+    _, current_entity, _, projected_room = _current_body_state()
+    broken_state = _broken_cyber_state_error(current_entity, projected_room)
+    if broken_state:
+        return broken_state
     if not current_entity:
         return [text("物理体モードでは use_device_microphone は使えません。listen を使ってください。")], True
     prefs = load_preferences()
@@ -1046,7 +1061,10 @@ def use_device_microphone(args: dict):
 
 
 def concentrate_hearing(args: dict):
-    _, current_entity, _, _ = _current_body_state()
+    _, current_entity, _, projected_room = _current_body_state()
+    broken_state = _broken_cyber_state_error(current_entity, projected_room)
+    if broken_state:
+        return broken_state
     if current_entity:
         return [text("電脳体モードでは concentrate_hearing は使えません。")], True
     ok, reason = check_listen_queue_cooldown()

@@ -81,7 +81,7 @@ def _load_body_location() -> dict:
 
 def _load_camera_devices() -> list[dict]:
     prefs = _load_prefs()
-    devices = prefs.get("camera_devices")
+    devices = prefs.get("cameras")
     return devices if isinstance(devices, list) else []
 
 
@@ -192,12 +192,11 @@ def _load_current_camera():
 
 
 def _camera_source_for_capture(camera: dict, current_entity: str) -> str:
-    return _clean(camera.get("ha_entity")) or _clean(camera.get("entity")) or current_entity
+    return _clean(camera.get("ha_entity")) or _clean(camera.get("source")) or _clean(camera.get("entity")) or current_entity
 
 
 def _camera_supports_ptz(camera: dict, current_entity: str) -> bool:
-    target = _clean(camera.get("ha_entity")) or current_entity
-    return "rihinkunokamera" in target
+    return bool(camera.get("ptz"))
 
 
 def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: str, req_id):

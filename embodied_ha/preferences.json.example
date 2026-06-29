@@ -2,105 +2,126 @@
   "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
 
   "character_name": "Claude",
-  "wake_words": ["あかね", "ねえあかね"],
-  "stt_provider": null,
+  "wake_words": ["ねえクロード", "クロード"],
+
+  "tts_entity": "tts.home_assistant_cloud",
+  "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
 
+  "_cameras_doc": "カメラデバイス一覧。電脳体として侵入可能なカメラも含む。entity: HAエンティティIDか独自の短いID（侵入時に使う）。source: go2rtcストリーム名 or HAカメラentity_id。ha_entity: HAカメラentity_id（sourceがgo2rtcのとき画像取得・PTZに必要）。",
   "cameras": [
     {
-      "source": "capture_tv",
-      "label": "テレビ",
+      "entity": "camera_tv",
+      "source": "living_tv_stream",
       "room": "living",
-      "preset": "tv",
-      "direction": "front",
+      "label": "テレビ",
       "note": "HDDレコーダー出力。今何が放送されているか確認できる"
     },
     {
+      "entity": "camera.living_room_entity_id",
       "source": "camera.living_room_entity_id",
-      "label": "リビング",
+      "ha_entity": "camera.living_room_entity_id",
       "room": "living",
-      "preset": "wide",
-      "direction": "front",
-      "note": "リビングの広角カメラ"
+      "label": "リビング",
+      "note": "リビングの広角カメラ（HA統合経由）"
+    },
+    {
+      "entity": "camera_living_ptz",
+      "source": "camera_living_ptz",
+      "ha_entity": "camera.living_ptz",
+      "room": "living",
+      "label": "リビング（PTZ）",
+      "note": "PTZ対応カメラ。use_device_camera で ptz_left/right/up/down 操作可能"
     }
   ],
 
+  "_audio_sources_doc": "マイクデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。HAエンティティでないもの（rtsp/alsa/tcp）は独自IDを設定する。",
   "audio_sources": [
     {
-      "source": "rtsp://localhost:8554/capture_tv",
+      "entity": "mic_tv",
+      "source": "rtsp://localhost:8554/living_tv_stream",
       "label": "TV・レコーダー",
+      "room": "living",
       "note": "go2rtc経由のTV/レコーダー音声",
       "stt_enabled": false,
-      "stt_retention_hours": 60,
+      "stt_retention_hours": 0,
       "wake_word_enabled": false,
       "background_hearing_enabled": false
     },
     {
+      "entity": "mic_pc",
       "source": "rtsp://localhost:8556/mic_only",
       "label": "PC",
+      "room": "study",
       "note": "PCマイク",
       "stt_enabled": false,
-      "stt_retention_hours": 60,
-      "wake_word_enabled": false
+      "stt_retention_hours": 0,
+      "wake_word_enabled": false,
+      "background_hearing_enabled": false
     },
     {
-      "source": "rtsp://localhost:8558/mic_only",
-      "label": "Google TV",
-      "note": "Google TV Streamerマイク",
-      "stt_enabled": false,
-      "stt_retention_hours": 60,
-      "wake_word_enabled": false,
+      "entity": "mic_alsa",
+      "source": "alsa://default",
+      "label": "スタディマイク",
+      "room": "study",
+      "note": "USBマイク直接録音（/dev/snd 必要）",
+      "stt_enabled": true,
+      "stt_retention_hours": 24,
+      "wake_word_enabled": true,
       "background_hearing_enabled": true
     },
     {
-      "source": "default",
-      "label": "スタディマイク",
-      "note": "USBマイク直接録音（/dev/snd 必要）",
-      "stt_enabled": false,
-      "stt_retention_hours": 60,
-      "wake_word_enabled": false,
+      "entity": "mic_node_kitchen",
+      "source": "tcp://192.168.1.xxx:3333",
+      "label": "廊下 VoiceS3R",
+      "room": "hallway",
+      "note": "常時計測用の固定IPノード",
+      "stt_enabled": true,
+      "stt_retention_hours": 24,
+      "wake_word_enabled": true,
       "background_hearing_enabled": true
     }
   ],
 
+  "_speakers_doc": "スピーカーデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。ttsタイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。",
   "speakers": [
     {
+      "entity": "media_player.your_tts_media_player",
       "room": "study",
       "label": "書斎（Nest Mini）",
       "type": "tts",
-      "tts_entity": "tts.home_assistant_cloud",
-      "media_player": "media_player.your_tts_media_player",
-      "note": ""
+      "note": "tts_entity はグローバル設定を使用"
     },
     {
+      "entity": "notify.living_alexa_speak",
       "room": "living",
       "label": "リビング（Alexa）",
       "type": "notify",
-      "entity": "notify.living_alexa_speak",
       "note": ""
     },
     {
+      "entity": "notify.bedroom_alexa_speak",
       "room": "bedroom",
       "label": "寝室（Alexa）",
       "type": "notify",
-      "entity": "notify.bedroom_alexa_speak",
       "note": ""
     },
     {
+      "entity": "notify.mobile_app_your_phone",
       "room": "away",
       "label": "外出先（スマホ）",
       "type": "notify",
-      "entity": "notify.mobile_app_your_phone",
       "title": "Embodied HA",
       "note": ""
     },
     {
-      "room": "kitchen",
-      "label": "台所（VoiceS3R）",
+      "entity": "mic_node_kitchen",
+      "room": "hallway",
+      "label": "廊下（VoiceS3R）",
       "type": "tcp",
       "host": "192.168.1.xxx",
       "port": 3334,
-      "note": "VoiceS3R スピーカー。raw mono s16le 16kHz を TCP で push。tts_provider は最上位の tts_provider を継承。"
+      "note": "VoiceS3R スピーカー。tts_provider はグローバルの tts_entity から自動取得"
     }
   ],
 

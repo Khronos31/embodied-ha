@@ -93,12 +93,17 @@ def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str
                 normalized = clean(item.get("entity")) or entity
                 return normalized, clean(item.get("room")) or None
 
-    for key in ("camera_devices", "cameras"):
-        for item in prefs.get(key, []):
-            if not isinstance(item, dict):
-                continue
-            if clean(item.get("entity")) == entity:
-                return entity, clean(item.get("room")) or None
+    for item in prefs.get("cameras", []):
+        if not isinstance(item, dict):
+            continue
+        matched = any(
+            clean(item.get(k)) == entity
+            for k in ("entity", "source", "ha_entity")
+            if clean(item.get(k))
+        )
+        if matched:
+            canonical = clean(item.get("entity")) or entity
+            return canonical, clean(item.get("room")) or None
 
     return entity, None
 
@@ -520,6 +525,8 @@ def move_cyber(args: dict[str, Any]):
     target_room: str | None = None
     if raw_entity.startswith("external://"):
         target_room = resolve_external_room(raw_entity)
+        if not target_room:
+            return _json_text({"error": "unknown external projection target", "entity": raw_entity}), True
     elif room_arg:
         target_room = resolve_room(room_arg, graph)
     else:
