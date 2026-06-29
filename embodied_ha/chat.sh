@@ -477,7 +477,7 @@ _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path,
-                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "tts", "http"],
+                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http"],
                    env={**CLAUDE_ENV, "EHA_ACTOR": "chat"}, check=False)
     if os.path.exists(_mcp_path):
         cmd += ["--allowedTools",
@@ -494,7 +494,7 @@ if _sd:
                 "mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,"
                 "mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__hacontrol__ha_call_service,"
                 "mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__camera_get,mcp__camera__camera_ptz,mcp__audio__listen,mcp__audio__queue_next_listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
-                "mcp__tts__audio_speak,"
+                "mcp__audio__audio_speak,"
                 "mcp__http__http_get,mcp__http__http_post,"
                 "Read",
                 "--mcp-config", _mcp_path]

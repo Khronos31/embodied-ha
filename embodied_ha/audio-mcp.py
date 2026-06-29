@@ -196,9 +196,53 @@ def load_audio_sources() -> list[dict]:
     ]
 
 
-def default_listen_source() -> str:
-    sources = load_audio_sources()
-    return sources[0]["source"] if sources else DEFAULT_SOURCE
+def _body_location_path() -> str:
+    return (
+        clean(os.environ.get("EHA_BODY_LOCATION_FILE"))
+        or "/config/embodied-ha/body_location.json"
+    )
+
+
+def _load_body_location() -> dict:
+    try:
+        with open(_body_location_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def auto_listen_source(body_loc: dict, source_configs: list[dict]) -> str:
+    """body_location を参照して listen のデフォルト source を自動解決する。
+    電脳体で TCP ノードに侵入中: 同 IP の mic ソースを自動マッチ。
+    電脳体で HA エンティティに侵入中 or 物理体: 現在の部屋のソース（TCP 優先）。
+    """
+    current_entity = clean(body_loc.get("current_entity"))
+    projected_room = clean(body_loc.get("projected_room"))
+    current_room = clean(body_loc.get("current_room"))
+
+    if projected_room and current_entity:
+        if current_entity.startswith("tcp://"):
+            entity_host = current_entity[6:].split(":")[0]
+            for cfg in source_configs:
+                s = clean(cfg.get("source", ""))
+                if s.startswith("tcp://") and s[6:].split(":")[0] == entity_host:
+                    return s
+        # HA エンティティ or TCP マッチなし: 侵入先の部屋のソース（TCP 優先）
+        room_cfgs = [c for c in source_configs if isinstance(c, dict) and c.get("room") == projected_room]
+        tcp_cfgs = [c for c in room_cfgs if clean(c.get("source", "")).startswith("tcp://")]
+        best = tcp_cfgs[0] if tcp_cfgs else (room_cfgs[0] if room_cfgs else None)
+        if best:
+            return clean(best["source"])
+
+    # 物理体モード: current_room のソース（TCP 優先）
+    if current_room:
+        room_cfgs = [c for c in source_configs if isinstance(c, dict) and c.get("room") == current_room]
+        tcp_cfgs = [c for c in room_cfgs if clean(c.get("source", "")).startswith("tcp://")]
+        best = tcp_cfgs[0] if tcp_cfgs else (room_cfgs[0] if room_cfgs else None)
+        if best:
+            return clean(best["source"])
+
+    return clean(source_configs[0]["source"]) if source_configs else DEFAULT_SOURCE
 
 
 def load_stt_provider() -> str | None:
@@ -216,18 +260,23 @@ def build_listen_spec() -> dict:
     source_lines = "\n".join(
         f'  - "{s["source"]}"（{s["label"]}）' for s in sources
     )
-    default = sources[0]["source"] if sources else "alsa://default"
     return {
         "name": "listen",
         "description": (
             "短時間だけ音を聴く。\n"
-            f"利用可能なソース:\n{source_lines}\n"
-            f"source を省略すると最初のソース（{default}）を使う。"
+            "source を省略すると body_location.json を参照して自動選択する:\n"
+            "- 電脳体で VoiceS3R（TCP）に侵入中: そのノードのマイク（同 IP の tcp://HOST:3333）\n"
+            "- 電脳体で HA エンティティに侵入中 or 物理体: 現在の部屋のマイク（TCP 優先）\n"
+            f"source を明示する場合の利用可能なソース:\n{source_lines}\n"
             "transcribe は必要なときだけ true にする。"
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "録音ソース URI。省略すると body_location から自動解決する。",
+                },
                 "duration": {
                     "type": "integer",
                     "description": "録音秒数。デフォルト 5、最大 30",
@@ -691,8 +740,162 @@ def read_audio_event_tags(args: dict):
     return read_jsonl_log(AUDIO_EVENT_TAGS_FILE, args)
 
 
+# ─── audio_speak ──────────────────────────────────────────────────────────────
+
+_SPEAK_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speak.py")
+
+
+def _extract_tcp_host(entity: str) -> str:
+    if entity.startswith("tcp://"):
+        return entity[6:].split(":")[0]
+    return ""
+
+
+def _find_tcp_speaker_by_host(speakers, host: str) -> dict:
+    if isinstance(speakers, list):
+        for s in speakers:
+            if isinstance(s, dict) and s.get("type") == "tcp" and s.get("host") == host:
+                return s
+    return {}
+
+
+def _find_ha_speaker_by_entity(speakers, entity_id: str) -> dict:
+    if isinstance(speakers, list):
+        for s in speakers:
+            if isinstance(s, dict):
+                if s.get("media_player") == entity_id or s.get("tts_entity") == entity_id:
+                    return s
+    return {}
+
+
+def _find_speakers_by_room(speakers, room: str) -> list:
+    if isinstance(speakers, list):
+        return [s for s in speakers if isinstance(s, dict) and s.get("room") == room]
+    if isinstance(speakers, dict):
+        cfg = speakers.get(room)
+        return [cfg] if cfg else []
+    return []
+
+
+TOOL_AUDIO_SPEAK = {
+    "name": "audio_speak",
+    "description": (
+        "現在の身体の場所に応じて適切なスピーカーから声を出す。\n"
+        "room 指定は不要——body_location.json を参照して自動ルーティングする:\n"
+        "- 物理体モード: 現在の部屋のスピーカーへ（VoiceS3R TCP スピーカー優先）\n"
+        "- 電脳体で VoiceS3R スピーカーに侵入中: そのノードから直接発話\n"
+        "- 電脳体で HA スピーカー（media_player 等）に侵入中: そのエンティティ経由で発話\n"
+        "- 電脳体で非スピーカーデバイスに侵入中: 発話失敗（物理体に戻る必要あり）\n"
+        "観察・探索ループで家人に声をかけたいときに使う。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "message": {"type": "string", "description": "話す内容"},
+        },
+        "required": ["message"],
+    },
+}
+
+
+def audio_speak(args: dict):
+    message = (args.get("message") or "").strip()
+    if not message:
+        return [text("message が必要です")], True
+
+    loc = _load_body_location()
+    prefs = load_preferences()
+    speakers = prefs.get("speakers", [])
+
+    current_entity = (loc.get("current_entity") or "").strip()
+    current_room = (loc.get("current_room") or "").strip()
+    projected_room = (loc.get("projected_room") or "").strip()
+
+    speak_room = ""
+    speak_host = ""
+    label = ""
+
+    if projected_room and current_entity:
+        # 電脳体モード
+        if current_entity.startswith("tcp://"):
+            entity_host = _extract_tcp_host(current_entity)
+            if not entity_host:
+                return [text(f"電脳体モードですが current_entity の形式が不明です: {current_entity}")], True
+            tcp_speaker = _find_tcp_speaker_by_host(speakers, entity_host)
+            if not tcp_speaker:
+                return [text(
+                    f"侵入中のデバイス（{current_entity}）はスピーカーとして登録されていません。"
+                    "発話するには物理体に戻るか、スピーカーノードに侵入し直してください。"
+                )], True
+            speak_room = tcp_speaker.get("room", "")
+            speak_host = entity_host
+            label = tcp_speaker.get("label", speak_host)
+        else:
+            # HA エンティティ: media_player / tts_entity で照合
+            ha_speaker = _find_ha_speaker_by_entity(speakers, current_entity)
+            if not ha_speaker:
+                return [text(
+                    f"侵入中のデバイス（{current_entity}）はスピーカーとして登録されていません。"
+                    "発話するには物理体に戻るか、スピーカーエンティティに侵入し直してください。"
+                )], True
+            speak_room = ha_speaker.get("room", "")
+            speak_host = ""
+            label = ha_speaker.get("label", current_entity)
+    else:
+        # 物理体モード
+        if not current_room:
+            return [text("現在位置が不明です（body_location.json の current_room が空）")], True
+        room_speakers = _find_speakers_by_room(speakers, current_room)
+        if not room_speakers:
+            return [text(
+                f"現在の部屋（{current_room}）にスピーカーが登録されていません。"
+                "preferences.json の speakers に部屋を追加してください。"
+            )], True
+        tcp_in_room = [s for s in room_speakers if s.get("type") == "tcp"]
+        chosen = tcp_in_room[0] if tcp_in_room else room_speakers[0]
+        speak_room = chosen.get("room", current_room)
+        speak_host = chosen.get("host", "") if chosen.get("type") == "tcp" else ""
+        label = chosen.get("label", speak_room)
+
+    cmd = ["python3", _SPEAK_PY, speak_room, message]
+    if speak_host:
+        cmd += ["--host", speak_host]
+
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    detail = (r.stdout or "").strip() or (r.stderr or "").strip()
+    if r.returncode != 0:
+        return [text(f"発話できませんでした: {detail}")], True
+
+    mode_desc = f"電脳体→{speak_host or current_entity}" if projected_room else f"物理体@{current_room}"
+    log(f"[audio-mcp] audio_speak [{mode_desc}] room={speak_room}: {message[:40]}")
+
+    log_dir = os.environ.get("EHA_LOG_DIR", "")
+    if log_dir:
+        try:
+            ts = now().isoformat(timespec="seconds")
+            chat_log_path = os.path.join(log_dir, "chat_log.jsonl")
+            entry = json.dumps(
+                {"timestamp": ts, "source": "speak", "claude": message, "user": None},
+                ensure_ascii=False,
+            )
+            with open(chat_log_path, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
+        except Exception:
+            pass
+
+    return [text(f"発話しました（{label}）")]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def listen(args: dict):
-    source = normalize_source_uri(args.get("source") or default_listen_source())
+    source_arg = clean(args.get("source"))
+    if source_arg:
+        source = normalize_source_uri(source_arg)
+    else:
+        _body_loc = _load_body_location()
+        _src_cfgs = load_audio_source_configs()
+        source = normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
 
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
@@ -796,4 +999,5 @@ if __name__ == "__main__":
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
         "read_non_speech_audio_events": {"spec": TOOL_READ_NON_SPEECH_AUDIO_EVENTS, "handler": read_non_speech_audio_events},
         "read_audio_event_tags": {"spec": TOOL_READ_AUDIO_EVENT_TAGS, "handler": read_audio_event_tags},
+        "audio_speak": {"spec": TOOL_AUDIO_SPEAK, "handler": audio_speak},
     })

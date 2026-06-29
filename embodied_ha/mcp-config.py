@@ -5,7 +5,7 @@
 サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
 明示的に env ブロックへ注入する（env継承に依存しない）。
 
-サーバー名: audio / body / camera / ha / hacontrol / http / tts / memory / sensors / sociality
+サーバー名: audio / body / camera / ha / hacontrol / http / memory / sensors / sociality
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_PREFS_FILE, EHA_LOG_DIR, EHA_DATA_DIR, EHA_AUDIO_LOG_FILE,
      EHA_AUDITORY_EVENTS_FILE, EHA_ACTIVE_LISTEN_LOG_FILE,
@@ -51,7 +51,6 @@ REGISTRY = {
     "ha":        lambda: _server("ha-mcp.py"),          # 読み取り専用（ha_get）
     "hacontrol": lambda: _server("ha-control-mcp.py"),  # 家電操作（ha_call_service）
     "http":    lambda: _server("http-mcp.py"),
-    "tts":     lambda: _server("tts-mcp.py"),
     "memory":  lambda: _server("memory-mcp.py"),
     "sensors": lambda: _server("sensors-mcp.py"),
     "sociality": lambda: _server("sociality-mcp.py"),

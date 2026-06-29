@@ -1,3 +1,4 @@
+# DEPRECATED: audio_speak は audio-mcp.py に統合されました。mcp-config.py はこのファイルを起動しません。
 #!/usr/bin/env python3
 """TTS / 通知 MCP サーバー（embodied-ha 用）。
 
