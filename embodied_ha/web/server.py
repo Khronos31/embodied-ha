@@ -994,6 +994,9 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int(qs.get("limit", ["300"])[0])
             self.send_json(read_jsonl(AUDIO_EVENT_TAGS_LOG, limit))
+        elif path == "/api/lounge-pem-status":
+            pem_path = "/config/embodied-ha/github_app.pem"
+            self.send_json({"exists": os.path.exists(pem_path)})
         elif path == "/api/lounge-queue":
             self.send_json(get_lounge_queue())
         elif path == "/api/lounge-log":
@@ -1322,6 +1325,25 @@ class Handler(BaseHTTPRequestHandler):
                 with open(default_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 atomic_write(target_path, content)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/lounge-pem":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length))
+                pem_content = (body.get("pem") or "").strip()
+                if not pem_content:
+                    self.send_json({"error": "pem フィールドが空です"}, 400)
+                    return
+                if "PRIVATE KEY" not in pem_content:
+                    self.send_json({"error": "有効な秘密鍵ファイルではありません"}, 400)
+                    return
+                pem_dir = "/config/embodied-ha"
+                os.makedirs(pem_dir, exist_ok=True)
+                pem_path = os.path.join(pem_dir, "github_app.pem")
+                atomic_write(pem_path, pem_content + "\n")
+                os.chmod(pem_path, 0o600)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

@@ -3798,13 +3798,80 @@ function stopAiLoungeLoop() {
     }
 }
 
+async function fetchLoungePemStatus() {
+    if (isStandaloneMode) return;
+    try {
+        const res = await fetch(`${base}/api/lounge-pem-status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const setupEl = document.getElementById('lounge-pem-setup');
+        const okEl = document.getElementById('lounge-pem-ok');
+        if (data.exists) {
+            if (setupEl) setupEl.style.display = 'none';
+            if (okEl) okEl.style.display = 'block';
+        } else {
+            if (setupEl) setupEl.style.display = 'block';
+            if (okEl) okEl.style.display = 'none';
+        }
+    } catch (e) { /* ignore */ }
+}
+
+let _pendingPemContent = null;
+
+function handlePemFileSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const filenameEl = document.getElementById('lounge-pem-filename');
+    const uploadBtn = document.getElementById('lounge-pem-upload-btn');
+    const statusEl = document.getElementById('lounge-pem-status-msg');
+    if (filenameEl) filenameEl.textContent = file.name;
+    if (statusEl) statusEl.textContent = '';
+    const reader = new FileReader();
+    reader.onload = e => {
+        _pendingPemContent = e.target.result;
+        if (uploadBtn) uploadBtn.disabled = false;
+    };
+    reader.readAsText(file);
+}
+
+async function uploadPemFile() {
+    if (!_pendingPemContent) return;
+    const uploadBtn = document.getElementById('lounge-pem-upload-btn');
+    const statusEl = document.getElementById('lounge-pem-status-msg');
+    if (uploadBtn) uploadBtn.disabled = true;
+    if (statusEl) statusEl.textContent = 'アップロード中...';
+    try {
+        const res = await fetch(`${base}/api/lounge-pem`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pem: _pendingPemContent })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+            if (statusEl) statusEl.textContent = '';
+            _pendingPemContent = null;
+            const filenameEl = document.getElementById('lounge-pem-filename');
+            if (filenameEl) filenameEl.textContent = 'ファイル未選択';
+            const input = document.getElementById('lounge-pem-input');
+            if (input) input.value = '';
+            fetchLoungePemStatus();
+        } else {
+            if (statusEl) { statusEl.textContent = `エラー: ${data.error || '不明なエラー'}`; statusEl.style.color = 'var(--claude-error, red)'; }
+            if (uploadBtn) uploadBtn.disabled = false;
+        }
+    } catch (e) {
+        if (statusEl) { statusEl.textContent = `通信エラー: ${e.message}`; statusEl.style.color = 'var(--claude-error, red)'; }
+        if (uploadBtn) uploadBtn.disabled = false;
+    }
+}
+
 async function fetchAiLoungeData() {
     if (isStandaloneMode) {
         renderAiLoungeQueue(mockLoungeQueue);
         renderAiLoungeLog(mockLoungeLog);
         return;
     }
-    
+    fetchLoungePemStatus();
     try {
         const [queueRes, logRes] = await Promise.all([
             fetch(`${base}/api/lounge-queue`).catch(() => null),

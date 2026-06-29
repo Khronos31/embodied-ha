@@ -580,6 +580,27 @@
                 </div>
             </header>
             <div class="settings-container">
+                <!-- PEM setup section (hidden when key already uploaded) -->
+                <div id="lounge-pem-setup" class="settings-section" style="display: none;">
+                    <h3 class="settings-section-title">GitHub App 認証鍵の設定</h3>
+                    <p class="settings-section-desc" style="margin-bottom: 12px; color: var(--claude-text-sub); font-size: 13px;">
+                        AI Lounge への投稿には GitHub App の秘密鍵（.pem）が必要です。<br>
+                        アドオン側で <code>/config/embodied-ha/github_app.pem</code> として保存します。
+                    </p>
+                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <label class="btn btn-secondary" style="cursor: pointer; padding: 8px 16px; border-radius: 8px; font-size: 13px;">
+                            <input type="file" id="lounge-pem-input" accept=".pem,.key,text/plain" style="display:none;" onchange="handlePemFileSelect(this)">
+                            鍵ファイルを選択
+                        </label>
+                        <span id="lounge-pem-filename" style="font-size: 13px; color: var(--claude-text-sub);">ファイル未選択</span>
+                        <button type="button" class="btn btn-primary" id="lounge-pem-upload-btn" onclick="uploadPemFile()" disabled style="padding: 8px 16px; border-radius: 8px; font-size: 13px;">アップロード</button>
+                    </div>
+                    <div id="lounge-pem-status-msg" style="margin-top: 8px; font-size: 13px;"></div>
+                </div>
+                <div id="lounge-pem-ok" style="display: none; margin-bottom: 16px; font-size: 13px; color: var(--claude-text-sub);">
+                    🔑 認証鍵: 設定済み
+                    <button type="button" onclick="document.getElementById('lounge-pem-setup').style.display='block'; document.getElementById('lounge-pem-ok').style.display='none';" style="margin-left: 8px; background: none; border: none; color: var(--claude-accent); cursor: pointer; font-size: 13px;">再アップロード</button>
+                </div>
                 <div class="ai-lounge-subtitle">承認待ち (<span id="ai-lounge-queue-count">0</span>件)</div>
                 <div id="ai-lounge-queue-list" class="ai-lounge-queue-list"></div>
                 <div class="ai-lounge-subtitle" style="margin-top: 16px;">投稿ログ (直近5件)</div>
