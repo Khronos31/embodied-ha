@@ -96,7 +96,7 @@ curl -sf -X POST "http://localhost:${INGRESS_PORT:-8099}/api/status" -H "Content
 trap '_web_idle' EXIT
 
 COMMON_CHAR="$CHARACTER"
-BODY_STATE="${EHA_BODY_STATE:-{}}"
+BODY_STATE="${EHA_BODY_STATE:-}"
 BODY_NARRATIVE=$(BODY_STATE="$BODY_STATE" SCRIPT_DIR="$SCRIPT_DIR" python3 - <<'PYEOF'
 import json
 import os
