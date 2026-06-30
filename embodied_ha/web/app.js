@@ -1859,6 +1859,7 @@ function serializeFormToPrefs() {
         const source = tr.dataset.source || '';
         if (source) {
             const camObj = { source };
+            if (tr.dataset.room) camObj.room = tr.dataset.room;
             if (tr.dataset.entity) camObj.entity = tr.dataset.entity;
             if (tr.dataset.label) camObj.label = tr.dataset.label;
             if (tr.dataset.note) camObj.note = tr.dataset.note;
@@ -2252,11 +2253,13 @@ function createCameraRow(cam = {}) {
     const tr = document.createElement('tr');
     tr.className = 'camera-item';
     // データはすべて dataset に保持
+    tr.dataset.room = cam.room || '';
     tr.dataset.source = cam.source || '';
     tr.dataset.entity = cam.entity || '';
     tr.dataset.label = cam.label || '';
     tr.dataset.note = cam.note || '';
     tr.innerHTML = `
+        <td>${esc(cam.room || '')}</td>
         <td>${esc(cam.source || '（未設定）')}</td>
         <td>${esc(cam.label || '')}</td>
         <td style="text-align:center;">
@@ -2319,9 +2322,9 @@ function addAudioSourceRow(source = {}) {
     tr.dataset.wakeWordEnabled = source.wake_word_enabled ? '1' : '0';
     tr.dataset.backgroundHearingEnabled = source.background_hearing_enabled !== false ? '1' : '0';
     tr.innerHTML = `
+        <td>${esc(source.room || '')}</td>
         <td>${esc(source.source || '（未設定）')}</td>
         <td>${esc(source.label || '')}</td>
-        <td>${esc(source.room || '')}</td>
         <td style="text-align:center;">
             <button type="button" class="btn-icon" title="編集"
                     onclick="openEditModal('audio-source', this.closest('tr'))">✏️</button>
@@ -2556,6 +2559,7 @@ function openEditModal(type, tr) {
         
     } else if (type === 'camera') {
         titleEl.textContent = 'カメラを編集';
+        const room = tr.dataset.room || '';
         const source = tr.dataset.source || '';
         const entity = tr.dataset.entity || '';
         const label = tr.dataset.label || '';
@@ -2566,6 +2570,10 @@ function openEditModal(type, tr) {
         const customSource = isHaEntity ? '' : source;
 
         bodyEl.innerHTML = `
+            <div class="form-group">
+                <label class="form-label">部屋 (room)</label>
+                <input type="text" class="camera-room-modal form-input" placeholder="例: study" value="${esc(room)}">
+            </div>
             <div class="form-group">
                 <label class="form-label">ソース (source)</label>
                 <select class="camera-source-select-modal form-input">
@@ -2909,17 +2917,20 @@ function saveEditModal() {
         const source = (selectVal && selectVal !== '__custom__')
             ? selectVal
             : modal.querySelector('.camera-source-modal').value.trim();
+        const room = modal.querySelector('.camera-room-modal').value.trim();
         const entity = modal.querySelector('.camera-entity-modal').value.trim();
         const label = modal.querySelector('.camera-label-modal').value.trim();
         const note = modal.querySelector('.camera-note-modal').value.trim();
         
+        _currentEditTr.dataset.room = room;
         _currentEditTr.dataset.source = source;
         _currentEditTr.dataset.entity = entity;
         _currentEditTr.dataset.label = label;
         _currentEditTr.dataset.note = note;
         
-        _currentEditTr.querySelector('td:nth-child(1)').textContent = source || '（未設定）';
-        _currentEditTr.querySelector('td:nth-child(2)').textContent = label;
+        _currentEditTr.querySelector('td:nth-child(1)').textContent = room;
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = source || '（未設定）';
+        _currentEditTr.querySelector('td:nth-child(3)').textContent = label;
         
     } else if (_currentEditType === 'audio-source') {
         const source = modal.querySelector('.audio-source-modal').value.trim();
@@ -2942,9 +2953,9 @@ function saveEditModal() {
         _currentEditTr.dataset.wakeWordEnabled = wakeWordEnabled ? '1' : '0';
         _currentEditTr.dataset.backgroundHearingEnabled = backgroundHearingEnabled ? '1' : '0';
         
-        _currentEditTr.querySelector('td:nth-child(1)').textContent = source || '（未設定）';
-        _currentEditTr.querySelector('td:nth-child(2)').textContent = label;
-        _currentEditTr.querySelector('td:nth-child(3)').textContent = room;
+        _currentEditTr.querySelector('td:nth-child(1)').textContent = room;
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = source || '（未設定）';
+        _currentEditTr.querySelector('td:nth-child(3)').textContent = label;
         
     } else if (_currentEditType === 'speaker') {
         const room = modal.querySelector('.speaker-room-modal').value.trim();
