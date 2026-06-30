@@ -493,7 +493,7 @@ _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path,
-                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http"],
+                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http", "lounge"],
                    env={**CLAUDE_ENV, "EHA_ACTOR": "chat"}, check=False)
     if os.path.exists(_mcp_path):
         _common_tools = (
@@ -514,7 +514,10 @@ if _sd:
             "mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
             "mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,"
             "mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,"
-            "mcp__http__http_get,mcp__http__http_post,Read"
+            "mcp__http__http_get,mcp__http__http_post,"
+            "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
+            "mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,"
+            "Read"
         )
         if chat_source == "voice":
             # voice: speak/use_device_speaker で直接返す（チャットログ不使用）
