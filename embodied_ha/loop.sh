@@ -45,7 +45,8 @@ for line in sys.stdin:
         continue
     try:
         d=json.loads(line)
-        lines.append(f"{d.get("timestamp","")[:16]} [{d.get("mode","")}] {d.get("topic","")}")
+        ts, mode, topic = d.get("timestamp","")[:16], d.get("mode",""), d.get("topic","")
+        lines.append(f"{ts} [{mode}] {topic}")
     except Exception:
         pass
 print("\n".join(lines) if lines else "なし")
