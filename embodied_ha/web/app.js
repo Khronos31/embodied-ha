@@ -1828,7 +1828,7 @@ async function loadGames() {
     if (nameSpan) nameSpan.textContent = (prefsData && prefsData.character_name) || 'エージェント';
     container.innerHTML = '<p class="loading-text">読み込み中...</p>';
     try {
-        const res = await fetch('/api/games');
+        const res = await fetch(`${base}/api/games`);
         const data = await res.json();
         renderGames(data.games || []);
     } catch (e) {
@@ -1865,7 +1865,7 @@ function renderGames(games) {
 
 async function toggleGame(id, enabled) {
     try {
-        const res = await fetch('/api/games/toggle', {
+        const res = await fetch(`${base}/api/games/toggle`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({id, enabled})
