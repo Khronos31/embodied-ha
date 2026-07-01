@@ -1805,6 +1805,10 @@ async function switchSettingsTab(tabName) {
     if (tabOther) tabOther.style.display = tabName === 'other' ? 'block' : 'none';
     if (tabExperimental) tabExperimental.style.display = tabName === 'experimental' ? 'block' : 'none';
     if (tabGames) tabGames.style.display = tabName === 'games' ? 'block' : 'none';
+
+    const noSaveBar = ['other', 'games', 'experimental'];
+    const actionBar = document.querySelector('.settings-action-bar');
+    if (actionBar) actionBar.style.display = noSaveBar.includes(tabName) ? 'none' : '';
     
     if (tabName === 'other') {
         renderOtherFeaturesCatalog();
@@ -1820,6 +1824,8 @@ async function switchSettingsTab(tabName) {
 async function loadGames() {
     const container = document.getElementById('games-list');
     if (!container) return;
+    const nameSpan = document.getElementById('games-agent-name');
+    if (nameSpan) nameSpan.textContent = (prefsData && prefsData.character_name) || 'エージェント';
     container.innerHTML = '<p class="loading-text">読み込み中...</p>';
     try {
         const res = await fetch('/api/games');
