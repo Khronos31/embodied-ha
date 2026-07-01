@@ -1711,6 +1711,16 @@ async function renderSettingsForm() {
 
     initDropdownOptions('setting-presence-entity', 'input_boolean,binary_sensor,device_tracker,person', prefsData.presence?.entity);
 
+    const loopSchedule = prefsData.loop_schedule || {};
+    const loopIntervalMinEl = document.getElementById('setting-loop-interval-min');
+    if (loopIntervalMinEl) loopIntervalMinEl.value = Math.round((loopSchedule.loop_interval ?? 1800) / 60);
+    const loopDayProbEl = document.getElementById('setting-loop-day-prob');
+    if (loopDayProbEl) loopDayProbEl.value = loopSchedule.day_probability ?? 100;
+    const loopLateProbEl = document.getElementById('setting-loop-late-prob');
+    if (loopLateProbEl) loopLateProbEl.value = loopSchedule.late_probability ?? 30;
+    const loopNightProbEl = document.getElementById('setting-loop-night-prob');
+    if (loopNightProbEl) loopNightProbEl.value = loopSchedule.night_probability ?? 10;
+
     const policiesList = document.getElementById('policies-list');
     policiesList.innerHTML = '';
     if (prefsData.policies && Array.isArray(prefsData.policies)) {
@@ -2010,6 +2020,14 @@ function serializeFormToPrefs() {
         entity: document.getElementById('setting-presence-entity').value
     };
 
+    const loopIntervalMinRaw = parseFloat(document.getElementById('setting-loop-interval-min')?.value);
+    const loopSchedule = !isNaN(loopIntervalMinRaw) && loopIntervalMinRaw > 0 ? {
+        loop_interval: Math.round(loopIntervalMinRaw * 60),
+        day_probability: parseInt(document.getElementById('setting-loop-day-prob')?.value, 10) || 0,
+        late_probability: parseInt(document.getElementById('setting-loop-late-prob')?.value, 10) || 0,
+        night_probability: parseInt(document.getElementById('setting-loop-night-prob')?.value, 10) || 0,
+    } : (prefsData.loop_schedule || undefined);
+
     const policies = [];
     const policyInputs = document.querySelectorAll('.policy-item-text');
     policyInputs.forEach(input => {
@@ -2089,7 +2107,8 @@ function serializeFormToPrefs() {
         presence,
         policies,
         sensors,
-        projection_targets
+        projection_targets,
+        loop_schedule: loopSchedule
     };
 }
 
@@ -3367,6 +3386,20 @@ async function handleSaveSettings(e) {
         nextPrefs = serializeFormToPrefs();
     }
 
+    // ループ設定は専用フォームの値を常に適用する（JSON直接編集タブとは独立）
+    const loopIntervalMin = parseFloat(document.getElementById('setting-loop-interval-min')?.value);
+    if (!isNaN(loopIntervalMin) && loopIntervalMin > 0) {
+        nextPrefs.loop_schedule = {
+            loop_interval: Math.round(loopIntervalMin * 60),
+            day_probability: parseInt(document.getElementById('setting-loop-day-prob')?.value, 10) || 0,
+            late_probability: parseInt(document.getElementById('setting-loop-late-prob')?.value, 10) || 0,
+            night_probability: parseInt(document.getElementById('setting-loop-night-prob')?.value, 10) || 0,
+        };
+        if (activeSettingsTab === 'advanced' && jsonEditor) {
+            jsonEditor.setValue(JSON.stringify(nextPrefs, null, 2));
+        }
+    }
+
     const spk = nextPrefs.speakers;
     const hasSpeakers = Array.isArray(spk) ? spk.length > 0 : Object.keys(spk || {}).length > 0;
     if (!hasSpeakers) {
@@ -3887,7 +3920,8 @@ function initMockPreferences() {
             entities: [],
             presence: { entity: "" },
             policies: [],
-            sensors: { groups: [] }
+            sensors: { groups: [] },
+            loop_schedule: { loop_interval: 1800, day_probability: 100, late_probability: 30, night_probability: 10 }
         };
         updateCharacterName(prefsData);
         updateDynamicFeaturesUI();

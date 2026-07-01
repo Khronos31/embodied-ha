@@ -116,6 +116,14 @@
     "深夜1〜6時は発話しない（loop/explore に組み込み済み）"
   ],
 
+  "_loop_schedule_doc": "自律ループ(loop.sh)の定期実行間隔と、時間帯ごとの発火確率。loop_interval は秒。0-7時=night、22-24時=late、それ以外=day。Web UIの「高度な設定」タブから編集可能。",
+  "loop_schedule": {
+    "loop_interval": 1800,
+    "day_probability": 100,
+    "late_probability": 30,
+    "night_probability": 10
+  },
+
   "_sensors_doc": "自律ループ(loop)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
   "sensors": {
     "groups": [

@@ -70,6 +70,16 @@ def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
 
 def load_schedule():
+    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+    if prefs_file:
+        try:
+            with open(prefs_file, encoding="utf-8") as f:
+                prefs = json.load(f)
+            loop_schedule = prefs.get("loop_schedule")
+            if isinstance(loop_schedule, dict) and loop_schedule:
+                return loop_schedule
+        except Exception:
+            pass
     try:
         with open(SCHEDULE_FILE, encoding="utf-8") as f:
             return json.load(f)
