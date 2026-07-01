@@ -13,6 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+
+# /data/python-packages に永続インストールされた gensim 等を参照
+_pkg_dir = "/data/python-packages"
+if os.path.isdir(_pkg_dir) and _pkg_dir not in sys.path:
+    sys.path.insert(0, _pkg_dir)
+
 import random
 from html.parser import HTMLParser
 from typing import Any

@@ -76,10 +76,12 @@ def _chive_installed() -> bool:
 def _run_install():
     global _install_status
     try:
-        # gensim
+        # gensim — /data/python-packages に永続インストール（コンテナ再起動後も残る）
         _install_status = {"status": "running", "message": "gensim をインストール中..."}
+        pkg_dir = "/data/python-packages"
+        os.makedirs(pkg_dir, exist_ok=True)
         r = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--break-system-packages",
+            [sys.executable, "-m", "pip", "install", "--target", pkg_dir,
              "--no-cache-dir", "-q", "gensim"],
             capture_output=True, text=True, timeout=300,
         )
