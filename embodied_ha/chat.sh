@@ -493,7 +493,7 @@ _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
     subprocess.run(["python3", os.path.join(_sd, "mcp-config.py"), _mcp_path,
-                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http", "lounge"],
+                    "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http", "lounge", "game"],
                    env={**CLAUDE_ENV, "EHA_ACTOR": "chat"}, check=False)
     if os.path.exists(_mcp_path):
         _common_tools = (
@@ -517,6 +517,7 @@ if _sd:
             "mcp__http__http_get,mcp__http__http_post,"
             "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
             "mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,"
+            "mcp__game__game_wiki6_start,mcp__game__game_wiki6_getlinks,mcp__game__game_wiki6_solve,"
             "Read"
         )
         if chat_source == "voice":

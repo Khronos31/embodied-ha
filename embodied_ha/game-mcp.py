@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""ゲームMCPサーバー（embodied-ha 用）。
+
+ツール:
+  game_wiki6_start    … Wiki6ゲームの問題を生成してルールを返す
+  game_wiki6_getlinks … Wikipediaの記事本文からリンク一覧を取得
+  game_wiki6_solve    … PediaRouteで最短経路を取得（答え合わせ）
+
+外部アクセス: ja.wikipedia.org / pediaroute.com（game-mcp内部で直接アクセス）
+"""
+
+from __future__ import annotations
+
+import json
+import random
+from html.parser import HTMLParser
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote
+from urllib.request import Request, urlopen
+
+from mcp_lib import serve, text
+
+TIMEOUT = 20
+UA = "embodied-ha/game-mcp (educational use)"
+
+WORD_PAIRS = [
+    ("バナナ", "図書館"),
+    ("猫", "宇宙"),
+    ("ピザ", "江戸時代"),
+    ("富士山", "インターネット"),
+    ("サッカー", "茶道"),
+    ("新幹線", "ピアノ"),
+    ("桜", "半導体"),
+    ("相撲", "フランス料理"),
+    ("納豆", "オリンピック"),
+    ("将棋", "深海"),
+]
+
+WIKI6_RULES = """【Wiki6 ルール】
+Wikipediaのリンクだけを辿り、スタート記事からゴール記事に最短クリック数で到達してください。
+
+ツール:
+  game_wiki6_getlinks(word)        … 記事の本文リンク一覧を取得
+  game_wiki6_solve(word1, word2)  … 最短経路を確認（答え合わせ用）
+
+ヒント: 地名・年号・人名の記事はリンクが豊富なハブになりやすいです。"""
+
+# スキップするWikipediaの特殊クラス（脚注・ナビボックス等）
+_SKIP_CLASSES = {
+    "reflist", "references", "navbox", "toc", "mw-editsection",
+    "hatnote", "navigation-not-searchable", "sistersitebox",
+    "mw-references-wrap", "mw-cite-backlink", "reference",
+}
+
+
+class _WikiLinkParser(HTMLParser):
+    """Wikipedia HTMLの本文部分から /wiki/ リンクだけを抽出する。"""
+
+    def __init__(self):
+        super().__init__()
+        self._depth = 0
+        self._skip_until: int | None = None
+        self.links: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_d = dict(attrs)
+        cls = attrs_d.get("class", "")
+        if self._skip_until is None and any(c in cls for c in _SKIP_CLASSES):
+            self._skip_until = self._depth
+        self._depth += 1
+        if self._skip_until is not None:
+            return
+        if tag == "a":
+            href = attrs_d.get("href", "")
+            if href.startswith("/wiki/") and ":" not in href[6:]:
+                title = unquote(href[6:]).replace("_", " ")
+                if title and "#" not in title:
+                    self.links.append(title)
+
+    def handle_endtag(self, tag):
+        self._depth -= 1
+        if self._skip_until is not None and self._depth <= self._skip_until:
+            self._skip_until = None
+
+
+def _fetch(url: str, timeout: int = TIMEOUT) -> bytes:
+    req = Request(url, headers={"User-Agent": UA})
+    with urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _json_error(msg: str):
+    return [text(json.dumps({"error": msg}, ensure_ascii=False))], True
+
+
+# --- wiki6 ツール ---
+
+def _pediaroute_random() -> str | None:
+    """PediaRouteのランダム記事APIを呼ぶ。失敗時はNone。"""
+    try:
+        url = "https://pediaroute.com/api/random?lang=ja"
+        body = _fetch(url).decode("utf-8")
+        # レスポンスはJSON文字列 "\"バナナ\""
+        return json.loads(body)
+    except Exception:
+        return None
+
+
+def game_wiki6_start(args: dict[str, Any]):
+    # PediaRouteのランダムAPIで問題を生成。失敗時はハードコードリストから選ぶ。
+    start = _pediaroute_random()
+    goal = _pediaroute_random()
+    if not start or not goal or start == goal:
+        pair = random.choice(WORD_PAIRS)
+        start, goal = pair
+    result = {
+        "start": start,
+        "goal": goal,
+        "rules": WIKI6_RULES,
+    }
+    return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+
+
+def game_wiki6_getlinks(args: dict[str, Any]):
+    word = str(args.get("word") or "").strip()
+    if not word:
+        return _json_error("word が空です")
+    try:
+        url = (
+            f"https://ja.wikipedia.org/w/api.php"
+            f"?action=parse&page={quote(word)}&prop=text&format=json&redirects=1"
+        )
+        data = json.loads(_fetch(url).decode("utf-8"))
+        if "error" in data:
+            return _json_error(f"Wikipedia: {data['error'].get('info', 'not found')}")
+        html = data["parse"]["text"]["*"]
+        parser = _WikiLinkParser()
+        parser.feed(html)
+        seen: set[str] = set()
+        links: list[str] = []
+        for lnk in parser.links:
+            if lnk not in seen:
+                seen.add(lnk)
+                links.append(lnk)
+        return [text(json.dumps(
+            {"word": word, "links": links, "count": len(links)},
+            ensure_ascii=False, indent=2,
+        ))], False
+    except HTTPError as e:
+        return _json_error(f"HTTP {e.code}: {e.reason}")
+    except URLError as e:
+        return _json_error(f"network error: {e.reason}")
+    except Exception as e:
+        return _json_error(str(e))
+
+
+_PEDIAROUTE_ERRORS = {
+    1: "スタート記事が見つかりません",
+    2: "ゴール記事が見つかりません",
+    3: "6クリック以内の経路が見つかりませんでした",
+}
+
+
+def game_wiki6_solve(args: dict[str, Any]):
+    word1 = str(args.get("word1") or "").strip()
+    word2 = str(args.get("word2") or "").strip()
+    if not word1 or not word2:
+        return _json_error("word1 と word2 が必要です")
+    try:
+        url = "https://pediaroute.com/api/search?lang=ja"
+        body_bytes = json.dumps({"from": word1, "to": word2}).encode("utf-8")
+        req = Request(url, data=body_bytes, headers={
+            "User-Agent": UA,
+            "Content-Type": "application/json",
+        })
+        with urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        error_code = data.get("error", 0)
+        if error_code != 0:
+            return _json_error(_PEDIAROUTE_ERRORS.get(error_code, f"error {error_code}"))
+        route = data.get("route", [])
+        result = {
+            "word1": word1,
+            "word2": word2,
+            "path": route,
+            "clicks": len(route) - 1,
+        }
+        return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+    except HTTPError as e:
+        return _json_error(f"HTTP {e.code}: {e.reason}")
+    except URLError as e:
+        return _json_error(f"network error: {e.reason}")
+    except Exception as e:
+        return _json_error(str(e))
+
+
+def main() -> None:
+    serve("game-mcp", "1.0", {
+        "game_wiki6_start": {
+            "spec": {
+                "name": "game_wiki6_start",
+                "description": "Wiki6ゲームの問題（スタート・ゴール）とルールを返す。",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            "handler": game_wiki6_start,
+        },
+        "game_wiki6_getlinks": {
+            "spec": {
+                "name": "game_wiki6_getlinks",
+                "description": "日本語Wikipedia記事の本文リンク一覧を返す（脚注・ナビボックス除外）。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "word": {"type": "string", "description": "記事名（例: バナナ）"},
+                    },
+                    "required": ["word"],
+                },
+            },
+            "handler": game_wiki6_getlinks,
+        },
+        "game_wiki6_solve": {
+            "spec": {
+                "name": "game_wiki6_solve",
+                "description": "PediaRouteで word1→word2 の最短経路を取得する（答え合わせ用）。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "word1": {"type": "string", "description": "スタート記事名"},
+                        "word2": {"type": "string", "description": "ゴール記事名"},
+                    },
+                    "required": ["word1", "word2"],
+                },
+            },
+            "handler": game_wiki6_solve,
+        },
+    })
+
+
+if __name__ == "__main__":
+    main()

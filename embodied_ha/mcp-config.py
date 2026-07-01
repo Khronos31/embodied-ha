@@ -76,6 +76,7 @@ REGISTRY = {
     "memory":  lambda: _server("memory-mcp.py"),
     "sensors": lambda: _server("sensors-mcp.py"),
     "sociality": lambda: _server("sociality-mcp.py"),
+    "game":     lambda: _server("game-mcp.py"),
 }
 
 
