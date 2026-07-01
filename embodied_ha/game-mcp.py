@@ -263,11 +263,9 @@ def game_wordvec_race_start(args: dict[str, Any]):
         key = _lookup(kv, base)
         if key is None:
             return _json_error(f"「{base}」は語彙にありません")
-        opposite = kv.most_similar(negative=[key], topn=1)[0][0]
         result = {
             "base": key,
-            "opposite": opposite,
-            "message": f"お題は「{key}」です。「{opposite}」の方向に向かって、より遠い単語を交互に出してください。戻ったら負け。",
+            "message": f"お題は「{key}」です。より遠い単語を交互に出してください。前の単語より近づいたら負け。",
         }
         return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
     except Exception as e:
