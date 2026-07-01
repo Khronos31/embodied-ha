@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from html.parser import HTMLParser
 from typing import Any
@@ -213,6 +214,156 @@ def game_wiki6_solve(args: dict[str, Any]):
         return _json_error(str(e))
 
 
+# --- wordvec_race ツール ---
+
+_kv = None  # 遅延ロード
+
+_RACE_BASES = [
+    "エアコン", "図書館", "桜", "寿司", "新幹線",
+    "将棋", "温泉", "台風", "選挙", "宇宙",
+    "カレー", "富士山", "サッカー", "夏休み", "電車",
+]
+
+
+def _get_kv():
+    global _kv
+    if _kv is not None:
+        return _kv
+    tools_path = os.environ.get("EHA_TOOLS_PATH", "/config/.tools")
+    kv_path = os.path.join(
+        tools_path, "word2vec/chive-1.3-mc90_gensim/chive-1.3-mc90.kv"
+    )
+    from gensim.models import KeyedVectors
+    _kv = KeyedVectors.load(kv_path)
+    return _kv
+
+
+def _sudachi_normalize(word: str) -> str:
+    """SudachiによるchiVe正規化を試みる。失敗時は元の単語を返す。"""
+    try:
+        import sudachipy
+        tokenizer = sudachipy.Dictionary().create()
+        morphemes = tokenizer.tokenize(word)
+        if morphemes:
+            return morphemes[0].dictionary_form()
+    except Exception:
+        pass
+    return word
+
+
+def _lookup(kv, word: str) -> str | None:
+    """単語をchiVeの語彙で検索。正規化も試みてNoneを返す。"""
+    if word in kv:
+        return word
+    normalized = _sudachi_normalize(word)
+    if normalized in kv:
+        return normalized
+    return None
+
+
+def game_wordvec_race_start(args: dict[str, Any]):
+    if not _PLUGINS.get("wordvec_race"):
+        return _plugin_disabled_error("WordVecチキンレース")
+    try:
+        kv = _get_kv()
+        base = str(args.get("base") or "").strip() or random.choice(_RACE_BASES)
+        key = _lookup(kv, base)
+        if key is None:
+            return _json_error(f"「{base}」は語彙にありません")
+        opposite = kv.most_similar(negative=[key], topn=1)[0][0]
+        result = {
+            "base": key,
+            "opposite": opposite,
+            "message": f"お題は「{key}」です。「{opposite}」の方向に向かって、より遠い単語を交互に出してください。戻ったら負け。",
+        }
+        return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+    except Exception as e:
+        return _json_error(str(e))
+
+
+def game_wordvec_race_submit(args: dict[str, Any]):
+    if not _PLUGINS.get("wordvec_race"):
+        return _plugin_disabled_error("WordVecチキンレース")
+    try:
+        kv = _get_kv()
+        start = str(args.get("start") or "").strip()
+        last  = str(args.get("last")  or "").strip()
+        answer = str(args.get("answer") or "").strip()
+        for w, label in [(start, "start"), (last, "last"), (answer, "answer")]:
+            if not w:
+                return _json_error(f"{label} が空です")
+        start_key  = _lookup(kv, start)
+        last_key   = _lookup(kv, last)
+        answer_key = _lookup(kv, answer)
+        if start_key is None:
+            return _json_error(f"「{start}」は語彙にありません")
+        if last_key is None:
+            return _json_error(f"「{last}」は語彙にありません")
+        if answer_key is None:
+            return _json_error(f"「{answer}」は語彙にありません")
+        sim_last   = float(kv.similarity(last_key, start_key))
+        sim_answer = float(kv.similarity(answer_key, start_key))
+        valid = sim_answer < sim_last
+        result = {
+            "answer": answer_key,
+            "sim_answer": round(sim_answer, 4),
+            "last": last_key,
+            "sim_last": round(sim_last, 4),
+            "start": start_key,
+            "valid": valid,
+            "message": (
+                f"「{answer_key}」の類似度: {sim_answer:.4f}（前の手 {last_key}: {sim_last:.4f}）"
+                + ("　→ 合法！さらに遠ざかりました" if valid else "　→ 無効！前より近づいています")
+            ),
+        }
+        return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+    except Exception as e:
+        return _json_error(str(e))
+
+
+def game_wordvec_race_hint(args: dict[str, Any]):
+    if not _PLUGINS.get("wordvec_race"):
+        return _plugin_disabled_error("WordVecチキンレース")
+    try:
+        kv = _get_kv()
+        word1 = str(args.get("word1") or "").strip()
+        start = str(args.get("start") or "").strip()
+        goal  = str(args.get("goal")  or "").strip()
+        for w, label in [(word1, "word1"), (start, "start"), (goal, "goal")]:
+            if not w:
+                return _json_error(f"{label} が空です")
+        word1_key = _lookup(kv, word1)
+        start_key = _lookup(kv, start)
+        goal_key  = _lookup(kv, goal)
+        if word1_key is None:
+            return _json_error(f"「{word1}」は語彙にありません")
+        if start_key is None:
+            return _json_error(f"「{start}」は語彙にありません")
+        if goal_key is None:
+            return _json_error(f"「{goal}」は語彙にありません")
+        sim_word1 = float(kv.similarity(word1_key, start_key))
+        # word1の近傍から、startよりも遠い（goalに近い）単語を探す
+        neighbors = kv.most_similar(word1_key, topn=200)
+        candidates = []
+        for w, _ in neighbors:
+            if w in (word1_key, start_key, goal_key):
+                continue
+            sim_s = float(kv.similarity(w, start_key))
+            if sim_s < sim_word1:
+                sim_g = float(kv.similarity(w, goal_key))
+                candidates.append({"word": w, "sim_start": round(sim_s, 4), "sim_goal": round(sim_g, 4)})
+        # goalに近い順にソート
+        candidates.sort(key=lambda x: -x["sim_goal"])
+        result = {
+            "word1": word1_key,
+            "sim_word1_start": round(sim_word1, 4),
+            "hints": candidates[:10],
+        }
+        return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+    except Exception as e:
+        return _json_error(str(e))
+
+
 def main() -> None:
     serve("game-mcp", "1.0", {
         "game_wiki6_start": {
@@ -236,6 +387,51 @@ def main() -> None:
                 },
             },
             "handler": game_wiki6_getlinks,
+        },
+        "game_wordvec_race_start": {
+            "spec": {
+                "name": "game_wordvec_race_start",
+                "description": "WordVecチキンレースを開始。お題語とその反対方向の単語を返す。base 省略時はランダム。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string", "description": "お題語（省略可）"},
+                    },
+                },
+            },
+            "handler": game_wordvec_race_start,
+        },
+        "game_wordvec_race_submit": {
+            "spec": {
+                "name": "game_wordvec_race_submit",
+                "description": "チキンレースで単語を提出。answer が last より start から遠ければ合法。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "start":  {"type": "string", "description": "お題の基準語"},
+                        "last":   {"type": "string", "description": "直前に出た単語"},
+                        "answer": {"type": "string", "description": "今回提出する単語"},
+                    },
+                    "required": ["start", "last", "answer"],
+                },
+            },
+            "handler": game_wordvec_race_submit,
+        },
+        "game_wordvec_race_hint": {
+            "spec": {
+                "name": "game_wordvec_race_hint",
+                "description": "word1 の周辺で start より遠い（goal に近い）単語を返す。負けた後の確認用。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "word1": {"type": "string", "description": "直前に出た単語"},
+                        "start": {"type": "string", "description": "お題の基準語"},
+                        "goal":  {"type": "string", "description": "反対方向の単語"},
+                    },
+                    "required": ["word1", "start", "goal"],
+                },
+            },
+            "handler": game_wordvec_race_hint,
         },
         "game_wiki6_solve": {
             "spec": {
