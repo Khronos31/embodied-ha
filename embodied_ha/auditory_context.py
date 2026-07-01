@@ -8,7 +8,7 @@ import os
 import threading
 from datetime import timedelta
 
-from state_utils import clean, now, parse_ts
+from state_utils import clean, get_device_capabilities, now, parse_ts
 
 DEFAULT_AUDITORY_EVENTS_FILE = "/data/embodied-ha/log/auditory_events.jsonl"
 _AUDITORY_EVENTS_LOCK = threading.Lock()
@@ -80,7 +80,11 @@ def append_auditory_event(
         os.replace(tmp_path, path)
 
 
-def load_recent_auditory_events(user_msg: str, limit: int = 3) -> list[dict]:
+def load_recent_auditory_events(
+    user_msg: str,
+    limit: int = 3,
+    source_filter: str | None = None,
+) -> list[dict]:
     path = auditory_events_path()
     if not os.path.exists(path):
         return []
@@ -100,6 +104,9 @@ def load_recent_auditory_events(user_msg: str, limit: int = 3) -> list[dict]:
                     entries.append(parsed)
     except Exception:
         return []
+
+    if source_filter:
+        entries = [entry for entry in entries if clean(entry.get("source")) == source_filter]
 
     if not entries:
         return []
@@ -132,8 +139,12 @@ def _format_metric(value: object, digits: int = 1) -> str | None:
     return formatted or "0"
 
 
-def format_recent_auditory_prompt(user_msg: str, limit: int = 3) -> str:
-    events = load_recent_auditory_events(user_msg, limit=limit)
+def format_recent_auditory_prompt(
+    user_msg: str,
+    limit: int = 3,
+    source_filter: str | None = None,
+) -> str:
+    events = load_recent_auditory_events(user_msg, limit=limit, source_filter=source_filter)
     if not events:
         return ""
 
@@ -170,3 +181,14 @@ def format_recent_auditory_prompt(user_msg: str, limit: int = 3) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def resolve_source_filter(current_entity: str, prefs: dict) -> tuple[bool, str | None]:
+    """Resolve whether auditory input should be shown and, if so, how to filter it."""
+    entity = clean(current_entity)
+    if not entity:
+        return True, None
+    caps = get_device_capabilities(entity, prefs)
+    if not caps.get("is_mic"):
+        return False, None
+    return True, caps.get("mic_label")

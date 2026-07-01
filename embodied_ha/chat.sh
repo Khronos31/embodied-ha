@@ -183,13 +183,32 @@ FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
 RECENT_AUDITORY_INPUT=""
 if [ "$CHAT_SOURCE_VALUE" = "voice" ]; then
-  RECENT_AUDITORY_INPUT=$(USER_MSG="$USER_MSG" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
-import os, sys
+  RECENT_AUDITORY_INPUT=$(USER_MSG="$USER_MSG" SCRIPT_DIR="$SCRIPT_DIR" EHA_PREFS_FILE="$EHA_PREFS_FILE" EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 << 'PYEOF'
+import json, os, sys
 
 sys.path.insert(0, os.environ["SCRIPT_DIR"])
-from auditory_context import format_recent_auditory_prompt
+from auditory_context import format_recent_auditory_prompt, resolve_source_filter
 
-print(format_recent_auditory_prompt(os.environ.get("USER_MSG", "")))
+body_location_file = os.environ.get("EHA_BODY_LOCATION_FILE") or "/config/embodied-ha/body_location.json"
+current_entity = ""
+try:
+    with open(body_location_file, encoding="utf-8") as f:
+        current_entity = (json.load(f).get("current_entity") or "").strip()
+except Exception:
+    pass
+
+prefs = {}
+prefs_file = os.environ.get("EHA_PREFS_FILE") or ""
+if prefs_file:
+    try:
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        prefs = {}
+
+should_show, source_filter = resolve_source_filter(current_entity, prefs)
+if should_show:
+    print(format_recent_auditory_prompt(os.environ.get("USER_MSG", ""), source_filter=source_filter))
 PYEOF
 )
 fi

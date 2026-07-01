@@ -106,6 +106,34 @@ print(bs.format_state_as_narrative(raw))
 PYEOF
 )
 BODY_LOCATION_CONTEXT=$(python3 "$SCRIPT_DIR/body-context.py" 2>/dev/null || printf '%s\n%s\n' "# 身体位置" "取得失敗")
+RECENT_AUDITORY_INPUT=$(SCRIPT_DIR="$SCRIPT_DIR" EHA_PREFS_FILE="$EHA_PREFS_FILE" EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 << 'PYEOF'
+import json, os, sys
+
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from auditory_context import format_recent_auditory_prompt, resolve_source_filter
+
+body_location_file = os.environ.get("EHA_BODY_LOCATION_FILE") or "/config/embodied-ha/body_location.json"
+current_entity = ""
+try:
+    with open(body_location_file, encoding="utf-8") as f:
+        current_entity = (json.load(f).get("current_entity") or "").strip()
+except Exception:
+    pass
+
+prefs = {}
+prefs_file = os.environ.get("EHA_PREFS_FILE") or ""
+if prefs_file:
+    try:
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        prefs = {}
+
+should_show, source_filter = resolve_source_filter(current_entity, prefs)
+if should_show:
+    print(format_recent_auditory_prompt("", source_filter=source_filter))
+PYEOF
+)
 PROJECTED_CAMERA_SOURCE=""
 _PROJECTED_HOST=$(EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-}" python3 -c '
 import json, os
@@ -201,7 +229,7 @@ if [ -n "$FEATURES_MD" ]; then
   FEATURES_NOTE="\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n${_presented_note}${FEATURES_MD}\n"
 fi
 
-SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
+SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
 
 USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
 

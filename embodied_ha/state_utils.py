@@ -105,6 +105,7 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
             "is_speaker": False,
             "is_camera": False,
             "mic_source": None,
+            "mic_label": None,
             "speaker": None,
             "camera": None,
         }
@@ -131,6 +132,7 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
         "is_speaker": speaker_entry is not None,
         "is_camera": camera_entry is not None,
         "mic_source": clean(mic_entry.get("source")) if mic_entry else None,
+        "mic_label": clean(mic_entry.get("label")) if mic_entry else None,
         "speaker": speaker_entry,
         "camera": camera_entry,
     }
