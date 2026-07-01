@@ -1843,27 +1843,45 @@ function renderGames(games) {
         container.innerHTML = '<p class="section-desc">ゲームが見つかりません</p>';
         return;
     }
-    container.innerHTML = games.map(g => `
-        <div class="game-card ${g.enabled ? 'enabled' : 'disabled'}">
+    container.innerHTML = games.map(g => {
+        const needsInstall = g.requires && g.requires.length && !g.model_installed;
+        let btn = '';
+        if (g.enabled) {
+            btn = `<button type="button" class="btn-toggle btn-disable" onclick="toggleGame('${g.id}', false)">${g.requires && g.requires.length ? 'アンインストール' : '無効にする'}</button>`;
+        } else if (needsInstall) {
+            btn = `<button type="button" class="btn-toggle btn-enable" onclick="installGame('${g.id}')">インストール</button>`;
+        } else {
+            btn = `<button type="button" class="btn-toggle btn-enable" onclick="toggleGame('${g.id}', true)">有効にする</button>`;
+        }
+        return `
+        <div class="game-card ${g.enabled ? 'enabled' : 'disabled'}" id="game-card-${g.id}">
             <div class="game-card-header">
                 <div class="game-card-info">
                     <span class="game-name">${g.name}</span>
                     ${g.bundled ? '<span class="game-badge bundled">同梱</span>' : ''}
                     <span class="game-badge ${g.enabled ? 'active' : 'inactive'}">${g.enabled ? '有効' : '無効'}</span>
                 </div>
-                <button
-                    type="button"
-                    class="btn-toggle ${g.enabled ? 'btn-disable' : 'btn-enable'}"
-                    onclick="toggleGame('${g.id}', ${!g.enabled})"
-                >${g.enabled ? '無効にする' : '有効にする'}</button>
+                ${btn}
             </div>
             <p class="game-description">${g.description}</p>
-            ${g.requires.length ? `<p class="game-requires">必要: ${g.requires.join('、')}</p>` : ''}
-        </div>
-    `).join('');
+            ${needsInstall ? `<p class="game-requires">必要: ${g.requires.join('、')}</p>` : ''}
+        </div>`;
+    }).join('');
 }
 
 async function toggleGame(id, enabled) {
+    if (!enabled && id === 'wordvec_race') {
+        if (!confirm('chiVeモデルを削除してアンインストールします。よろしいですか？')) return;
+        try {
+            const res = await fetch(`${base}/api/games/uninstall`, {method: 'POST'});
+            const data = await res.json();
+            if (!data.ok) alert('アンインストール失敗: ' + (data.error || '不明なエラー'));
+        } catch (e) {
+            alert('通信エラーが発生しました');
+        }
+        await loadGames();
+        return;
+    }
     try {
         const res = await fetch(`${base}/api/games/toggle`, {
             method: 'POST',
@@ -1879,6 +1897,45 @@ async function toggleGame(id, enabled) {
     } catch (e) {
         alert('通信エラーが発生しました');
     }
+}
+
+async function installGame(id) {
+    const card = document.getElementById(`game-card-${id}`);
+    if (card) card.querySelector('.btn-toggle').disabled = true;
+    try {
+        await fetch(`${base}/api/games/install`, {method: 'POST'});
+    } catch (e) {
+        alert('インストール開始に失敗しました');
+        await loadGames();
+        return;
+    }
+    const poll = setInterval(async () => {
+        try {
+            const res = await fetch(`${base}/api/games/install-status`);
+            const data = await res.json();
+            const card = document.getElementById(`game-card-${id}`);
+            if (card) {
+                const req = card.querySelector('.game-requires');
+                if (req) req.textContent = data.message || '';
+            }
+            if (data.status === 'done') {
+                clearInterval(poll);
+                await fetch(`${base}/api/games/toggle`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id, enabled: true})
+                });
+                await loadGames();
+            } else if (data.status === 'error') {
+                clearInterval(poll);
+                alert('インストール失敗: ' + (data.message || '不明なエラー'));
+                await loadGames();
+            }
+        } catch (e) {
+            clearInterval(poll);
+            await loadGames();
+        }
+    }, 2000);
 }
 
 function initJsonEditor(initialValue) {

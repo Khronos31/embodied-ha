@@ -60,6 +60,52 @@ GAME_CATALOG = [
 
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
+
+TOOLS_PATH = os.environ.get("EHA_TOOLS_PATH", "/config/.tools")
+CHIVE_DIR  = os.path.join(TOOLS_PATH, "word2vec", "chive-1.3-mc90_gensim")
+CHIVE_URL  = "https://sudachi.s3-ap-northeast-1.amazonaws.com/chive/chive-1.3-mc90_gensim.tar.gz"
+
+_install_status: dict = {"status": "idle", "message": ""}
+_install_lock = threading.Lock()
+
+
+def _chive_installed() -> bool:
+    return os.path.exists(os.path.join(CHIVE_DIR, "chive-1.3-mc90.kv"))
+
+
+def _run_install():
+    global _install_status
+    try:
+        # gensim
+        _install_status = {"status": "running", "message": "gensim をインストール中..."}
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--break-system-packages",
+             "--no-cache-dir", "-q", "gensim"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if r.returncode != 0:
+            _install_status = {"status": "error", "message": f"gensim インストール失敗: {r.stderr[:200]}"}
+            return
+
+        # chiVe
+        _install_status = {"status": "running", "message": "chiVe モデルをダウンロード中（約490MB）..."}
+        os.makedirs(TOOLS_PATH + "/word2vec", exist_ok=True)
+        tar_path = TOOLS_PATH + "/word2vec/chive-1.3-mc90_gensim.tar.gz"
+        urllib.request.urlretrieve(CHIVE_URL, tar_path)
+
+        _install_status = {"status": "running", "message": "展開中..."}
+        r2 = subprocess.run(
+            ["tar", "xzf", tar_path, "-C", TOOLS_PATH + "/word2vec"],
+            capture_output=True, timeout=120,
+        )
+        os.remove(tar_path)
+        if r2.returncode != 0:
+            _install_status = {"status": "error", "message": "展開失敗"}
+            return
+
+        _install_status = {"status": "done", "message": "インストール完了"}
+    except Exception as e:
+        _install_status = {"status": "error", "message": str(e)[:300]}
 LOUNGE_QUEUE_LOG = os.path.join(LOG_DIR, "ai_lounge_queue.jsonl")
 LOUNGE_RESOLVED_LOG = os.path.join(LOG_DIR, "ai_lounge_log.jsonl")
 
@@ -1056,7 +1102,13 @@ class Handler(BaseHTTPRequestHandler):
             limit = int(qs.get("limit", ["20"])[0])
             self.send_json(get_lounge_log(limit))
         elif path == "/api/games":
-            self.send_json({"games": _build_game_catalog()})
+            games = _build_game_catalog()
+            for g in games:
+                if g["id"] == "wordvec_race":
+                    g["model_installed"] = _chive_installed()
+            self.send_json({"games": games})
+        elif path == "/api/games/install-status":
+            self.send_json(_install_status)
         elif path.startswith("/api/audio-events/") and path.endswith("/wav"):
             event_id = path[len("/api/audio-events/"):-len("/wav")].strip("/")
             if not event_id or not all(c.isalnum() or c in "-_" for c in event_id):
@@ -1429,6 +1481,24 @@ class Handler(BaseHTTPRequestHandler):
                     plugins = {}
                     games["plugins"] = plugins
                 plugins[game_id] = enabled
+                atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/games/install":
+            with _install_lock:
+                if _install_status["status"] == "running":
+                    self.send_json({"ok": True, "message": "already running"})
+                    return
+            threading.Thread(target=_run_install, daemon=True).start()
+            self.send_json({"ok": True})
+        elif path == "/api/games/uninstall":
+            try:
+                import shutil
+                if os.path.exists(CHIVE_DIR):
+                    shutil.rmtree(CHIVE_DIR)
+                prefs = _load_json_object(PREFS_FILE)
+                prefs.setdefault("games", {}).setdefault("plugins", {})["wordvec_race"] = False
                 atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
                 self.send_json({"ok": True})
             except Exception as e:
