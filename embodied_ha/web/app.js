@@ -2632,11 +2632,9 @@ function updateCameraModalEntityState(modal) {
     if (sourceVal.includes('.')) {
         entityInput.value = sourceVal;
         entityInput.readOnly = true;
-        entityInput.style.background = 'var(--claude-bg-input-disabled, #f5f5f5)';
         if (entityHint) entityHint.textContent = 'HAカメラから自動設定されるため変更できません。';
     } else {
         entityInput.readOnly = false;
-        entityInput.style.background = '';
         if (entityHint) entityHint.textContent = 'HAカメラは entity_id（camera.xxx）、go2rtcは任意の短いID。電脳体として侵入するときに使います。';
     }
 }
@@ -2946,23 +2944,9 @@ function openEditModal(type, tr) {
         bodyEl.innerHTML = `
             <div class="form-group">
                 <label class="form-label">IDスラグ</label>
-                <div class="input-prefix-group" style="display:flex; align-items:center;">
-                    <span class="input-prefix" style="
-                        padding: 0 8px;
-                        background: var(--claude-bg);
-                        border: 1px solid var(--claude-border);
-                        border-right: none;
-                        border-radius: 6px 0 0 6px;
-                        color: var(--claude-text-sub, #888);
-                        font-size: 13px;
-                        height: 36px;
-                        line-height: 36px;
-                        white-space: nowrap;
-                    ">external://</span>
-                    <input type="text" class="pt-slug-modal form-input" placeholder="device_name" value="${esc(slug)}" style="
-                        border-radius: 0 6px 6px 0;
-                        flex: 1;
-                    ">
+                <div class="input-prefix-group">
+                    <span class="input-prefix">external://</span>
+                    <input type="text" class="pt-slug-modal form-input input-prefix-input" placeholder="device_name" value="${esc(slug)}">
                 </div>
             </div>
             <div class="form-group">
@@ -3543,7 +3527,7 @@ async function handleSpeakTest(btn) {
             btn.disabled = false;
             if (statusEl) {
                 statusEl.textContent = "✓ 成功";
-                statusEl.style.color = "#15803d";
+                statusEl.style.color = "var(--color-success)";
                 setTimeout(() => { statusEl.textContent = ""; }, 4000);
             }
         }, 1000);
@@ -3560,7 +3544,7 @@ async function handleSpeakTest(btn) {
         if (response.ok) {
             if (statusEl) {
                 statusEl.textContent = "✓ 成功";
-                statusEl.style.color = "#15803d";
+                statusEl.style.color = "var(--color-success)";
                 setTimeout(() => { statusEl.textContent = ""; }, 4000);
             }
         } else {
@@ -3568,7 +3552,7 @@ async function handleSpeakTest(btn) {
             const errMsg = data.error || "失敗";
             if (statusEl) {
                 statusEl.textContent = `✗ 失敗: ${errMsg}`;
-                statusEl.style.color = "#b91c1c";
+                statusEl.style.color = "var(--color-danger-hover)";
                 setTimeout(() => { statusEl.textContent = ""; }, 6000);
             }
         }
@@ -3576,7 +3560,7 @@ async function handleSpeakTest(btn) {
         btn.disabled = false;
         if (statusEl) {
             statusEl.textContent = `✗ エラー: ${err.message}`;
-            statusEl.style.color = "#b91c1c";
+            statusEl.style.color = "var(--color-danger-hover)";
             setTimeout(() => { statusEl.textContent = ""; }, 6000);
         }
     }
@@ -3999,10 +3983,10 @@ async function saveLoungeCredentials() {
             if (msgEl) { msgEl.textContent = '保存しました'; msgEl.style.color = ''; }
             setTimeout(() => { if (msgEl) msgEl.textContent = ''; }, 2000);
         } else {
-            if (msgEl) { msgEl.textContent = '保存失敗'; msgEl.style.color = 'var(--claude-error, red)'; }
+            if (msgEl) { msgEl.textContent = '保存失敗'; msgEl.style.color = 'var(--color-danger)'; }
         }
     } catch (e) {
-        if (msgEl) { msgEl.textContent = `エラー: ${e.message}`; msgEl.style.color = 'var(--claude-error, red)'; }
+        if (msgEl) { msgEl.textContent = `エラー: ${e.message}`; msgEl.style.color = 'var(--color-danger)'; }
     }
 }
 
@@ -4064,11 +4048,11 @@ async function uploadPemFile() {
             if (input) input.value = '';
             fetchLoungePemStatus();
         } else {
-            if (statusEl) { statusEl.textContent = `エラー: ${data.error || '不明なエラー'}`; statusEl.style.color = 'var(--claude-error, red)'; }
+            if (statusEl) { statusEl.textContent = `エラー: ${data.error || '不明なエラー'}`; statusEl.style.color = 'var(--color-danger)'; }
             if (uploadBtn) uploadBtn.disabled = false;
         }
     } catch (e) {
-        if (statusEl) { statusEl.textContent = `通信エラー: ${e.message}`; statusEl.style.color = 'var(--claude-error, red)'; }
+        if (statusEl) { statusEl.textContent = `通信エラー: ${e.message}`; statusEl.style.color = 'var(--color-danger)'; }
         if (uploadBtn) uploadBtn.disabled = false;
     }
 }
