@@ -308,7 +308,7 @@ def game_wordvec_race_submit(args: dict[str, Any]):
             "valid": valid,
             "message": (
                 f"「{answer_key}」の類似度: {sim_answer:.4f}（前の手 {last_key}: {sim_last:.4f}）"
-                + ("　→ 合法！さらに遠ざかりました" if valid else "　→ 無効！前より近づいています")
+                + ("　→ 合法！さらに遠ざかりました。ゲーム続行。" if valid else "　→ 負け！前より近づいています。この単語を出したプレイヤーの負けでゲーム終了。")
             ),
         }
         return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
@@ -416,7 +416,13 @@ def main() -> None:
         "game_wordvec_race_start": {
             "spec": {
                 "name": "game_wordvec_race_start",
-                "description": "WordVecチキンレースを開始。お題語とその反対方向の単語を返す。base 省略時はランダム。",
+                "description": (
+                    "WordVecチキンレースを開始してお題語を返す。base 省略時はランダム。"
+                    "【ルール】お題語を基準に、交互に単語を出し合う。"
+                    "自分の手番では必ず submit を呼んで判定すること。"
+                    "valid=true なら採用（前より遠ざかった）、valid=false なら出した本人の負け（前より近づいた）。"
+                    "相手の手番でも submit を呼んで判定し、valid=false なら相手の負けを宣言する。"
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -429,7 +435,11 @@ def main() -> None:
         "game_wordvec_race_submit": {
             "spec": {
                 "name": "game_wordvec_race_submit",
-                "description": "チキンレースで単語を提出。answer が last より start から遠ければ合法。",
+                "description": (
+                    "チキンレースで単語を判定する。自他問わず単語が出るたびに必ず呼ぶこと。"
+                    "valid=true: answer が last より start から遠い → 合法、ゲーム続行。"
+                    "valid=false: answer が last より start に近い → その単語を出したプレイヤーの負け、ゲーム終了。"
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
