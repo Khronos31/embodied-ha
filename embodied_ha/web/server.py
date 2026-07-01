@@ -619,7 +619,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_index(self):
         """index.html に window.INGRESS_PATH を注入して返す。"""
-        ingress_path = self.headers.get("X-Ingress-Path", "")
+        # 本番は HA ingress が X-Ingress-Path を付与する。ローカルプレビュー
+        # (code-server の /proxy/<port>/ 経由) ではそのヘッダが来ないため、
+        # EHA_BASE_PATH でベースパスを渡せるようにする（未設定なら従来どおり）。
+        ingress_path = self.headers.get("X-Ingress-Path") or os.environ.get(
+            "EHA_BASE_PATH", ""
+        )
         try:
             with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as f:
                 html = f.read()
