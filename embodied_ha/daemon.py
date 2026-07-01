@@ -152,14 +152,16 @@ def _save_desire_state(state, catalog=None):
 
 
 def tick_body_state(loop_name, trigger_reason="", active_desires=None):
-    current = _load_body_state()
-    updated = body_state.advance_tick(
-        current,
-        loop_name=loop_name,
-        trigger_reason=trigger_reason,
-        active_desires=active_desires,
-    )
-    _save_body_state(updated)
+    with _body_lock:
+        updated = body_state.update_state(
+            _BODY_STATE_FILE,
+            lambda current: body_state.advance_tick(
+                current,
+                loop_name=loop_name,
+                trigger_reason=trigger_reason,
+                active_desires=active_desires,
+            ),
+        )
     _log_body_state(
         f"tick/{loop_name}",
         updated,
@@ -170,16 +172,18 @@ def tick_body_state(loop_name, trigger_reason="", active_desires=None):
 
 
 def finish_body_state(loop_name, success, duration_seconds, *, spoke=False, action_taken=False):
-    current = _load_body_state()
-    updated = body_state.apply_feedback(
-        current,
-        loop_name=loop_name,
-        success=success,
-        duration_seconds=duration_seconds,
-        spoke=spoke,
-        action_taken=action_taken,
-    )
-    _save_body_state(updated)
+    with _body_lock:
+        updated = body_state.update_state(
+            _BODY_STATE_FILE,
+            lambda current: body_state.apply_feedback(
+                current,
+                loop_name=loop_name,
+                success=success,
+                duration_seconds=duration_seconds,
+                spoke=spoke,
+                action_taken=action_taken,
+            ),
+        )
     _log_body_state(
         f"done/{loop_name}",
         updated,

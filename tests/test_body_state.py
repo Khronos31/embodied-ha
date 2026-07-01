@@ -44,21 +44,36 @@ class BodyStateTests(unittest.TestCase):
             self.assertEqual(loaded["curiosity"], 0.9)
             self.assertEqual(loaded["last_loop"], "watch")
 
+    def test_update_state_applies_read_modify_write_under_lock(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "body_state.json"
+            body_state.save_state(str(path), {"energy": 0.5, "session_count": 2})
+            updated = body_state.update_state(
+                str(path),
+                lambda current: {**current, "energy": current["energy"] + 0.1, "session_count": current["session_count"] + 1},
+            )
+            self.assertEqual(updated["energy"], 0.6)
+            self.assertEqual(updated["session_count"], 3)
+            self.assertTrue(Path(f"{path}.lock").exists())
+            saved = body_state.load_state(str(path))
+            self.assertEqual(saved["energy"], 0.6)
+            self.assertEqual(saved["session_count"], 3)
+
     def test_tick_and_feedback_change_expected_axes(self):
         state = body_state.advance_tick(
             body_state.normalize_state(None),
-            loop_name="watch",
+            loop_name="loop",
             trigger_reason="定期実行（20分間隔）",
             active_desires=["気になること"],
         )
         self.assertGreater(state["curiosity"], 0.52)
         self.assertGreaterEqual(state["stress"], 0.22)
-        self.assertEqual(state["last_loop"], "watch")
+        self.assertEqual(state["last_loop"], "loop")
         self.assertEqual(state["last_result"], "tick")
 
         after = body_state.apply_feedback(
             state,
-            loop_name="watch",
+            loop_name="loop",
             success=True,
             duration_seconds=120.0,
             spoke=False,

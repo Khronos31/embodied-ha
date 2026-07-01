@@ -12,7 +12,9 @@ stress/confidence shifts instead of being told the reason directly.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
+import fcntl
 import json
 import os
 import uuid
@@ -170,6 +172,25 @@ def save_state(path: str, state: Mapping[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+@contextlib.contextmanager
+def locked_state(path: str):
+    lock_path = f"{path}.lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as lock_fp:
+        fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+        try:
+            yield load_state(path)
+        finally:
+            fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+
+
+def update_state(path: str, updater) -> dict[str, Any]:
+    with locked_state(path) as current:
+        updated = normalize_state(updater(current))
+        save_state(path, updated)
+        return updated
+
+
 def body_state_path() -> str:
     return _clean(os.environ.get("EHA_BODY_STATE_FILE")) or os.path.join(os.path.dirname(__file__), "..", "body_state.json")
 
@@ -180,6 +201,10 @@ def read_body_state() -> dict[str, Any]:
 
 def write_body_state(state: Mapping[str, Any]) -> None:
     save_state(body_state_path(), state)
+
+
+def update_body_state(updater) -> dict[str, Any]:
+    return update_state(body_state_path(), updater)
 
 
 def _elapsed_hours(state: Mapping[str, Any], now: _dt.datetime) -> float:

@@ -14,8 +14,8 @@ import shutil
 import subprocess
 import time
 import uuid
-from pathlib import Path
 
+import audio_stt
 from state_utils import clean, now
 
 DEFAULT_AUDIO_SESSION_BIN = "agy"
@@ -302,6 +302,20 @@ def append_active_listen_result(entry: dict) -> None:
     _append_jsonl(active_listen_log_path(), payload)
 
 
+def _transcribe_recorded_audio(path: str) -> tuple[str, str, str]:
+    provider = audio_stt.load_stt_provider() or ""
+    language = audio_stt.load_stt_language() if provider or clean(os.environ.get("EHA_FEATURE_AUDIO_STT_LOCAL", "0")) else ""
+    transcript = clean(audio_stt.transcribe_audio(path))
+    return transcript, provider, language
+
+
+def _format_recent_auditory_input(transcript: str) -> str:
+    value = clean(transcript)
+    if not value:
+        return ""
+    return f"# 予約していた聴取結果\n{value}"
+
+
 def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict | None:
     request = consume_next_listen_request()
     if not request:
@@ -346,7 +360,7 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
             'mode': mode,
             'queued_listen': True,
             'prepared_for_session': False,
-            'error': f"current_entity '{current_entity}' は audio_sources に登録されていません。VoiceS3R ノードに enter_cyberspace してから queue_next_listen を呼んでください。",
+            'error': f"current_entity '{current_entity}' は audio_sources に登録されていません。VoiceS3R ノードに enter_cyberspace してから concentrate_hearing を呼んでください。",
             'request_id': request.get('request_id'),
         }
         append_active_listen_result(entry)
@@ -356,6 +370,8 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
         }
 
     source = normalize_source_uri(matched_source)
+    resolved_request = dict(request)
+    resolved_request["source"] = source
     audio_dir = os.path.join('/tmp/embodied-ha', 'queued_listen')
     os.makedirs(audio_dir, exist_ok=True)
     wav_path = os.path.join(audio_dir, f"{request.get('request_id') or uuid.uuid4().hex}.wav")
@@ -378,18 +394,21 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
         'session_model': audio_session_model() or 'Gemini 3.5 Flash (High)',
     }
     try:
-        record_request_to_wav(source, wav_path)
+        record_request_to_wav(resolved_request, wav_path)
+        transcript, stt_provider, stt_language = _transcribe_recorded_audio(wav_path)
+        entry['stt_provider'] = stt_provider or None
+        entry['stt_language'] = stt_language or None
+        entry['transcript'] = transcript or None
+        recent_auditory_input = _format_recent_auditory_input(transcript)
         append_active_listen_result(entry)
         try:
             import body_state as _bs
 
-            _state = _bs.read_body_state()
-            _state = _bs.on_audio_session(_state)
-            _bs.write_body_state(_state)
+            _bs.update_body_state(lambda state: _bs.on_audio_session(state))
         except Exception:
             pass
         return {
-            'RECENT_AUDITORY_INPUT': wav_path,
+            'RECENT_AUDITORY_INPUT': recent_auditory_input,
             'EHA_SESSION_BIN': default_audio_session_bin(),
             'EHA_SESSION_MODEL': audio_session_model() or 'Gemini 3.5 Flash (High)',
             'EHA_QUEUED_LISTEN_REQUEST_ID': request.get('request_id') or '',

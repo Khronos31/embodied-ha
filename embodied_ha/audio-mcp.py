@@ -13,15 +13,14 @@ import threading
 import time
 import uuid
 from datetime import timedelta
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+import audio_stt
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import log, serve, text
 from sensory_origin import classify_sensory_origin
-from state_utils import clean, get_device_capabilities, load_prefs, now, parse_ts
+from state_utils import clean, get_device_capabilities, now, parse_ts
 
 DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
@@ -245,14 +244,16 @@ def auto_listen_source(body_loc: dict, source_configs: list[dict]) -> str:
     return clean(source_configs[0]["source"]) if source_configs else DEFAULT_SOURCE
 
 
+def default_listen_source() -> str:
+    return normalize_source_uri(auto_listen_source(_load_body_location(), load_audio_source_configs()))
+
+
 def load_stt_provider() -> str | None:
-    provider = clean(load_preferences().get("stt_provider"))
-    return provider or None
+    return audio_stt.load_stt_provider()
 
 
 def load_stt_language() -> str:
-    lang = clean(load_preferences().get("stt_language"))
-    return lang or "ja-JP"
+    return audio_stt.load_stt_language()
 
 
 def build_listen_spec() -> dict:
@@ -499,47 +500,11 @@ def has_sound_from_peak(peak_db: float | None) -> bool:
 
 
 def transcribe_via_ha(path: str, provider: str) -> str | None:
-    token = clean(os.environ.get("SUPERVISOR_TOKEN"))
-    if not token:
-        return None
-    lang = load_stt_language()
-    with open(path, "rb") as f:
-        body = f.read()
-    req = urllib.request.Request(
-        f"http://supervisor/core/api/stt/{provider}",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "audio/wav",
-            "X-Speech-Content": (
-                f"format=wav; codec=pcm; sample_rate=16000; bit_rate=16; channel=1; language={lang}"
-            ),
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            payload = json.load(resp)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, OSError):
-        return None
-    text_value = clean(payload.get("text")) if isinstance(payload, dict) else ""
-    return text_value or None
+    return audio_stt.transcribe_via_ha(path, provider)
 
 
 def transcribe_via_local(path: str) -> str | None:
-    if not _truthy(os.environ.get("EHA_FEATURE_AUDIO_STT_LOCAL", "0")):
-        return None
-    try:
-        from faster_whisper import WhisperModel  # type: ignore
-    except Exception:
-        return None
-    try:
-        model = WhisperModel("tiny", device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(path, language="ja")
-        joined = " ".join(clean(seg.text) for seg in segments if clean(seg.text))
-    except Exception:
-        return None
-    return joined or None
+    return audio_stt.transcribe_via_local(path)
 
 
 def transcribe_audio(path: str) -> str | None:
@@ -876,7 +841,7 @@ def _audio_listen_from_source(source: str, duration: int, transcribe: bool):
     if not ffmpeg:
         payload = {**base_payload(), "error": "ffmpeg not found"}
         record_active_listen(payload, source)
-        return [text(json.dumps({"error": "ffmpeg not found"}, ensure_ascii=False))]
+        return [text(json.dumps({"error": "ffmpeg not found"}, ensure_ascii=False))], True
 
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     tmp_path = None
@@ -984,7 +949,8 @@ def listen(args: dict):
         return [text("電脳体モードでは listen は使えません。use_device_microphone を使ってください。")], True
     _body_loc = _load_body_location()
     _src_cfgs = load_audio_source_configs()
-    source = normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
+    requested_source = clean(args.get("source"))
+    source = normalize_source_uri(requested_source) if requested_source else normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)

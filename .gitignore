@@ -2,4 +2,5 @@ embodied_ha/log/
 **/__pycache__/
 **/*.pyc
 body_state.json
+body_state.json.lock
 embodied_ha/github_app.pem

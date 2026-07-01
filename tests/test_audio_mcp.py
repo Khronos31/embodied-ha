@@ -106,7 +106,9 @@ class AudioMcpTests(unittest.TestCase):
             log_path = Path(tmpdir) / "active_listen_log.jsonl"
             with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
                  mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value=None):
-                payload = self._json(self.audio_mcp.listen({}))
+                result = self.audio_mcp.listen({})
+        self.assertTrue(result[1])
+        payload = self._json(result[0])
         self.assertEqual(payload["error"], "ffmpeg not found")
 
     def test_listen_go2rtc_without_stt(self):

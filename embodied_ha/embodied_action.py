@@ -97,14 +97,14 @@ def apply_action_to_body_state(
     move_cost: Any = None,
 ) -> dict[str, Any]:
     path = body_state_path()
-    current = body_state.load_state(path)
-    updated = body_state.apply_action_effect(
-        current,
-        action_mode=clean(action_mode),
-        action_cost=coerce_float(action_cost, 0.0),
-        target_room=clean(target_room),
-        target_host=clean(target_host),
-        move_cost=coerce_float(move_cost, 0.0),
+    return body_state.update_state(
+        path,
+        lambda current: body_state.apply_action_effect(
+            current,
+            action_mode=clean(action_mode),
+            action_cost=coerce_float(action_cost, 0.0),
+            target_room=clean(target_room),
+            target_host=clean(target_host),
+            move_cost=coerce_float(move_cost, 0.0),
+        ),
     )
-    body_state.save_state(path, updated)
-    return updated
