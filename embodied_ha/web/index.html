@@ -459,26 +459,34 @@
                         </section>
                     </div>
 
-                    <!-- Tab 4: Advanced JSON Settings -->
                     <div class="settings-tab-content" id="settings-tab-advanced" style="display:none;">
                         <section class="settings-section card">
                             <h3>自律ループの間隔 (loop_schedule)</h3>
                             <p class="section-desc">定期実行されるループの間隔と、時間帯ごとの発火確率を設定します。ここで変更した値は「preferences.json の直接編集」タブでの保存時にも常に適用されます。</p>
-                            <div class="form-group">
-                                <label>ループ間隔（分）</label>
-                                <input type="number" id="setting-loop-interval-min" min="1" step="1" placeholder="30">
+                            
+                            <div class="form-group" style="max-width: 320px; margin-bottom: 24px;">
+                                <label class="form-label">ループ間隔（分）</label>
+                                <input type="number" id="setting-loop-interval-min" min="1" step="1" placeholder="30" class="form-input">
+                                <p class="form-hint">定期的にバックグラウンド実行されるループの実行周期を設定します（1分以上）。</p>
                             </div>
+
                             <div class="form-group">
-                                <label>日中（7時〜22時）の発火確率（%）</label>
-                                <input type="number" id="setting-loop-day-prob" min="0" max="100" step="1" placeholder="100">
-                            </div>
-                            <div class="form-group">
-                                <label>夜（22時〜24時）の発火確率（%）</label>
-                                <input type="number" id="setting-loop-late-prob" min="0" max="100" step="1" placeholder="30">
-                            </div>
-                            <div class="form-group">
-                                <label>深夜（0時〜7時）の発火確率（%）</label>
-                                <input type="number" id="setting-loop-night-prob" min="0" max="100" step="1" placeholder="10">
+                                <label class="form-label">時間帯ごとの発火確率（%）</label>
+                                <p class="form-hint" style="margin-bottom: 12px;">各時間帯の実行タイミングで、実際に処理を実行する確率を設定します（0〜100%）。</p>
+                                <div class="config-grid-3">
+                                    <div class="form-group">
+                                        <label class="form-label">日中 (7:00 〜 22:00)</label>
+                                        <input type="number" id="setting-loop-day-prob" min="0" max="100" step="1" placeholder="100" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">夜 (22:00 〜 24:00)</label>
+                                        <input type="number" id="setting-loop-late-prob" min="0" max="100" step="1" placeholder="30" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">深夜 (0:00 〜 7:00)</label>
+                                        <input type="number" id="setting-loop-night-prob" min="0" max="100" step="1" placeholder="10" class="form-input">
+                                    </div>
+                                </div>
                             </div>
                         </section>
                         <section class="settings-section card">

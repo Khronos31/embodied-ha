@@ -873,6 +873,7 @@ input:checked + .slider:before {
 }
 
 .form-group input[type="text"],
+.form-group input[type="number"],
 .form-group .form-input,
 .form-input,
 .form-group select,
@@ -890,6 +891,7 @@ input:checked + .slider:before {
 }
 
 .form-group input[type="text"]:focus,
+.form-group input[type="number"]:focus,
 .form-group .form-input:focus,
 .form-input:focus,
 .form-group select:focus,
