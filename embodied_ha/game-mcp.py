@@ -229,10 +229,7 @@ def _get_kv():
     global _kv
     if _kv is not None:
         return _kv
-    tools_path = os.environ.get("EHA_TOOLS_PATH", "/config/.tools")
-    kv_path = os.path.join(
-        tools_path, "word2vec/chive-1.3-mc90_gensim/chive-1.3-mc90.kv"
-    )
+    kv_path = "/data/word2vec/chive-1.3-mc90_gensim/chive-1.3-mc90.kv"
     from gensim.models import KeyedVectors
     _kv = KeyedVectors.load(kv_path)
     return _kv

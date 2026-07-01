@@ -61,8 +61,7 @@ GAME_CATALOG = [
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 
-TOOLS_PATH = os.environ.get("EHA_TOOLS_PATH", "/config/.tools")
-CHIVE_DIR  = os.path.join(TOOLS_PATH, "word2vec", "chive-1.3-mc90_gensim")
+CHIVE_DIR  = "/data/word2vec/chive-1.3-mc90_gensim"
 CHIVE_URL  = "https://sudachi.s3-ap-northeast-1.amazonaws.com/chive/chive-1.3-mc90_gensim.tar.gz"
 
 _install_status: dict = {"status": "idle", "message": ""}
@@ -91,13 +90,13 @@ def _run_install():
 
         # chiVe
         _install_status = {"status": "running", "message": "chiVe モデルをダウンロード中（約490MB）..."}
-        os.makedirs(TOOLS_PATH + "/word2vec", exist_ok=True)
-        tar_path = TOOLS_PATH + "/word2vec/chive-1.3-mc90_gensim.tar.gz"
+        os.makedirs("/data/word2vec", exist_ok=True)
+        tar_path = "/data/word2vec/chive-1.3-mc90_gensim.tar.gz"
         urllib.request.urlretrieve(CHIVE_URL, tar_path)
 
         _install_status = {"status": "running", "message": "展開中..."}
         r2 = subprocess.run(
-            ["tar", "xzf", tar_path, "-C", TOOLS_PATH + "/word2vec"],
+            ["tar", "xzf", tar_path, "-C", "/data/word2vec"],
             capture_output=True, timeout=120,
         )
         os.remove(tar_path)
