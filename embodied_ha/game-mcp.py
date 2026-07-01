@@ -24,6 +24,18 @@ from mcp_lib import serve, text
 TIMEOUT = 20
 UA = "embodied-ha/game-mcp (educational use)"
 
+# プラグイン有効フラグ。標準同梱ゲームは True。
+# 将来的に preferences.json で制御する想定。
+_PLUGINS: dict[str, bool] = {
+    "wiki6": True,
+    "wordvec_race": False,  # chiVe モデル未インストール時は False
+}
+
+
+def _plugin_disabled_error(name: str):
+    msg = f"{name} ゲームが無効です。Web UI のゲームタブから有効にしてください。"
+    return [text(json.dumps({"error": "plugin_disabled", "message": msg}, ensure_ascii=False))], True
+
 WORD_PAIRS = [
     ("バナナ", "図書館"),
     ("猫", "宇宙"),
@@ -108,6 +120,8 @@ def _pediaroute_random() -> str | None:
 
 
 def game_wiki6_start(args: dict[str, Any]):
+    if not _PLUGINS.get("wiki6"):
+        return _plugin_disabled_error("Wiki6")
     # PediaRouteのランダムAPIで問題を生成。失敗時はハードコードリストから選ぶ。
     start = _pediaroute_random()
     goal = _pediaroute_random()
@@ -123,6 +137,8 @@ def game_wiki6_start(args: dict[str, Any]):
 
 
 def game_wiki6_getlinks(args: dict[str, Any]):
+    if not _PLUGINS.get("wiki6"):
+        return _plugin_disabled_error("Wiki6")
     word = str(args.get("word") or "").strip()
     if not word:
         return _json_error("word が空です")
@@ -163,6 +179,8 @@ _PEDIAROUTE_ERRORS = {
 
 
 def game_wiki6_solve(args: dict[str, Any]):
+    if not _PLUGINS.get("wiki6"):
+        return _plugin_disabled_error("Wiki6")
     word1 = str(args.get("word1") or "").strip()
     word2 = str(args.get("word2") or "").strip()
     if not word1 or not word2:
