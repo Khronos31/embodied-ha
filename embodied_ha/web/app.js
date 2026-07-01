@@ -1796,6 +1796,7 @@ async function switchSettingsTab(tabName) {
     const tabAdvanced = document.getElementById('settings-tab-advanced');
     const tabOther = document.getElementById('settings-tab-other');
     const tabExperimental = document.getElementById('settings-tab-experimental');
+    const tabGames = document.getElementById('settings-tab-games');
 
     if (tabGeneral) tabGeneral.style.display = tabName === 'general' ? 'block' : 'none';
     if (tabIo) tabIo.style.display = tabName === 'io' ? 'block' : 'none';
@@ -1803,11 +1804,74 @@ async function switchSettingsTab(tabName) {
     if (tabAdvanced) tabAdvanced.style.display = tabName === 'advanced' ? 'block' : 'none';
     if (tabOther) tabOther.style.display = tabName === 'other' ? 'block' : 'none';
     if (tabExperimental) tabExperimental.style.display = tabName === 'experimental' ? 'block' : 'none';
+    if (tabGames) tabGames.style.display = tabName === 'games' ? 'block' : 'none';
+    
     if (tabName === 'other') {
         renderOtherFeaturesCatalog();
     }
     if (tabName === 'experimental') {
         await refreshAntigravityStatus();
+    }
+    if (tabName === 'games') {
+        await loadGames();
+    }
+}
+
+async function loadGames() {
+    const container = document.getElementById('games-list');
+    if (!container) return;
+    container.innerHTML = '<p class="loading-text">読み込み中...</p>';
+    try {
+        const res = await fetch('/api/games');
+        const data = await res.json();
+        renderGames(data.games || []);
+    } catch (e) {
+        container.innerHTML = '<p class="error-text">読み込みに失敗しました</p>';
+    }
+}
+
+function renderGames(games) {
+    const container = document.getElementById('games-list');
+    if (!container) return;
+    if (!games.length) {
+        container.innerHTML = '<p class="section-desc">ゲームが見つかりません</p>';
+        return;
+    }
+    container.innerHTML = games.map(g => `
+        <div class="game-card ${g.enabled ? 'enabled' : 'disabled'}">
+            <div class="game-card-header">
+                <div class="game-card-info">
+                    <span class="game-name">${g.name}</span>
+                    ${g.bundled ? '<span class="game-badge bundled">同梱</span>' : ''}
+                    <span class="game-badge ${g.enabled ? 'active' : 'inactive'}">${g.enabled ? '有効' : '無効'}</span>
+                </div>
+                <button
+                    type="button"
+                    class="btn-toggle ${g.enabled ? 'btn-disable' : 'btn-enable'}"
+                    onclick="toggleGame('${g.id}', ${!g.enabled})"
+                >${g.enabled ? '無効にする' : '有効にする'}</button>
+            </div>
+            <p class="game-description">${g.description}</p>
+            ${g.requires.length ? `<p class="game-requires">必要: ${g.requires.join('、')}</p>` : ''}
+        </div>
+    `).join('');
+}
+
+async function toggleGame(id, enabled) {
+    try {
+        const res = await fetch('/api/games/toggle', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id, enabled})
+        });
+        const data = await res.json();
+        if (data.ok) {
+            await loadGames();
+        } else {
+            alert('切り替えに失敗しました: ' + (data.error || '不明なエラー'));
+        }
+    } catch (e) {
+        alert('通信エラーが発生しました');
     }
 }
 

@@ -41,6 +41,23 @@ PREFS_FILE = os.environ.get("EHA_PREFS_FILE", os.path.join(SCRIPT_DIR, "preferen
 PREFS_EXAMPLE_FILE = os.path.join(SCRIPT_DIR, "preferences.json.example")
 CHARACTER_FILE = os.environ.get("EHA_CHARACTER_FILE", os.path.join(SCRIPT_DIR, "character.md"))
 
+GAME_CATALOG = [
+    {
+        "id": "wiki6",
+        "name": "Wiki6（Wikipedia旅）",
+        "description": "Wikipediaのリンクだけを辿り、スタート記事からゴール記事に最短クリック数で到達する。標準同梱。",
+        "bundled": True,
+        "requires": [],
+    },
+    {
+        "id": "wordvec_race",
+        "name": "WordVecチキンレース",
+        "description": "基準語を決めて交互に単語を出す。前の単語より遠くなければ負け。chiVeモデル（約490MB）が必要。",
+        "bundled": False,
+        "requires": ["chiVe mc90モデル（~490MB）"],
+    },
+]
+
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 LOUNGE_QUEUE_LOG = os.path.join(LOG_DIR, "ai_lounge_queue.jsonl")
@@ -393,6 +410,41 @@ def append_jsonl(path: str, row: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+
+
+
+def _load_json_object(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_game_enabled_map() -> dict[str, bool]:
+    prefs = _load_json_object(PREFS_FILE)
+    games = prefs.get("games", {})
+    if not isinstance(games, dict):
+        return {}
+    plugins = games.get("plugins", {})
+    if not isinstance(plugins, dict):
+        return {}
+    enabled_map: dict[str, bool] = {}
+    for game_id, enabled in plugins.items():
+        if isinstance(enabled, bool):
+            enabled_map[str(game_id)] = enabled
+    return enabled_map
+
+
+def _build_game_catalog() -> list[dict]:
+    enabled_map = _load_game_enabled_map()
+    games: list[dict] = []
+    for game in GAME_CATALOG:
+        item = dict(game)
+        item["enabled"] = enabled_map.get(game["id"], bool(game.get("bundled")))
+        games.append(item)
+    return games
 
 
 def _load_lounge_module():
@@ -1003,6 +1055,8 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int(qs.get("limit", ["20"])[0])
             self.send_json(get_lounge_log(limit))
+        elif path == "/api/games":
+            self.send_json({"games": _build_game_catalog()})
         elif path.startswith("/api/audio-events/") and path.endswith("/wav"):
             event_id = path[len("/api/audio-events/"):-len("/wav")].strip("/")
             if not event_id or not all(c.isalnum() or c in "-_" for c in event_id):
@@ -1344,6 +1398,38 @@ class Handler(BaseHTTPRequestHandler):
                 pem_path = os.path.join(pem_dir, "github_app.pem")
                 atomic_write(pem_path, pem_content + "\n")
                 os.chmod(pem_path, 0o600)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/games/toggle":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(body, dict):
+                    self.send_json({"error": "invalid body"}, 400)
+                    return
+                game_id = str(body.get("id") or "").strip()
+                if not game_id:
+                    self.send_json({"error": "id is required"}, 400)
+                    return
+                if game_id not in {game["id"] for game in GAME_CATALOG}:
+                    self.send_json({"error": "invalid id"}, 400)
+                    return
+                enabled = body.get("enabled")
+                if not isinstance(enabled, bool):
+                    self.send_json({"error": "enabled must be boolean"}, 400)
+                    return
+                prefs = _load_json_object(PREFS_FILE)
+                games = prefs.get("games")
+                if not isinstance(games, dict):
+                    games = {}
+                    prefs["games"] = games
+                plugins = games.get("plugins")
+                if not isinstance(plugins, dict):
+                    plugins = {}
+                    games["plugins"] = plugins
+                plugins[game_id] = enabled
+                atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

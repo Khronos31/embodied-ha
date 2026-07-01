@@ -25,13 +25,6 @@ from mcp_lib import serve, text
 TIMEOUT = 20
 UA = "embodied-ha/game-mcp (educational use)"
 
-# プラグイン有効フラグ。標準同梱ゲームは True。
-# 将来的に preferences.json で制御する想定。
-_PLUGINS: dict[str, bool] = {
-    "wiki6": True,
-    "wordvec_race": False,  # chiVe モデル未インストール時は False
-}
-
 
 def _plugin_disabled_error(name: str):
     msg = f"{name} ゲームが無効です。Web UI のゲームタブから有効にしてください。"
@@ -362,6 +355,36 @@ def game_wordvec_race_hint(args: dict[str, Any]):
         return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
     except Exception as e:
         return _json_error(str(e))
+
+
+def _load_plugins() -> dict[str, bool]:
+    plugins: dict[str, bool] = {
+        "wiki6": True,
+        "wordvec_race": False,
+    }
+    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+    if not prefs_file:
+        return plugins
+    try:
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        return plugins
+    if not isinstance(prefs, dict):
+        return plugins
+    games = prefs.get("games", {})
+    if not isinstance(games, dict):
+        return plugins
+    saved_plugins = games.get("plugins", {})
+    if not isinstance(saved_plugins, dict):
+        return plugins
+    for plugin_id, enabled in saved_plugins.items():
+        if isinstance(enabled, bool):
+            plugins[str(plugin_id)] = enabled
+    return plugins
+
+
+_PLUGINS = _load_plugins()
 
 
 def main() -> None:

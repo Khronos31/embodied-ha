@@ -2391,3 +2391,134 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     flex-shrink: 0;
 }
 
+/* ==========================================================================
+   Games Plugin Settings Styling
+   ========================================================================== */
+
+.games-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.game-card {
+    background-color: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    transition: all 0.2s ease;
+}
+
+.game-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.game-card-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.game-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--claude-text-main);
+}
+
+.game-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.game-badge.bundled {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: var(--claude-text-sub);
+}
+
+.game-badge.active {
+    background-color: var(--badge-loop-bg);
+    color: var(--badge-loop-text);
+}
+
+.game-badge.inactive {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: var(--claude-text-sub);
+}
+
+.game-description {
+    font-size: 13px;
+    color: var(--claude-text-sub);
+    line-height: 1.6;
+    margin-bottom: 8px;
+}
+
+.game-requires {
+    font-size: 12px;
+    color: #c2410c;
+    background-color: #fff7ed;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-top: 4px;
+}
+
+.btn-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: var(--font-sans);
+}
+
+.btn-toggle.btn-enable {
+    background-color: var(--claude-accent);
+    color: white;
+    border: none;
+}
+
+.btn-toggle.btn-enable:hover {
+    background-color: var(--claude-accent-hover);
+}
+
+.btn-toggle.btn-disable {
+    background-color: transparent;
+    border: 1px solid var(--claude-border);
+    color: var(--claude-text-sub);
+}
+
+.btn-toggle.btn-disable:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+    color: var(--claude-text-main);
+}
+
+.loading-text {
+    font-size: 14px;
+    color: var(--claude-text-sub);
+    text-align: center;
+    padding: 20px 0;
+}
+
+.error-text {
+    font-size: 14px;
+    color: #dc2626;
+    text-align: center;
+    padding: 20px 0;
+}
+

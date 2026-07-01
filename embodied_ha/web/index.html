@@ -159,6 +159,7 @@
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('io')">入出力</button>
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('devices')">デバイス・センサー</button>
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('advanced')">高度な設定</button>
+                        <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('games')">ゲーム</button>
                         <button type="button" class="settings-tab-btn" onclick="switchSettingsTab('other')">その他の機能</button>
                         <button type="button" class="settings-tab-btn experimental" onclick="switchSettingsTab('experimental')">実験中機能</button>
                     </div>
@@ -541,6 +542,18 @@
 
                             <div id="antigravity-auth-ui" style="margin-top: 16px;"></div>
 
+                        </section>
+                    </div>
+
+                    <!-- Tab: Games Settings -->
+                    <div class="settings-tab-content" id="settings-tab-games" style="display:none;">
+                        <section class="settings-section">
+                            <h3 class="section-title">ゲームプラグイン</h3>
+                            <p class="section-desc">あかねちゃんと遊べるゲームを管理します。有効にしたゲームはチャットから呼び出せます。</p>
+                            <div id="games-list" class="games-list">
+                                <!-- JavaScriptで動的に描画 -->
+                                <p class="loading-text">読み込み中...</p>
+                            </div>
                         </section>
                     </div>
 
