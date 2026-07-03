@@ -27,24 +27,28 @@ def curl_post(url, payload, ha_token):
     return r.returncode == 0
 
 
+def _normalize_speakers(speakers):
+    if isinstance(speakers, list):
+        return [item for item in speakers if isinstance(item, dict)]
+    if isinstance(speakers, dict):
+        return [{**(cfg if isinstance(cfg, dict) else {}), "room": room}
+                for room, cfg in speakers.items()]
+    return []
+
+
 def _find_speaker(speakers, room: str) -> dict:
     """speakers がリスト形式でも旧辞書形式でも room に対応する設定を返す。"""
-    if isinstance(speakers, list):
-        for item in speakers:
-            if isinstance(item, dict) and item.get("room") == room:
-                return item
-        return {}
-    if isinstance(speakers, dict):
-        return speakers.get(room, {})
+    for item in _normalize_speakers(speakers):
+        if item.get("room") == room:
+            return item
     return {}
 
 
 def _find_speaker_by_host(speakers, host: str) -> dict:
     """TCP スピーカーをホストで検索する（電脳体モードの明示的ルーティング用）。"""
-    if isinstance(speakers, list):
-        for item in speakers:
-            if isinstance(item, dict) and item.get("type") == "tcp" and item.get("host") == host:
-                return item
+    for item in _normalize_speakers(speakers):
+        if item.get("type") == "tcp" and item.get("host") == host:
+            return item
     return {}
 
 

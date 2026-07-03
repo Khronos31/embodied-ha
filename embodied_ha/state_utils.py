@@ -111,6 +111,8 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
         }
 
     def _find_entry(items: Any, extra_keys: tuple[str, ...] = ()) -> dict[str, Any] | None:
+        if isinstance(items, dict):
+            items = [{**(value if isinstance(value, dict) else {}), "room": key} for key, value in items.items()]
         if not isinstance(items, list):
             return None
         for item in items:

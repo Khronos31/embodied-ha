@@ -275,7 +275,12 @@ if chat_source == "voice":
     if user_room and prefs_file:
         try:
             prefs = json.load(open(prefs_file, encoding="utf-8"))
-            spk = next((s for s in prefs.get("speakers", [])
+            raw_speakers = prefs.get("speakers", [])
+            if isinstance(raw_speakers, dict):
+                raw_speakers = [{**(v if isinstance(v, dict) else {}), "room": k} for k, v in raw_speakers.items()]
+            elif not isinstance(raw_speakers, list):
+                raw_speakers = []
+            spk = next((s for s in raw_speakers
                         if isinstance(s, dict) and s.get("room") == user_room and s.get("type") == "tcp"), None)
             if spk:
                 user_room_speaker = f'tcp://{spk["host"]}:{spk.get("port", 3334)}'
@@ -660,9 +665,35 @@ if not update:
 try:
     prefs = json.load(open(prefs_file, encoding="utf-8"))
 except Exception:
-    prefs = {"cameras": [], "speakers": {}, "presence": {}, "policies": []}
+    prefs = {"cameras": [], "speakers": [], "presence": {}, "policies": []}
 
 changed = []
+
+
+def _normalize_speakers(value):
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(dict(item))
+        return out
+    if isinstance(value, dict):
+        out = []
+        for room, cfg in value.items():
+            entry = dict(cfg) if isinstance(cfg, dict) else {}
+            entry.setdefault("room", room)
+            out.append(entry)
+        return out
+    return []
+
+
+def _speaker_key(item):
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("room") or item.get("entity") or item.get("media_player") or "").strip()
+
+
+speakers = _normalize_speakers(prefs.get("speakers"))
 
 for cam in (update.get("cameras_add") or []):
     src = (cam.get("source") or "").strip()
@@ -680,8 +711,25 @@ for src in (update.get("cameras_remove") or []):
         changed.append(f"cameras_remove:{src}")
 
 for area, cfg in (update.get("speakers_set") or {}).items():
-    prefs.setdefault("speakers", {})[area] = cfg
+    entry = dict(cfg) if isinstance(cfg, dict) else {}
+    entry.setdefault("room", area)
+    entry_room = _speaker_key(entry)
+    entry_entity = str(entry.get("entity") or entry.get("media_player") or "").strip()
+    for i, item in enumerate(speakers):
+        if not isinstance(item, dict):
+            continue
+        item_room = _speaker_key(item)
+        item_entity = str(item.get("entity") or item.get("media_player") or "").strip()
+        if (entry_room and item_room == entry_room) or (not entry_room and entry_entity and item_entity == entry_entity):
+            merged = {**item, **entry}
+            merged.setdefault("room", area)
+            speakers[i] = merged
+            break
+    else:
+        speakers.append(entry)
     changed.append(f"speakers_set:{area}")
+
+prefs["speakers"] = speakers
 
 if update.get("presence_set"):
     prefs["presence"] = update["presence_set"]

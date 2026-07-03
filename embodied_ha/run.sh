@@ -203,9 +203,9 @@ if [ ! -f "$EHA_PERSONAL_INC" ]; then
     fi
 fi
 
-# --- センサー・スピーカー初回自動発見 ---
-# sensors か speakers のどちらかが未設定なら discover.py を走らせる。
-# discover.py は sensors を下書きで置き換え、speakers は未設定のときだけ補う。
+# --- センサー初回自動発見 ---
+# sensors が未設定なら discover.py を走らせる。
+# discover.py は sensors を空のときだけ seed し、speakers は未設定のときだけ補う。
 NEED_DISCOVER=$(python3 -c "
 import json
 try:
@@ -213,8 +213,7 @@ try:
 except Exception:
     d = {}
 sensors = sum(len(g.get('items', [])) for g in d.get('sensors', {}).get('groups', []))
-speakers = len(d.get('speakers', {}) or {})
-print('1' if (sensors == 0 or speakers == 0) else '0')
+print('1' if sensors == 0 else '0')
 " 2>/dev/null || echo "1")
 
 # --- キャラクター名（Web UIの設定画面 → preferences.json から読む）---
@@ -230,7 +229,7 @@ except Exception:
 echo "[run] キャラクター名: ${EHA_CHARACTER_NAME}"
 
 if [ "$NEED_DISCOVER" = "1" ]; then
-    echo "[run] sensors/speakers 未設定。discover.py で自動発見します..."
+    echo "[run] sensors 未設定。discover.py で自動発見します..."
     EHA_PREFS_FILE="$EHA_PREFS_FILE" HA_URL="$HA_URL" RESIDENT="$RESIDENT" \
         python3 "$SCRIPT_DIR/discover.py" --write \
         && echo "[run] discover.py 完了" \

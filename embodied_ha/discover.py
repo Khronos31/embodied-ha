@@ -172,7 +172,7 @@ def build_speakers_draft(rows):
             continue
         by_area.setdefault(r["area"], []).append(r)
 
-    speakers = {}
+    speakers = []
     for area, cands in by_area.items():
         preferred = [c for c in cands
                      if any(k in (c["eid"] + " " + c["name"]).lower() for k in SPEAKER_PREFER)]
@@ -181,7 +181,7 @@ def build_speakers_draft(rows):
         if len(chosen) > 1:
             warnings.append(f"area『{area}』にスピーカー候補が複数。{pick['eid']} を仮選択"
                             f"（「{area}は○○で喋って」で変更可）。")
-        speakers[area] = {"type": "tts", "entity": pick["eid"]}
+        speakers.append({"type": "tts", "entity": pick["eid"], "room": area, "label": area})
 
     if speakers and not default_tts:
         warnings.append("TTS エンジンが見つかりません。グローバル設定の tts_entity を会話で設定してください。")
@@ -236,8 +236,10 @@ def main():
             prefs = json.load(open(prefs_file, encoding="utf-8"))
         except Exception:
             prefs = {}
-        prefs["sensors"] = draft
-        if default_tts:
+        if not prefs.get("sensors"):
+            prefs["sensors"] = draft
+            print("[discover] sensors 下書きを書き込みました", file=sys.stderr)
+        if not prefs.get("tts_entity") and default_tts:
             prefs["tts_entity"] = default_tts
         # speakers は既存ユーザー設定を尊重し、未設定（空）のときだけ下書きを入れる。
         if not prefs.get("speakers") and speakers_draft:
@@ -251,9 +253,10 @@ def main():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(prefs, f, ensure_ascii=False, indent=2)
         os.replace(tmp, prefs_file)
-        n = sum(len(g["items"]) for g in draft["groups"])
-        print(f"[discover] preferences.json に sensors を書き込みました（{len(draft['groups'])}グループ / {n}項目）",
-              file=sys.stderr)
+        if prefs.get("sensors") == draft:
+            n = sum(len(g["items"]) for g in draft["groups"])
+            print(f"[discover] preferences.json に sensors を書き込みました（{len(draft['groups'])}グループ / {n}項目）",
+                  file=sys.stderr)
     else:
         output = {"sensors": draft, "speakers": speakers_draft, "entities": entities_draft}
         if default_tts:
