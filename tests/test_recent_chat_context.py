@@ -27,7 +27,7 @@ class RecentChatContextTests(unittest.TestCase):
             ]
             log_path = self._write_log(tmpdir, rows)
 
-            self.assertEqual(rcc.format_earlier_today_chat(str(log_path), "潤哉"), "")
+            self.assertEqual(rcc.format_earlier_today_chat(str(log_path), "resident"), "")
 
     def test_formats_entries_before_tail_window(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -43,12 +43,12 @@ class RecentChatContextTests(unittest.TestCase):
                 )
             log_path = self._write_log(tmpdir, rows)
 
-            result = rcc.format_earlier_today_chat(str(log_path), "潤哉")
+            result = rcc.format_earlier_today_chat(str(log_path), "resident")
 
             self.assertTrue(result.startswith("（今日の会話・それ以前）"))
-            self.assertIn('08:00 潤哉さん: 「発言0」', result)
+            self.assertIn('08:00 residentさん: 「発言0」', result)
             self.assertIn("08:00 あかね: 返答0", result)
-            self.assertIn('08:01 潤哉さん: 「発言1」', result)
+            self.assertIn('08:01 residentさん: 「発言1」', result)
             self.assertIn("08:01 あかね: 返答1", result)
             self.assertNotIn("発言10", result)
             self.assertNotIn("返答10", result)
@@ -69,14 +69,14 @@ class RecentChatContextTests(unittest.TestCase):
                 )
             log_path = self._write_log(tmpdir, rows)
 
-            result = rcc.format_earlier_today_chat(str(log_path), "潤哉")
+            result = rcc.format_earlier_today_chat(str(log_path), "resident")
 
             self.assertNotIn("無視される", result)
-            self.assertIn('09:00 潤哉さん: 「有効0」', result)
+            self.assertIn('09:00 residentさん: 「有効0」', result)
             self.assertIn("09:00 あかね: 応答0", result)
 
     def test_missing_file_returns_empty_string(self):
-        self.assertEqual(rcc.format_earlier_today_chat("/tmp/does-not-exist.jsonl", "潤哉"), "")
+        self.assertEqual(rcc.format_earlier_today_chat("/tmp/does-not-exist.jsonl", "resident"), "")
 
 
 if __name__ == "__main__":

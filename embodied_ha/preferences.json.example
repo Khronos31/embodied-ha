@@ -31,7 +31,13 @@
       "ha_entity": "camera.living_ptz",
       "room": "living",
       "label": "リビング（PTZ）",
-      "note": "PTZ対応カメラ。use_device_camera で ptz_left/right/up/down 操作可能"
+      "note": "PTZ対応カメラ。use_device_camera で ptz_left/right/up/down 操作可能",
+      "ptz": {
+        "left": "button.your_camera_pan_left",
+        "right": "button.your_camera_pan_right",
+        "up": "button.your_camera_tilt_up",
+        "down": "button.your_camera_tilt_down"
+      }
     }
   ],
 

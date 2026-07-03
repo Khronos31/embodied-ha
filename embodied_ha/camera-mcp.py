@@ -17,13 +17,6 @@ from embodied_action import action_fields_for_sensory, apply_action_to_body_stat
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, load_prefs
 
-PTZ_BUTTONS = {
-    "left": "button.rihinkunokamera_pan_right",
-    "right": "button.rihinkunokamera_pan_left",
-    "up": "button.rihinkunokamera_tilt_up",
-    "down": "button.rihinkunokamera_tilt_down",
-}
-
 TOOL_USE_DEVICE_CAMERA = {
     "name": "use_device_camera",
     "description": (
@@ -237,10 +230,10 @@ def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str, 
             "isError": True
         }})
         return
-    entity_id = PTZ_BUTTONS.get(direction)
+    entity_id = (camera.get("ptz") or {}).get(direction)
     if not entity_id:
         send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [{"type": "text", "text": f"不明な方向: {direction}"}],
+            "content": [{"type": "text", "text": f"このカメラはPTZ非対応です。 direction={direction}"}],
             "isError": True
         }})
         return

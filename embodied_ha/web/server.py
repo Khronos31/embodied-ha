@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
 import importlib.util
-import json, os, subprocess, time, queue, threading, tempfile, sys, re, re
+import json, os, subprocess, time, queue, threading, tempfile, sys, re
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -352,8 +352,8 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
 
     if not state.get("sent_method"):
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
-            print(f"[agy-login] method prompt, sending \\r", flush=True)
-            os.write(master_fd, b"\r")
+            print("[agy-login] method prompt, sending \\r", flush=True)
+            os.write(master_fd, b"1\n")
             state["sent_method"] = True
             return
 
@@ -375,18 +375,18 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
         return
 
     if "color scheme" in line_lower:
-        print(f"[agy-login] color scheme prompt, sending \\r", flush=True)
-        os.write(master_fd, b"\r")
+        print("[agy-login] color scheme prompt, sending \\r", flush=True)
+        os.write(master_fd, b"\n")
         return
 
     if "terms of service" in line_lower or "terms" in line_lower:
-        print(f"[agy-login] terms prompt, sending accept", flush=True)
-        os.write(master_fd, b"\x1b[B\x1b[C\r")
+        print("[agy-login] terms prompt, sending accept", flush=True)
+        os.write(master_fd, b"\x1b[B\x1b[C\n")
         return
 
     if "trust" in line_lower and not state.get("auth_done"):
-        print(f"[agy-login] trust prompt, sending \\r + marking done", flush=True)
-        os.write(master_fd, b"\r")
+        print("[agy-login] trust prompt, sending \\r + marking done", flush=True)
+        os.write(master_fd, b"\n")
         state["auth_done"] = True
         if antigravity_setup is not None:
             try:

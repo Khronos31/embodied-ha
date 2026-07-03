@@ -9,7 +9,7 @@ import subprocess
 import time
 from typing import Any
 
-from state_utils import clean, read_json
+from state_utils import clean, load_prefs, read_json
 
 DEFAULT_DATA_DIR = "/config/embodied-ha"
 DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
@@ -18,13 +18,7 @@ DEFAULT_CALIB_FILE = "/config/embodied-ha/calibration/audio_calibration.json"
 
 _CALIB_INVALID_THRESHOLD = -200.0
 
-SPECIAL_SOURCE_HINTS = {
-    "camera.home_pc_screenshot": "study",
-    "home_pc": "study",
-    "home-pc": "study",
-    "capture_pc": "study",
-    "capture_pc2": "study",
-}
+SPECIAL_SOURCE_HINTS = {}
 
 
 AREA_CACHE_TTL_SEC = 300.0
@@ -71,6 +65,29 @@ def _ha_template(template: str) -> str | None:
         return None
     value = clean(result.stdout)
     return value or None
+
+
+def prefs_path() -> str:
+    return clean(os.environ.get("EHA_PREFS_FILE"))
+
+
+def _load_prefs() -> dict[str, Any]:
+    return load_prefs(prefs_path())
+
+
+def _source_room_hints(graph: dict[str, Any]) -> dict[str, str]:
+    prefs = _load_prefs()
+    raw_hints = prefs.get("source_room_hints")
+    if not isinstance(raw_hints, dict):
+        return {}
+
+    hints: dict[str, str] = {}
+    for token, room_value in raw_hints.items():
+        key = clean(token).lower()
+        room_id = resolve_room(room_value, graph)
+        if key and room_id:
+            hints[key] = room_id
+    return hints
 
 
 def area_for_entity(entity_id: Any) -> str | None:
@@ -172,6 +189,10 @@ def infer_room_from_text(*values: Any, graph: dict[str, Any] | None = None) -> s
     haystack = " ".join(clean(value).lower() for value in values if clean(value))
     if not haystack:
         return None
+
+    for token, room_id in _source_room_hints(graph).items():
+        if token in haystack:
+            return room_id
 
     for token, room_id in SPECIAL_SOURCE_HINTS.items():
         if token in haystack and resolve_room(room_id, graph):

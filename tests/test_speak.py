@@ -2,7 +2,6 @@
 import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,11 +26,11 @@ class FindSpeakerTests(unittest.TestCase):
     def test_list_finds_by_room(self):
         speakers = [
             {"room": "study", "type": "tts"},
-            {"room": "kitchen", "type": "tcp", "host": "192.168.1.153", "port": 3334},
+            {"room": "kitchen", "type": "tcp", "host": "192.168.1.100", "port": 3334},
         ]
         result = self.speak._find_speaker(speakers, "kitchen")
         self.assertEqual(result["type"], "tcp")
-        self.assertEqual(result["host"], "192.168.1.153")
+        self.assertEqual(result["host"], "192.168.1.100")
 
     def test_list_first_match_wins(self):
         speakers = [
@@ -106,7 +105,7 @@ class SpeakTcpTests(unittest.TestCase):
                     "room": "kitchen",
                     "label": "台所（VoiceS3R）",
                     "type": "tcp",
-                    "host": "192.168.1.153",
+                    "host": "192.168.1.100",
                     "port": 3334,
                     "note": "",
                 }
@@ -149,7 +148,7 @@ class SpeakTcpTests(unittest.TestCase):
 
     def test_tcp_missing_tts_provider_returns_false(self):
         prefs = {
-            "speakers": [{"room": "kitchen", "type": "tcp", "host": "192.168.1.153", "port": 3334}],
+            "speakers": [{"room": "kitchen", "type": "tcp", "host": "192.168.1.100", "port": 3334}],
         }
         prefs_path = self._write_prefs(prefs)
         try:
@@ -164,7 +163,7 @@ class SpeakTcpTests(unittest.TestCase):
         prefs = {
             "tts_provider": "tts.global_provider",
             "speakers": [
-                {"room": "kitchen", "type": "tcp", "host": "192.168.1.153", "port": 3334}
+                {"room": "kitchen", "type": "tcp", "host": "192.168.1.100", "port": 3334}
             ],
         }
         pcm_data = b"\x00" * 100
@@ -191,7 +190,7 @@ class SpeakTcpTests(unittest.TestCase):
         prefs = {
             "tts_provider": "tts.home_assistant_cloud",
             "speakers": [
-                {"room": "kitchen", "type": "tcp", "host": "192.168.1.153", "port": 3334}
+                {"room": "kitchen", "type": "tcp", "host": "192.168.1.100", "port": 3334}
             ],
         }
         prefs_path = self._write_prefs(prefs)
@@ -211,7 +210,7 @@ class SpeakTcpTests(unittest.TestCase):
         prefs = {
             "tts_provider": "tts.home_assistant_cloud",
             "speakers": [
-                {"room": "kitchen", "type": "tcp", "host": "192.168.1.153", "port": 3334}
+                {"room": "kitchen", "type": "tcp", "host": "192.168.1.100", "port": 3334}
             ],
         }
         prefs_path = self._write_prefs(prefs)

@@ -126,6 +126,30 @@ class SensoryOriginTests(unittest.TestCase):
         self.assertEqual(payload["source_entity_id"], "camera.living_room")
         run_mock.assert_called_once()
 
+
+    def test_source_room_hints_are_loaded_from_preferences(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = self._write_location(tmpdir, "study")
+            prefs_path = Path(tmpdir) / "preferences.json"
+            prefs_path.write_text(
+                json.dumps({"source_room_hints": {"camera.example_screenshot": "study"}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            env = {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_PREFS_FILE": str(prefs_path),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                payload = self.sensory_origin.classify_sensory_origin(
+                    source="camera.example_screenshot",
+                    label="デスクトップ共有",
+                    modality="visual",
+                )
+        self.assertEqual(payload["source_room"], "study")
+        self.assertEqual(payload["sensory_origin"], "direct")
+
     def test_unknown_source_room_is_home_assistant(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)

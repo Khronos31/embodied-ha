@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -36,6 +37,12 @@ class CameraMcpTests(unittest.TestCase):
                                 "room": "living",
                                 "preset": "sofa",
                                 "direction": "left",
+                                "ptz": {
+                                    "left": "button.example_pan_left",
+                                    "right": "button.example_pan_right",
+                                    "up": "button.example_tilt_up",
+                                    "down": "button.example_tilt_down",
+                                },
                             }
                         ]
                     },
@@ -57,6 +64,24 @@ class CameraMcpTests(unittest.TestCase):
         self.assertEqual(context["preset"], "sofa")
         self.assertEqual(context["direction"], "left")
         self.assertTrue(context["timestamp"])
+
+    def test_handle_ptz_uses_camera_specific_button_mapping(self):
+        camera_mcp = load_camera_mcp_module()
+        camera = {
+            "ptz": {
+                "left": "button.example_pan_left",
+                "right": "button.example_pan_right",
+                "up": "button.example_tilt_up",
+                "down": "button.example_tilt_down",
+            }
+        }
+        sent = []
+        with mock.patch.object(camera_mcp, "press_button", return_value=True) as press_mock, \
+             mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+            camera_mcp._handle_ptz(camera, "camera.living", "http://supervisor/core/api", "left", 99)
+        press_mock.assert_called_once_with("button.example_pan_left", "http://supervisor/core/api")
+        self.assertEqual(sent[-1]["result"]["content"][0]["text"], "カメラをleftに向けました")
+        self.assertFalse(sent[-1]["result"]["isError"])
 
 
 if __name__ == "__main__":

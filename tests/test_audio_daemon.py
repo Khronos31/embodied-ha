@@ -222,7 +222,7 @@ class AudioDaemonTests(unittest.TestCase):
         prefs = {
             "audio_sources": [
                 {
-                    "source": "tcp://192.168.1.31:3333",
+                    "source": "tcp://192.168.1.100:3333",
                     "label": "Hallway VoiceS3R",
                     "room": "hallway",
                     "sample_rate": 16000,
@@ -235,8 +235,8 @@ class AudioDaemonTests(unittest.TestCase):
         sources = self.audio_daemon.load_enabled_audio_sources(prefs)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].transport, "tcp_pull")
-        self.assertEqual(sources[0].source, "tcp://192.168.1.31:3333")
-        self.assertEqual(sources[0].host, "192.168.1.31")
+        self.assertEqual(sources[0].source, "tcp://192.168.1.100:3333")
+        self.assertEqual(sources[0].host, "192.168.1.100")
         self.assertEqual(sources[0].port, 3333)
         self.assertEqual(sources[0].room, "hallway")
         self.assertEqual(sources[0].sample_rate, 16000)
@@ -247,7 +247,7 @@ class AudioDaemonTests(unittest.TestCase):
         prefs = {
             "audio_sources": [
                 {
-                    "source": "tcp://192.168.1.31:3333",
+                    "source": "tcp://192.168.1.100:3333",
                     "label": "Hallway VoiceS3R",
                     "room": "hallway",
                     "sample_rate": 48000,
@@ -286,7 +286,7 @@ class AudioDaemonTests(unittest.TestCase):
             {
                 "stt_provider": "stt.home_assistant_cloud",
                 "stt_language": "ja-JP",
-                "wake_words": ["あかねちゃん"],
+                "wake_words": ["sampleちゃん"],
                 "audio_sources": [
                     {
                         "source": "alsa://default",
@@ -301,7 +301,7 @@ class AudioDaemonTests(unittest.TestCase):
         )
         self.assertEqual(settings.provider, "stt.home_assistant_cloud")
         self.assertEqual(settings.language, "ja-JP")
-        self.assertEqual(settings.wake_words, ["あかねちゃん"])
+        self.assertEqual(settings.wake_words, ["sampleちゃん"])
         self.assertTrue(settings.stt_enabled)
         self.assertEqual(settings.config.retention_hours, 10)
         self.assertTrue(settings.config.wake_word_enabled)
@@ -445,7 +445,7 @@ class AudioDaemonTests(unittest.TestCase):
             }, clear=False), mock.patch("builtins.print") as print_mock:
                 self.audio_daemon.update_current_room_from_audio_source(config)
 
-            # あかねの body_location は変更されないこと
+            # sampleの body_location は変更されないこと
             body_payload = json.loads(body_location_path.read_text(encoding="utf-8"))
             self.assertEqual(body_payload["current_room"], "study")
 
@@ -814,32 +814,32 @@ class AudioDaemonTests(unittest.TestCase):
 
 
     def test_claim_transcript_primary_first_source_is_primary(self):
-        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333"))
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.100:3333"))
 
     def test_claim_transcript_primary_duplicate_from_different_source_suppressed(self):
-        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
-        self.assertFalse(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.157:3333"))
+        self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.100:3333")
+        self.assertFalse(self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.101:3333"))
 
     def test_claim_transcript_primary_same_source_always_primary(self):
-        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
+        self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.100:3333")
         # 同一ソースの再発話は必ず通る
-        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333"))
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.100:3333"))
 
     def test_claim_transcript_primary_expired_window_allows_other_source(self):
-        key = "ねえあかね"
+        key = "ねえsample"
         past_ts = time.monotonic() - self.audio_daemon.TRANSCRIPT_DEDUP_WINDOW_SECONDS - 1.0
-        self.audio_daemon._TRANSCRIPT_DEDUP_CACHE[key] = ("tcp://192.168.1.156:3333", past_ts)
+        self.audio_daemon._TRANSCRIPT_DEDUP_CACHE[key] = ("tcp://192.168.1.100:3333", past_ts)
         # ウィンドウ期限切れなら別ソースも primary になれる
-        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.157:3333"))
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.101:3333"))
 
     def test_claim_transcript_primary_different_texts_are_independent(self):
-        self.audio_daemon._claim_transcript_primary("ねえあかね", "tcp://192.168.1.156:3333")
+        self.audio_daemon._claim_transcript_primary("ねえsample", "tcp://192.168.1.100:3333")
         # 別テキストは独立して primary になれる
-        self.assertTrue(self.audio_daemon._claim_transcript_primary("こんにちは", "tcp://192.168.1.157:3333"))
+        self.assertTrue(self.audio_daemon._claim_transcript_primary("こんにちは", "tcp://192.168.1.101:3333"))
 
     def test_process_segment_deduplicates_cross_source_transcript(self):
-        config_a = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.156:3333", "リビング1", 24, True, room="living")
-        config_b = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.157:3333", "リビング2", 24, True, room="living")
+        config_a = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.100:3333", "サンプル1", 24, True, room="living")
+        config_b = self.audio_daemon.AudioSourceConfig("tcp://192.168.1.101:3333", "サンプル2", 24, True, room="living")
         logged_entries: list[dict] = []
         auditory_events: list[dict] = []
         wake_posts: list[str] = []
@@ -852,32 +852,32 @@ class AudioDaemonTests(unittest.TestCase):
             auditory_events.append(entry)
 
         with mock.patch.object(self.audio_daemon, "write_wav"), \
-             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="ねえあかね"), \
+             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="ねえsample"), \
              mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_log), \
              mock.patch.object(self.audio_daemon, "append_auditory_event", side_effect=capture_event), \
              mock.patch.object(self.audio_daemon, "post_wake_message", side_effect=wake_posts.append), \
              mock.patch.object(self.audio_daemon, "update_current_room_from_audio_source"):
             self.audio_daemon.process_segment(
                 config_a, audio_bytes, "stt.provider", "ja-JP", "token",
-                ["ねえあかね"],
+                ["ねえsample"],
                 diagnostics={"vad_mode": "silero", "speech_ratio": 0.8, "peak_db": -20.0, "mean_db": -30.0},
             )
             self.audio_daemon.process_segment(
                 config_b, audio_bytes, "stt.provider", "ja-JP", "token",
-                ["ねえあかね"],
+                ["ねえsample"],
                 diagnostics={"vad_mode": "silero", "speech_ratio": 0.8, "peak_db": -21.0, "mean_db": -31.0},
             )
 
         # 両ソースとも audio_log には書かれる（診断用）
         self.assertEqual(len(logged_entries), 2)
-        # 1件目（リビング1）: primary
+        # 1件目（サンプル1）: primary
         self.assertNotIn("deduplicated", logged_entries[0])
-        self.assertEqual(logged_entries[0]["text"], "ねえあかね")
-        # 2件目（リビング2）: deduplicated フラグあり
+        self.assertEqual(logged_entries[0]["text"], "ねえsample")
+        # 2件目（サンプル2）: deduplicated フラグあり
         self.assertTrue(logged_entries[1].get("deduplicated"))
-        # auditory_events は 1件のみ（リビング1）
+        # auditory_events は 1件のみ（サンプル1）
         self.assertEqual(len(auditory_events), 1)
-        self.assertEqual(auditory_events[0]["source"], "リビング1")
+        self.assertEqual(auditory_events[0]["source"], "サンプル1")
         # ウェイクワード POST も 1回のみ
         self.assertEqual(len(wake_posts), 1)
 

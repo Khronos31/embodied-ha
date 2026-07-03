@@ -13,14 +13,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
-
-# /data/python-packages に永続インストールされた gensim 等を参照
-_pkg_dir = "/data/python-packages"
-if os.path.isdir(_pkg_dir) and _pkg_dir not in sys.path:
-    sys.path.insert(0, _pkg_dir)
-
 import random
+import sys
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -28,6 +22,11 @@ from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
 from mcp_lib import serve, text
+
+# /data/python-packages に永続インストールされた gensim 等を参照
+_pkg_dir = "/data/python-packages"
+if os.path.isdir(_pkg_dir) and _pkg_dir not in sys.path:
+    sys.path.insert(0, _pkg_dir)
 
 TIMEOUT = 20
 UA = "embodied-ha/game-mcp (educational use)"

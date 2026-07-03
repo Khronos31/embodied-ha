@@ -67,7 +67,7 @@ class MemoryConsolidationTests(unittest.TestCase):
             evidence_source="watch-1",
             tags=["light", "evening"],
         )
-        ep2 = self._save_episode(
+        _ = self._save_episode(
             timestamp=f"{day}T08:01:00+09:00",
             summary="リビングの電気がついていた",
             detail="watch log",

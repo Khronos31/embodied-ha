@@ -1013,13 +1013,13 @@ async function fetchSettings() {
             console.log("[Mock] Loading mock settings...");
             prefsData = {
                 cameras: [
-                    { source: "capture_tv", label: "テレビ", note: "HDDレコーダー出力。" },
-                    { source: "camera.living_room", label: "リビング", note: "リビング広角カメラ" }
+                    { source: "capture_tv", label: "モックテレビ", note: "モックHDDレコーダー出力。" },
+                    { source: "camera.example_living", label: "モックカメラ", note: "モック広角カメラ" }
                 ],
                 audio_sources: [
                     {
                         source: "rtsp://localhost:8554/capture_tv",
-                        label: "TV・レコーダー",
+                        label: "モックTV音声",
                         room: "living",
                         note: "go2rtc経由のTV/レコーダー音声",
                         stt_enabled: true,
@@ -1029,7 +1029,7 @@ async function fetchSettings() {
                     },
                     {
                         source: "alsa://default",
-                        label: "スタディマイク",
+                        label: "モックマイク",
                         room: "study",
                         note: "USBマイク直接録音",
                         stt_enabled: true,
@@ -1038,10 +1038,10 @@ async function fetchSettings() {
                         background_hearing_enabled: true
                     },
                     {
-                        source: "tcp://192.168.1.153:3333",
-                        label: "台所（VoiceS3R）",
+                        source: "tcp://192.168.1.100:3333",
+                        label: "モックVoiceS3R",
                         room: "kitchen",
-                        note: "Atom VoiceS3R 常時計測ノード",
+                        note: "モック常時計測ノード",
                         stt_enabled: true,
                         stt_retention_hours: 24,
                         wake_word_enabled: false,
@@ -1051,10 +1051,10 @@ async function fetchSettings() {
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
                 speakers: {
-                    study: { type: "tts", entity: "media_player.study_speaker" }
+                    study: { type: "tts", entity: "media_player.example_speaker" }
                 },
                 entities: [
-                    { name: "リビングのライト", entity_id: "light.living_room", note: "" }
+                    { name: "モックライト", entity_id: "light.example_living", note: "" }
                 ],
                 presence: { entity: "input_boolean.resident_home" },
                 policies: ["深夜1〜6時は発話しない"],
@@ -1074,22 +1074,22 @@ async function fetchSettings() {
             extraContextData = "# モック追加コンテキスト\ndate '+今日は%Y年%m月%d日です'";
             entityList = {
                 media_player: [
-                    { entity_id: "media_player.study_speaker", friendly_name: "書斎スピーカー", area: "書斎" },
-                    { entity_id: "media_player.living_speaker", friendly_name: "リビングスピーカー", area: "リビング" }
+                    { entity_id: "media_player.example_speaker", friendly_name: "サンプルスピーカー", area: "書斎" },
+                    { entity_id: "media_player.example_living_speaker", friendly_name: "サンプルリビングスピーカー", area: "リビング" }
                 ],
                 tts: [
                     { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null }
                 ],
 
                 camera: [
-                    { entity_id: "camera.living_room", friendly_name: "リビングカメラ", area: "リビング" }
+                    { entity_id: "camera.example_living", friendly_name: "サンプルカメラ", area: "リビング" }
                 ],
                 binary_sensor: [
-                    { entity_id: "binary_sensor.living_motion", friendly_name: "リビング人感", area: "リビング" }
+                    { entity_id: "binary_sensor.example_motion", friendly_name: "サンプル人感", area: "リビング" }
                 ],
                 sensor: [],
                 input_boolean: [
-                    { entity_id: "input_boolean.resident_home", friendly_name: "在宅フラグ", area: null }
+                    { entity_id: "input_boolean.example_home", friendly_name: "在宅フラグ", area: null }
                 ],
                 device_tracker: [],
                 person: []
