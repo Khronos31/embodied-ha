@@ -48,7 +48,7 @@ _loop_lock = threading.Lock()
 _desires_lock = threading.Lock()
 _body_lock = threading.Lock()
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
-_ANOMALY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "anomaly_state.json")
+_ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
 
 
 def load_enabled_audio_sources() -> list[dict]:
@@ -527,6 +527,20 @@ threading.Thread(target=loop_scheduler, daemon=True).start()
 if load_enabled_audio_sources():
     threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
     print("[daemon] audio daemon watchdog enabled", flush=True)
+# 保守パイプラインの生存確認（サイレント停止の早期検知）
+try:
+    marker = os.path.join(_LOG_DIR, ".last_daybook")
+    if os.path.exists(marker):
+        with open(marker, encoding="utf-8") as f:
+            last = f.read().strip()
+        import datetime as _dt
+
+        if last:
+            gap = (_dt.date.today() - _dt.date.fromisoformat(last)).days
+            if gap >= 2:
+                print(f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）", flush=True)
+except Exception:
+    pass
 print("[daemon] started (I/O + loop-sched)", flush=True)
 
 # メインスレッドを生かし続ける

@@ -330,6 +330,7 @@ fi
 # ログ・記憶（memory.md等）が永続化される。
 export EHA_LOG_DIR="${EHA_LOG_DIR:-$EHA_DATA_DIR/log}"
 mkdir -p "$EHA_LOG_DIR"
+export EHA_ANOMALY_STATE_FILE="${EHA_ANOMALY_STATE_FILE:-$EHA_LOG_DIR/anomaly_state.json}"
 
 # --- FTS5インデックス初期化（既存エピソード・memory.md を初回インデックス化）---
 EHA_LOG_DIR="$EHA_LOG_DIR" python3 "$SCRIPT_DIR/init_fts.py" \

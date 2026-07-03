@@ -20,6 +20,8 @@ EXPLORE_LOG="$LOG_DIR/explore.jsonl"
 CHAT_LOG="$LOG_DIR/chat_log.jsonl"
 MEMORY_FILE="$LOG_DIR/memory.md"
 PENDING_FILE="$LOG_DIR/pending_proposal.json"
+DAYBOOK_MARKER="$LOG_DIR/.last_daybook"
+TODAY=$(date +%Y-%m-%d)
 TMP_DIR="/tmp/embodied-ha"
 mkdir -p "$LOG_DIR" "$TMP_DIR"
 TIMESTAMP=$(date -Iseconds)
@@ -30,9 +32,48 @@ if [ -f "$MEMORY_FILE" ] && [ -s "$MEMORY_FILE" ]; then
   LONG_MEMORY=$(python3 "$SCRIPT_DIR/mem-context.py" "$MEMORY_FILE" 40)
 fi
 OPEN_LOOPS=$(loops list 2>/dev/null || echo "なし")
+OPEN_LOOPS_JSON=$(loops list-json 2>/dev/null || echo "[]")
 FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
 PRESENCE_SENSORS="$(python3 "$SCRIPT_DIR/render-sensors.py" --context loop 2>/dev/null || echo "（センサー取得失敗）")"
+
+ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-}"
+ANOMALY_URGENCY="${ANOMALY_URGENCY:-}"
+_ANOMALY_CONTEXT_FILE="$TMP_DIR/anomaly_context.txt"
+_ANOMALY_URGENCY_FILE="$TMP_DIR/anomaly_urgency.txt"
+if [ -n "$PRESENCE_SENSORS" ] || [ -n "$OPEN_LOOPS_JSON" ]; then
+  (
+    SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" ANOMALY_STATE_FILE="${EHA_ANOMALY_STATE_FILE:-$LOG_DIR/anomaly_state.json}" SENSORS_DATA="$PRESENCE_SENSORS" OPEN_LOOPS_JSON="$OPEN_LOOPS_JSON" TRIGGER_REASON="${TRIGGER_REASON:-定期実行}" ANOMALY_CONTEXT_FILE="$_ANOMALY_CONTEXT_FILE" ANOMALY_URGENCY_FILE="$_ANOMALY_URGENCY_FILE" python3 << 'PYEOF'
+import os
+import sys
+
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+import anomaly_state as ast  # type: ignore
+
+path = os.environ.get("ANOMALY_STATE_FILE") or os.path.join(os.environ["LOG_DIR"], "anomaly_state.json")
+state = ast.load_state(path)
+updated = ast.detect_anomalies(
+    os.environ.get("SENSORS_DATA", ""),
+    os.environ.get("OPEN_LOOPS_JSON", "[]"),
+    state,
+    trigger_reason=os.environ.get("TRIGGER_REASON", ""),
+    loop_name="loop",
+)
+ast.save_state(path, updated)
+with open(os.environ["ANOMALY_CONTEXT_FILE"], "w", encoding="utf-8") as f:
+    f.write(ast.format_context_block(updated))
+with open(os.environ["ANOMALY_URGENCY_FILE"], "w", encoding="utf-8") as f:
+    f.write(str(ast.compute_explore_urgency(updated)))
+PYEOF
+  ) || true
+  if [ -z "$ANOMALY_CONTEXT" ] && [ -f "$_ANOMALY_CONTEXT_FILE" ]; then
+    ANOMALY_CONTEXT=$(cat "$_ANOMALY_CONTEXT_FILE")
+  fi
+  if [ -z "$ANOMALY_URGENCY" ] && [ -f "$_ANOMALY_URGENCY_FILE" ]; then
+    ANOMALY_URGENCY=$(cat "$_ANOMALY_URGENCY_FILE")
+  fi
+fi
+export ANOMALY_CONTEXT ANOMALY_URGENCY
 
 PREV_EXPLORE="なし"
 if [ -f "$EXPLORE_LOG" ] && [ -s "$EXPLORE_LOG" ]; then
@@ -243,7 +284,7 @@ if ctx:
 PYEOF
 )"
 
-SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
+SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
 
 USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
 
@@ -483,4 +524,11 @@ import json, sys
 with open('$CHAT_LOG', 'a', encoding='utf-8') as f:
     f.write(json.dumps({'timestamp':'$TIMESTAMP','source':'loop','claude':sys.argv[1],'user':None}, ensure_ascii=False) + '\n')
 " "$SPEAK" 2>/dev/null || true
+fi
+
+LAST_DAYBOOK=""
+[ -f "$DAYBOOK_MARKER" ] && LAST_DAYBOOK=$(cat "$DAYBOOK_MARKER")
+if [ "$LAST_DAYBOOK" != "$TODAY" ] && [ -s "$OBSERVATION_LOG" ]; then
+  echo "[DAYBOOK] 前日分を要約中..."
+  env CONSOLIDATE_MEMORY=1 LOG_FILE="$OBSERVATION_LOG" MEMORY_FILE="$MEMORY_FILE" TODAY="$TODAY" DAYBOOK_MARKER="$DAYBOOK_MARKER" LAST_DAYBOOK="$LAST_DAYBOOK" CHARACTER="$CHARACTER" RESIDENT="${RESIDENT:-ユーザー}" SCRIPT_DIR="$SCRIPT_DIR" python3 "$SCRIPT_DIR/daybook_rollup.py" || true
 fi
