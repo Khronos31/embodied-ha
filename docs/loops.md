@@ -1,195 +1,123 @@
-# 3ループモデル
+# ループモデル
 
-実装ファイル: `embodied_ha/watch.sh`, `embodied_ha/explore.sh`, `embodied_ha/chat.sh`, `embodied_ha/daemon.py`
+実装ファイル: `embodied_ha/loop.sh`, `embodied_ha/chat.sh`, `embodied_ha/daemon.py`
 
-Embodied HA は3つの独立したループで動作する。各ループは `bash <script>.sh` で起動するシェルスクリプトであり、`claude` CLI を呼び出して Claude Sonnet（または Haiku）に処理させ、返ってきた JSON を解析して副作用を実行する。
+Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、`chat.sh` の会話ループで動きます。旧来の `watch.sh` / `explore.sh` は存在せず、現在は `loop.sh` に統合されています。
 
-<!-- TODO: diagram — 3ループのトリガー・実行・出力の関係図 -->
+## 全体像
 
-## watch ループ（観察）
+- `daemon.py` が 30分ごとの `loop_scheduler` を回す
+- `loop.sh` は `observe / explore / reflect / web / social` の 5 モードを持つ
+- `chat.sh` はユーザー発話に応答しつつ `preferences_update` を書き込む
+- `daybook` と `memory` の統合は `loop.sh` の末尾から `daybook_rollup.py` を呼ぶことで行う
+- `anomaly_state` の更新は `loop.sh` の冒頭で行う
 
-**実装**: `embodied_ha/watch.sh`（781行）
+## `loop.sh` の冒頭でやっていること
 
-### トリガー条件
+1. `render-sensors.py --context loop` で主要センサーを取得する
+2. `anomaly_state.detect_anomalies()` を `SENSORS_DATA` と `OPEN_LOOPS_JSON` から実行する
+3. `ANOMALY_CONTEXT` と `ANOMALY_URGENCY` を作る
+4. `body_state` と `active_desires` に基づいてモード重みを決める
+5. `MODE` が未指定なら `observe / explore / reflect / web / social` から選ぶ
 
-| 種別 | 条件 | 備考 |
-|---|---|---|
-| 定期実行 | 20分ごと（`SCHEDULE_INTERVAL = 1200`） | `compute_run_chance()` による確率判定あり（基準値 60/100） |
-| MQTT 手動 | `embodied_ha/observe/trigger` に publish | クールダウンなし。`_watch_lock` で多重実行防止 |
-| センサートリガー | 人感センサー等のオートメーションから | 5分クールダウン（`SENSOR_COOLDOWN = 300`） |
+`reflect` と `web` は `memory` 中心、`social` は `lounge` 中心です。`social` は GitHub App 証明書が無い場合、重みが 0 になります。
 
-タイムアウト上限: 600秒（10分）
+## 5 モード
 
-### 処理フロー（2フェーズ）
-
-**フェーズ1: カメラ選択（claude haiku）**
-
-センサー状態・人感履歴・anomaly 状態・身体位置を入力として、軽量な haiku モデルに「今どのカメラを見るべきか」を JSON で判断させる。複数カメラが有効な場合でも、不要なカメラ画像を取得しないための最適化。
-
-**フェーズ2: 本観察（claude sonnet）**
-
-フェーズ1で選択したカメラ画像＋センサー状態＋長期記憶＋身体状態＋発火した欲求を入力として Sonnet に観察させる。
-
-MCP サーバー:
-- 常時: `sensors`, `ha`, `camera`, `audio`, `body`, `memory`, `sociality`, `http`
-- `EHA_AUTONOMOUS=1` のとき追加: `hacontrol`（家電操作ツール）
-
-### 出力（JSON フィールド）
-
-| フィールド | 型 | 処理 |
-|---|---|---|
-| `private` | string | ログにのみ記録。MQTT には出さない |
-| `emotion` | string | MQTT `embodied_ha/emotion/state` に publish |
-| `speak` | string | 発話内容。`boundary.py` で可否判定後に `speak.py` で TTS 実行 |
-| `speak_room` | string | 発話先の部屋（未指定時は preferences の最初のスピーカー） |
-| `schedule` | object | 次回実行のヒント（`schedule.json` に保存してスケジューラが参照） |
-| `observation` | string | MQTT `embodied_ha/observation/state` に publish |
-
-発話後、`boundary.py` で拒否された場合は `counterfactual_state` に「話そうとしたが止まった」を記録する。
-
-### 日次サマリー（daybook rollup）
-
-watch 完了後、当日の観察ログが一定数に達すると `daybook_rollup.py` が起動し、`memory-mcp` の `build_daybook` を呼んで日次圧縮（daybook）を生成・保存する。
-
----
-
-## explore ループ（自律探索）
-
-**実装**: `embodied_ha/explore.sh`（499行）
-
-### トリガー条件
-
-| 種別 | 条件 | 備考 |
-|---|---|---|
-| 定期実行 | 30分ごと（`EXPLORE_INTERVAL = 1800`） | `compute_run_chance()` による確率判定あり（基準値 50/100） |
-
-タイムアウト上限: 600秒（10分）
-
-watch とは異なり、MQTT からの手動トリガーはない。anomaly urgency が高いと `compute_run_chance()` への加算が増え、実行確率が上がる。
-
-### 3モードのランダム選択
-
-body_state の値で重み付けしたうえでランダムにモードを選ぶ:
-
-```
-explore: 50%  (好奇心が高いほど weight 増加)
-reflect: 30%  (ストレスが高いほど weight 増加)
-web:     20%  (confidence が中程度のとき weight 増加)
-```
-
-**explore モード** — `get_sensors`, `ha_get`, `camera_get`, `listen` で家を自由に調査
-
-MCP サーバー: `sensors`, `ha`, `camera`, `audio`, `body`, `memory`, `sociality`, `http`（`EHA_AUTONOMOUS=1` なら `hacontrol` も）
-
-**reflect モード** — `recall` で過去のエピソードを思い返す内省
-
-MCP サーバー: `memory`, `body`, `sociality`
-
-**web モード** — 好奇心に従って `WebSearch` で調べ物
-
-MCP サーバー: `memory`, `body`（Web 検索は claude CLI の組み込みツール `WebSearch` を使用）
-
-### 出力（JSON フィールド）
-
-| フィールド | 型 | 処理 |
-|---|---|---|
-| `private` | string | ログにのみ記録 |
-| `emotion` | string | MQTT `embodied_ha/emotion/state` に publish |
-| `speak` | string | `boundary.py` で可否判定後に TTS |
-| `speak_room` | string | 発話先の部屋 |
-| `proposal` | object | 家電操作提案。`pending_proposal.json` に保存。chat.sh が `proposal_resolved` で消化する |
-| `observation` | string | MQTT `embodied_ha/observation/state` に publish |
-
----
-
-## chat ループ（会話）
-
-**実装**: `embodied_ha/chat.sh`（668行）
-
-### トリガー条件
-
-| 種別 | 条件 |
-|---|---|
-| MQTT 経由 | `embodied_ha/chat/set` にメッセージが publish される |
-| HA テキストエンティティ | `text.embodied_ha_chat` への入力（MQTT 経由で同一トピックに流れる） |
-
-タイムアウト上限: 300秒（5分）
-
-### コンテキスト構築
-
-chat.sh は Claude へのプロンプトを組み立てる前に以下を収集する:
-
-1. **最近の活動** — 観察ログ（watch）と探索ログ（explore）を時系列でマージした直近の活動サマリー
-2. **長期記憶** — `log/memory.md` の全文
-3. **会話履歴** — `log/chat_log.jsonl` から直近10往復
-4. **センサー状態** — `render-sensors.py` の出力（`context=chat`）
-5. **オープンループ** — `loops.sh list` の出力
-6. **保留中の提案** — `pending_proposal.json`（explore が保存した家電操作候補）
-7. **turn-taking state** — sociality_state から割り込み許可の状態
-
-### MCP サーバー
-
-`memory`, `ha`, `sociality`, `hacontrol`, `camera`, `audio`, `body`, `sensors`, `http` に加え、組み込みの `Read` ツール（ファイル読み込み）も利用可能。
-
-hacontrol は chat ループでは常に使用可能（`EHA_AUTONOMOUS` の影響を受けない）。
-
-### 出力（JSON フィールド）
-
-| フィールド | 型 | 処理 |
-|---|---|---|
-| `reply` | string | ユーザーへの返答。`speak.py` で TTS 実行後、MQTT `embodied_ha/last_speak/state` に publish |
-| `emotion` | string | MQTT `embodied_ha/emotion/state` に publish |
-| `preferences_update` | object | `preferences.json` を直接更新（下記参照） |
-| `proposal_resolved` | string | 指定 ID の保留提案を削除 |
-| `open_loop` | string | 新しいオープンループを `loops.sh add` で追加 |
-| `close_loop` | string | ループ ID を指定して `loops.sh close` で閉じる |
-
-### preferences の自律更新
-
-`preferences_update` フィールドで Claude が `preferences.json` を直接変更できる。対応するキー:
-
-- `cameras_add` / `cameras_remove` — カメラの追加・削除
-- `speakers_update` — スピーカー設定の更新
-- `presence_update` — 在宅判定エンティティの変更
-- `policies_add` / `policies_remove` — 行動ポリシーの追加・削除
-- `sensors_groups_update` — センサーグループの更新
-- `entities_add` / `entities_remove` — 操作対象エンティティの追加・削除
-
----
-
-## ループ間の比較
-
-| 項目 | watch | explore | chat |
+| MODE | 役割 | 主要サーバー | 備考 |
 |---|---|---|---|
-| トリガー | 定期 + MQTT + センサー | 定期のみ | MQTT（ユーザー発言） |
-| 基本頻度 | 20分 | 30分 | イベント駆動 |
-| 確率判定 | あり（base 60） | あり（base 50） | なし（必ず実行） |
-| モード数 | 1（2フェーズ） | 3（explore/reflect/web） | 1 |
-| hacontrol | `EHA_AUTONOMOUS=1` のとき | `EHA_AUTONOMOUS=1` のとき | 常に |
-| curiosity への影響 | −0.040（成功時） | −0.060（成功時） | +0.010 |
-| 主な記憶操作 | record_episode, build_daybook | recall, record_episode, loops | recall, remember, loops |
+| `observe` | カメラ選択→観察 | `sensors`, `ha`, `camera`, `audio`, `body`, `memory`, `sociality`, `http` | 最初に Haiku でカメラを選び、その後 Sonnet で本観察する |
+| `explore` | 家を自由に調べる | `sensors`, `ha`, `camera`, `audio`, `body`, `memory`, `sociality`, `http` | `boundary.py` が許可したときだけ `hacontrol` が使える |
+| `reflect` | 内省 | `memory` | `recall` / `remember` / `loops_add` が中心 |
+| `web` | WebSearch で調べ物 | `memory` | Claude の組み込み `WebSearch` を使う |
+| `social` | AI Lounge に参加 | `lounge`, `memory`, `audio` | 投稿は承認キュー経由 |
 
-## body_state によるスケジューリング
+`explore` モードであっても、自律操作は `boundary.py` の `ACTION_MODES = {"explore"}` によって再確認されます。`ha-control-mcp` はこの経路を通ったときだけ実際の家電操作に使われます。
 
-`compute_run_chance()` は `body_state.py` に実装されており、基準値に body_state 各軸のバイアスを加算して最終確率（5〜100%）を返す:
+## `observe`
 
-```python
-# watch の場合
-chance += round((curiosity - 0.5) * 26)
-chance += round((confidence - 0.5) * 8)
-chance += round((energy - 0.5) * 10)
-chance -= round(max(0.0, stress - 0.35) * 24)
+- カメラ一覧から候補を作る
+- `claude haiku` に「今どのカメラを見るべきか」を JSON で決めさせる
+- 選ばれたカメラ画像を付けて `claude sonnet` で観察させる
+- `scene_state.ingest_scene_parse()` に scene を渡す
+- `observations.jsonl` に `private` と `emotion` を書く
 
-# explore の場合
-chance += round((curiosity - 0.5) * 34)
-chance += round((energy - 0.55) * 16)
-chance += round((confidence - 0.5) * 6)
-chance -= round(max(0.0, stress - 0.30) * 30)
+## `explore`
 
-# 共通の補正
-if energy < 0.30:   chance -= 15
-if stress > 0.70:   chance -= 12
-if curiosity > 0.75: chance += 8
-```
+- `get_sensors` と `ha_get` で家の状態を掘る
+- 必要なら `use_device_camera` / `listen` を使う
+- `move_to` / `enter_cyberspace` / `move_cyber` / `return_to_body` を使える
+- 発見があれば `record_episode` / `record_causal_chain` / `loops_add` を使う
+- `EHA_AUTONOMOUS=1` かつ境界が許す場合に限り、`ha_call_service` で家電操作できる
+- `pending_proposal.json` に提案があれば、それも文脈に入る
 
-curiosity が高いほど explore の実行確率が大きく上がる。stress が高い・energy が低いと確率が下がる。詳細は [body_state.md](body_state.md) 参照。
+## `reflect`
+
+- `recall` と `remember` で内省する
+- `loops_add` で後で気にかけることを追加する
+- 家電操作や Web 調査はしない
+
+## `web`
+
+- `WebSearch` で調べる
+- 面白かったことを `remember` に残す
+- 余計な家電操作はしない
+
+## `social`
+
+- `read_lounge_discussions` と `read_lounge_log` で流れを読む
+- 必要なら `read_lounge_discussion` で詳細を開く
+- 投稿案は `enqueue_lounge_post` で承認キューへ入れる
+
+## `chat.sh`
+
+`chat.sh` はユーザー発話に対する会話ループです。実行前に次の文脈を集めます。
+
+1. `observations.jsonl` と `explore.jsonl` の最近の活動
+2. `memory.md` の長期記憶
+3. `chat_log.jsonl` の直近会話
+4. `render-sensors.py --context chat` の出力
+5. `loops list` の結果
+6. `pending_proposal.json`
+7. `sociality_state` の turn-taking 状態
+
+`chat.sh` の出力 JSON は `reply`, `emotion`, `preferences_update`, `proposal_resolved` が中心です。`preferences_update` では実際の `preferences.json` を更新できます。
+
+### `chat.sh` の自動更新オペレーション
+
+| オペ名 | 役割 |
+|---|---|
+| `cameras_add` / `cameras_remove` | カメラの追加・削除 |
+| `speakers_set` | 部屋ごとのスピーカー設定を更新・追加 |
+| `presence_set` | 在宅判定エンティティを更新 |
+| `policies_add` | ポリシーを追加 |
+| `sensors_add` / `sensors_remove` | 主要センサーを追加・削除 |
+| `entities_add` / `entities_remove` | 操作対象エンティティを追加・削除 |
+
+`speakers_set` は現在の実装で list 形式の `speakers` に正規化されます。`policies_remove` と `speakers_update` は存在しません。
+
+## `loop.sh` の末尾
+
+`loop.sh` は各モードの JSON を書き出した後、前日の `observations.jsonl` があれば `daybook_rollup.py` を起動します。
+
+`daybook_rollup.py` は次を行います。
+
+- 観察ログを day 単位に圧縮する
+- `memory-mcp` の `build_daybook` を呼ぶ
+- `memory.md` に daybook の brief を追記する
+- `CONSOLIDATE_MEMORY=1` のとき `consolidate_memory` を呼ぶ
+- `log/.last_daybook` を更新する
+
+`daemon.py` はこの marker を見て、daybook が数日止まっていれば警告を出します。
+
+## `daemon.py` と確率制御
+
+`daemon.py` の `run_chance()` は `preferences.json` の `loop_schedule` を見て、`body_state.compute_run_chance()` に渡します。そこに `desire_pressure` と `anomaly_urgency` が加算されます。
+
+| ループ名 | 基準値 | 主な加算 |
+|---|---|---|
+| `loop` | 時間帯別の `day / late / night` | 欲求圧 + 異常緊急度 |
+| `chat` | 時間帯別の `day / late / night` | 欲求圧 |
+
+`loop/trigger` の手動起動は `MODE=observe` で `loop.sh` を呼びます。したがって手動観察はまず `observe` から入ります。
+
