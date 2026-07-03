@@ -2172,7 +2172,7 @@ async function getRoomGraphData() {
         return window.roomGraphDataPromise;
     }
 
-    window.roomGraphDataPromise = fetch('/api/body/rooms')
+    window.roomGraphDataPromise = fetch(`${base}/api/body/rooms`)
         .then(r => {
             if (!r.ok) {
                 throw new Error(`room graph request failed: ${r.status}`);

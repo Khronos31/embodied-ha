@@ -336,9 +336,10 @@ EHA_LOG_DIR="$EHA_LOG_DIR" python3 "$SCRIPT_DIR/init_fts.py" \
     && echo "[run] fts_index 初期化完了" \
     || echo "[run] fts_index 初期化失敗（スキップ。起動は続ける）"
 
-# --- Web UI サーバー（認証前でも起動。セットアップ画面を出すため）---
-echo "[run] web server 起動（ポート ${INGRESS_PORT:-8099}）"
-python3 "$SCRIPT_DIR/web/server.py" &
+# --- daemon.py 起動（web / loop / chat watchdog を管理）---
+echo "[run] daemon.py 起動（web + watchdog）"
+python3 "$SCRIPT_DIR/daemon.py" &
+DAEMON_PID=$!
 
 # --- 認証確認（未設定なら Web UI セットアップ完了まで待機）---
 _auth_ok() {
@@ -364,6 +365,5 @@ if ! _auth_ok; then
     echo "[run] 認証完了。daemon 起動..."
 fi
 
-# --- daemon.py 起動（loop / chat ループを管理）---
-echo "[run] daemon.py 起動"
-exec python3 "$SCRIPT_DIR/daemon.py"
+# --- daemon.py を監視し続ける ---
+wait "$DAEMON_PID"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
 import importlib.util
+import datetime as _dt
 import json, os, subprocess, time, queue, threading, tempfile, sys, re
 import urllib.request
 import urllib.error
@@ -460,6 +461,91 @@ def append_jsonl(path: str, row: dict) -> None:
 
 
 
+def _clean_text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _room_graph_path() -> str:
+    return _clean_text(os.environ.get("EHA_ROOM_GRAPH_FILE")) or os.path.join(DATA_DIR, "floorplan_room_graph_draft.json")
+
+
+def _load_room_graph() -> dict:
+    try:
+        with open(_room_graph_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _room_entries_from_graph(graph: dict) -> dict:
+    value = graph.get("rooms")
+    if not isinstance(value, dict):
+        return {}
+    rooms = {}
+    for room_id, room_info in value.items():
+        room_key = _clean_text(room_id)
+        if not room_key or not isinstance(room_info, dict):
+            continue
+        item = dict(room_info)
+        item.setdefault("display_name", room_key)
+        rooms[room_key] = item
+    return rooms
+
+
+def _room_entries_from_preferences(prefs: dict) -> dict:
+    rooms = {}
+    explicit = prefs.get("rooms")
+    if isinstance(explicit, dict):
+        for room_id, room_info in explicit.items():
+            room_key = _clean_text(room_id)
+            if not room_key:
+                continue
+            item = dict(room_info) if isinstance(room_info, dict) else {}
+            item.setdefault("display_name", room_key)
+            rooms.setdefault(room_key, item)
+    elif isinstance(explicit, list):
+        for item in explicit:
+            if not isinstance(item, dict):
+                continue
+            room_key = _clean_text(item.get("room") or item.get("id") or item.get("name"))
+            if not room_key:
+                continue
+            room_item = dict(item)
+            room_item.setdefault("display_name", room_key)
+            rooms.setdefault(room_key, room_item)
+
+    for key in ("cameras", "audio_sources", "speakers", "entities", "projection_targets"):
+        value = prefs.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            room_key = _clean_text(item.get("room"))
+            if not room_key or room_key in rooms:
+                continue
+            rooms[room_key] = {"display_name": room_key}
+    return rooms
+
+
+def get_body_rooms() -> dict:
+    graph = _load_room_graph()
+    rooms = _room_entries_from_graph(graph)
+    prefs = _load_json_object(PREFS_FILE)
+    for room_id, room_info in _room_entries_from_preferences(prefs).items():
+        rooms.setdefault(room_id, room_info)
+    ordered_rooms = {room_id: rooms[room_id] for room_id in sorted(rooms)}
+    return {
+        "rooms": ordered_rooms,
+        "edges": graph.get("edges") if isinstance(graph.get("edges"), list) else [],
+        "aliases_pending": graph.get("aliases_pending") if isinstance(graph.get("aliases_pending"), dict) else {},
+        "assumptions": graph.get("assumptions") if isinstance(graph.get("assumptions"), list) else [],
+        "questions_for_user": graph.get("questions_for_user") if isinstance(graph.get("questions_for_user"), list) else [],
+        "room_graph_file": _room_graph_path(),
+    }
+
+
 def _load_json_object(path: str) -> dict:
     try:
         with open(path, encoding="utf-8") as f:
@@ -554,29 +640,44 @@ def get_chat_messages(limit: int = 300) -> list:
 
 def get_soliloquy_messages(limit: int = 300) -> list:
     """observations.jsonl + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
-    obs = [
-        {"timestamp": d.get("timestamp", ""), "source": "loop",
-         "private": d.get("private", ""), "emotion": d.get("emotion", ""),
-         "topic": d.get("topic")}
-        for d in read_jsonl(OBS_LOG)
-        if d.get("private")
-    ]
-    cht = [
-        {"timestamp": d.get("timestamp", ""), "source": "chat",
-         "private": d.get("private", ""), "emotion": d.get("emotion", ""),
-         "topic": d.get("topic")}
-        for d in read_jsonl(CHAT_LOG)
-        if d.get("private")
-    ]
-    exp = [
-        {"timestamp": d.get("timestamp", ""), "source": "explore",
-         "private": d.get("private", ""), "emotion": d.get("emotion", ""),
-         "mode": d.get("mode", ""), "topic": d.get("topic")}
-        for d in read_jsonl(EXP_LOG)
-        if d.get("private")
-    ]
-    merged = sorted(obs + exp + cht, key=lambda d: d.get("timestamp", ""))
-    return merged[-limit:]
+
+    def _entry(row: dict, source: str, *, include_mode: bool = False):
+        timestamp = row.get("timestamp", "")
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            return None
+        try:
+            _dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except Exception:
+            return None
+        item = {
+            "timestamp": timestamp,
+            "source": source,
+            "private": row.get("private", ""),
+            "emotion": row.get("emotion", ""),
+            "topic": row.get("topic"),
+        }
+        if include_mode:
+            item["mode"] = row.get("mode", "")
+        return item
+
+    messages = []
+    for row in read_jsonl(OBS_LOG):
+        if row.get("private"):
+            item = _entry(row, "loop")
+            if item is not None:
+                messages.append(item)
+    for row in read_jsonl(EXP_LOG):
+        if row.get("private"):
+            item = _entry(row, "explore", include_mode=True)
+            if item is not None:
+                messages.append(item)
+    for row in read_jsonl(CHAT_LOG):
+        if row.get("private"):
+            item = _entry(row, "chat")
+            if item is not None:
+                messages.append(item)
+    messages.sort(key=lambda d: d["timestamp"])
+    return messages[-limit:]
 
 
 # --- メッセージ送信 ---
@@ -1103,6 +1204,11 @@ class Handler(BaseHTTPRequestHandler):
             limit = int(qs.get("limit", ["300"])[0])
             msgs = get_chat_messages(limit) if room == "chat" else get_soliloquy_messages(limit)
             self.send_json(msgs)
+        elif path == "/api/body/rooms":
+            try:
+                self.send_json(get_body_rooms())
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
         elif path == "/api/status":
             with _agent_status_lock:
                 self.send_json(dict(_agent_status))

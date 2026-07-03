@@ -24,6 +24,7 @@ _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
 CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")
 LOOP_SH = os.path.join(_SCRIPT_DIR, "loop.sh")
 AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")
+WEB_SERVER = os.path.join(_SCRIPT_DIR, "web", "server.py")
 HA_URL = os.environ["HA_URL"]
 LOOP_INTERVAL = 1800   # 自律ループ(loop.sh)の定期実行間隔（秒）= 30分
 SENSOR_COOLDOWN = 300     # センサートリガーのクールダウン（秒）= 5分
@@ -47,8 +48,11 @@ _chat_lock = threading.Lock()
 _loop_lock = threading.Lock()
 _desires_lock = threading.Lock()
 _body_lock = threading.Lock()
+_runtime_lock = threading.Lock()
+_runtime_started = threading.Event()
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
+_CLAUDE_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
 
 
 def load_enabled_audio_sources() -> list[dict]:
@@ -65,6 +69,15 @@ def load_enabled_audio_sources() -> list[dict]:
     if not isinstance(sources, list):
         return []
     return [item for item in sources if isinstance(item, dict) and item.get("stt_enabled") is True]
+
+
+def auth_ready() -> bool:
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    for fname in (".credentials.json", "credentials.json"):
+        if os.path.exists(os.path.join(_CLAUDE_CONFIG_DIR, fname)):
+            return True
+    return False
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -492,6 +505,66 @@ def audio_daemon_watchdog():
         time.sleep(60)
 
 
+def web_server_watchdog():
+    env = {**os.environ, "PATH": ENV_PATH}
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(["python3", WEB_SERVER], env=env)
+            print("[daemon] web server started", flush=True)
+            rc = proc.wait()
+            print(f"[daemon] web server exited with code {rc}; restarting in 60s", flush=True)
+        except Exception as e:
+            print(f"[daemon] web server watchdog error: {e}", flush=True)
+        finally:
+            if proc and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+        time.sleep(60)
+
+
+def start_runtime_threads():
+    if _runtime_started.is_set():
+        return
+    with _runtime_lock:
+        if _runtime_started.is_set():
+            return
+        if MQTT_HOST:
+            threading.Thread(
+                target=mqtt_listen,
+                args=("embodied_ha/chat/set", on_chat_trigger, "mqtt-chat"),
+                daemon=True,
+            ).start()
+            threading.Thread(
+                target=mqtt_listen,
+                args=("embodied_ha/loop/trigger", on_loop_trigger, "mqtt-loop"),
+                daemon=True,
+            ).start()
+            print(f"[daemon] MQTT I/O started ({MQTT_HOST}:{MQTT_PORT})", flush=True)
+        else:
+            print("[daemon] 警告: MQTT_HOST 未設定。チャット/観察トリガーを受信できません"
+                  "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
+        threading.Thread(target=loop_scheduler, daemon=True).start()
+        if load_enabled_audio_sources():
+            threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
+            print("[daemon] audio daemon watchdog enabled", flush=True)
+        print("[daemon] started (I/O + loop-sched)", flush=True)
+        _runtime_started.set()
+
+
+def boot_runtime_when_ready():
+    while not auth_ready():
+        time.sleep(5)
+    print("[daemon] Claude認証を検出。runtime を開始します", flush=True)
+    start_runtime_threads()
+
+
 # --- 多重起動ガード（flock）---
 # threading.Lock は全部プロセスローカルなので、daemon.py が複数走ると
 # 同じエンティティを各々ポーリングして二重観察・二重トリガーになる（2026-06-22に4重起動を踏んだ）。
@@ -504,27 +577,14 @@ except OSError:
     print("[daemon] 既に別のdaemonが稼働中。起動を中止します。", flush=True)
     raise SystemExit(1)
 
-# --- I/O スレッド: MQTT で chat/observe トリガーを購読 ---
-# config.yaml の services: mqtt:need で MQTT は必須。未設定時は受信できない旨を明示。
-if MQTT_HOST:
-    threading.Thread(
-        target=mqtt_listen,
-        args=("embodied_ha/chat/set", on_chat_trigger, "mqtt-chat"),
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=mqtt_listen,
-        args=("embodied_ha/loop/trigger", on_loop_trigger, "mqtt-loop"),
-        daemon=True,
-    ).start()
-    print(f"[daemon] MQTT I/O started ({MQTT_HOST}:{MQTT_PORT})", flush=True)
+# --- Web UI / runtime 起動 ---
+threading.Thread(target=web_server_watchdog, daemon=True).start()
+print("[daemon] web server watchdog enabled", flush=True)
+if auth_ready():
+    start_runtime_threads()
 else:
-    print("[daemon] 警告: MQTT_HOST 未設定。チャット/観察トリガーを受信できません"
-          "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
-threading.Thread(target=loop_scheduler, daemon=True).start()
-if load_enabled_audio_sources():
-    threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
-    print("[daemon] audio daemon watchdog enabled", flush=True)
+    print("[daemon] Claude 未認証。Web UI でセットアップ後に runtime を開始します", flush=True)
+    threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
 # 保守パイプラインの生存確認（サイレント停止の早期検知）
 try:
     marker = os.path.join(_LOG_DIR, ".last_daybook")
@@ -539,8 +599,6 @@ try:
                 print(f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）", flush=True)
 except Exception:
     pass
-print("[daemon] started (I/O + loop-sched)", flush=True)
-
 # メインスレッドを生かし続ける
 while True:
     time.sleep(60)
