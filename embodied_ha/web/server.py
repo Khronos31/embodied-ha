@@ -469,6 +469,24 @@ def _load_json_object(path: str) -> dict:
         return {}
 
 
+def _load_prefs_for_update(path: str) -> tuple[dict, bool]:
+    """RMW用のprefsロード。戻り値は (prefs, ok)。
+
+    ファイル不在 -> ({}, True) で新規作成を許容する。
+    存在するがパース不能、またはdictでない -> ({}, False) で書き込みを止める。
+    """
+    if not os.path.exists(path):
+        return {}, True
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data, True
+        return {}, False
+    except Exception:
+        return {}, False
+
+
 def _load_game_enabled_map() -> dict[str, bool]:
     prefs = _load_json_object(PREFS_FILE)
     games = prefs.get("games", {})
@@ -537,27 +555,27 @@ def get_chat_messages(limit: int = 300) -> list:
 def get_soliloquy_messages(limit: int = 300) -> list:
     """observations.jsonl + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
     obs = [
-        {"timestamp": d["timestamp"], "source": "loop",
+        {"timestamp": d.get("timestamp", ""), "source": "loop",
          "private": d.get("private", ""), "emotion": d.get("emotion", ""),
          "topic": d.get("topic")}
         for d in read_jsonl(OBS_LOG)
         if d.get("private")
     ]
     cht = [
-        {"timestamp": d["timestamp"], "source": "chat",
+        {"timestamp": d.get("timestamp", ""), "source": "chat",
          "private": d.get("private", ""), "emotion": d.get("emotion", ""),
          "topic": d.get("topic")}
         for d in read_jsonl(CHAT_LOG)
         if d.get("private")
     ]
     exp = [
-        {"timestamp": d["timestamp"], "source": "explore",
+        {"timestamp": d.get("timestamp", ""), "source": "explore",
          "private": d.get("private", ""), "emotion": d.get("emotion", ""),
          "mode": d.get("mode", ""), "topic": d.get("topic")}
         for d in read_jsonl(EXP_LOG)
         if d.get("private")
     ]
-    merged = sorted(obs + exp + cht, key=lambda d: d["timestamp"])
+    merged = sorted(obs + exp + cht, key=lambda d: d.get("timestamp", ""))
     return merged[-limit:]
 
 
@@ -1477,7 +1495,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(enabled, bool):
                     self.send_json({"error": "enabled must be boolean"}, 400)
                     return
-                prefs = _load_json_object(PREFS_FILE)
+                prefs, ok = _load_prefs_for_update(PREFS_FILE)
+                if not ok:
+                    self.send_json({"error": "preferences.json が読み込めないため設定変更を中止しました（ファイル破損の可能性）"}, 500)
+                    return
                 games = prefs.get("games")
                 if not isinstance(games, dict):
                     games = {}
@@ -1503,7 +1524,10 @@ class Handler(BaseHTTPRequestHandler):
                 import shutil
                 if os.path.exists(CHIVE_DIR):
                     shutil.rmtree(CHIVE_DIR)
-                prefs = _load_json_object(PREFS_FILE)
+                prefs, ok = _load_prefs_for_update(PREFS_FILE)
+                if not ok:
+                    self.send_json({"error": "preferences.json が読み込めないため設定変更を中止しました（ファイル破損の可能性）"}, 500)
+                    return
                 prefs.setdefault("games", {}).setdefault("plugins", {})["wordvec_race"] = False
                 atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
                 self.send_json({"ok": True})
