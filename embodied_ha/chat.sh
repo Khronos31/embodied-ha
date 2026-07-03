@@ -764,16 +764,22 @@ PYEOF
 # voice: スマートスピーカー的扱い。speak ツールが返答を担い、テキスト記録は不要。
 # chat: reply フィールドをチャットルームに表示する。
 if [ "${CHAT_SOURCE:-chat}" != "voice" ]; then
-REPLY="$REPLY" USER_MSG="$USER_MSG" python3 -c "
+REPLY="$REPLY" USER_MSG="$USER_MSG" CHAT_SOURCE="${CHAT_SOURCE:-chat}" TIMESTAMP="$TIMESTAMP" CHAT_LOG="$CHAT_LOG" PARSED_FILE="$PARSED_FILE" python3 -c "
 import json, os
-d = json.load(open('$PARSED_FILE', encoding='utf-8'))
-reply = d.get('reply','') or os.environ.get('REPLY','')
+parsed_file = os.environ['PARSED_FILE']
+chat_log = os.environ['CHAT_LOG']
+reply = os.environ.get('REPLY', '')
+user_msg = os.environ.get('USER_MSG', '')
+timestamp = os.environ.get('TIMESTAMP', '')
+chat_source = os.environ.get('CHAT_SOURCE', 'chat')
+
+d = json.load(open(parsed_file, encoding='utf-8'))
+reply = d.get('reply','') or reply
 private = d.get('private','') or ''
-user_msg = os.environ.get('USER_MSG','')
-rec = {'timestamp':'$TIMESTAMP','source':'${CHAT_SOURCE:-chat}','user':user_msg,'claude':reply}
+rec = {'timestamp': timestamp, 'source': chat_source, 'user': user_msg, 'claude': reply}
 if private:
     rec['private'] = private
-with open('$CHAT_LOG', 'a', encoding='utf-8') as f:
+with open(chat_log, 'a', encoding='utf-8') as f:
     f.write(json.dumps(rec, ensure_ascii=False) + '\n')
 "
 fi

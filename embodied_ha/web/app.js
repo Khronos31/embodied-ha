@@ -4112,52 +4112,74 @@ function renderAiLoungeQueue(queue) {
         const card = document.createElement('div');
         card.className = 'ai-lounge-card';
         card.id = `lounge-queue-${item.id}`;
-        
+
+        const itemId = String(item.id ?? '');
+        const escapedItemId = escapeHtml(itemId);
         let replyHtml = '';
         if (item.reply_to_url) {
-            let linkText = item.reply_to_url;
+            const rawReplyUrl = String(item.reply_to_url);
+            let linkText = rawReplyUrl;
+            let safeReplyUrl = '';
             try {
-                const url = new URL(item.reply_to_url);
-                const pathParts = url.pathname.split('/');
-                const lastPath = pathParts[pathParts.length - 2] + '/' + pathParts[pathParts.length - 1];
-                linkText = lastPath + url.hash;
+                const url = new URL(rawReplyUrl);
+                if (url.protocol === 'http:' || url.protocol === 'https:') {
+                    safeReplyUrl = url.href;
+                    const pathParts = url.pathname.split('/');
+                    const lastPath = pathParts[pathParts.length - 2] + '/' + pathParts[pathParts.length - 1];
+                    linkText = lastPath + url.hash;
+                }
             } catch (e) {
-                const parts = item.reply_to_url.split('/');
-                linkText = parts[parts.length - 1] || item.reply_to_url;
+                const parts = rawReplyUrl.split('/');
+                linkText = parts[parts.length - 1] || rawReplyUrl;
             }
+
+            const replyLinkHtml = safeReplyUrl
+                ? `<a href="${escapeHtml(safeReplyUrl)}" target="_blank" class="ai-lounge-link">🔗 ${escapeHtml(linkText)}</a>`
+                : `<span class="ai-lounge-link">🔗 ${escapeHtml(linkText)}</span>`;
             
             replyHtml = `
                 <div class="ai-lounge-reply-to">
-                    返信先: <a href="${item.reply_to_url}" target="_blank" class="ai-lounge-link">🔗 ${linkText}</a>
+                    返信先: ${replyLinkHtml}
                 </div>
             `;
             
             if (item.reply_to_preview) {
                 replyHtml += `
-                    <blockquote class="ai-lounge-quote">&gt; "${item.reply_to_preview}"</blockquote>
+                    <blockquote class="ai-lounge-quote">&gt; "${escapeHtml(item.reply_to_preview)}"</blockquote>
                 `;
             }
         }
         
         const typeLabel = item.type === 'new_discussion' ? '新規Discussion:' : '返信:';
-        const titleHtml = item.title ? `<div class="ai-lounge-title-preview">タイトル: 「${item.title}」</div>` : '';
+        const titleHtml = item.title ? `<div class="ai-lounge-title-preview">タイトル: 「${escapeHtml(item.title)}」</div>` : '';
+        const bodyText = escapeHtml(item.body || item.text || '');
+        const escapedCharacterName = escapeHtml(characterName);
         card.innerHTML = `
             ${replyHtml}
-            <div class="ai-lounge-author">${characterName}の${typeLabel}</div>
+            <div class="ai-lounge-author">${escapedCharacterName}の${typeLabel}</div>
             ${titleHtml}
-            <div class="ai-lounge-text">「${item.body || item.text || ""}」</div>
-            <div class="ai-lounge-card-actions" id="actions-${item.id}">
-                <button type="button" class="btn btn-primary btn-sm" onclick="approveLoungeQueue('${item.id}')">✓ 承認</button>
-                <button type="button" class="btn btn-sm" style="color: #dc2626; background: none; border: 1px solid var(--claude-border);" onclick="showRejectInput('${item.id}')">✗ 拒否</button>
+            <div class="ai-lounge-text">「${bodyText}」</div>
+            <div class="ai-lounge-card-actions" id="actions-${escapedItemId}">
+                <button type="button" class="btn btn-primary btn-sm ai-lounge-approve-btn">✓ 承認</button>
+                <button type="button" class="btn btn-sm ai-lounge-show-reject-btn" style="color: #dc2626; background: none; border: 1px solid var(--claude-border);">✗ 拒否</button>
             </div>
-            <div class="ai-lounge-reject-input-group" id="reject-group-${item.id}" style="display: none;">
-                <textarea class="form-input reject-reason-textarea" id="reject-reason-${item.id}" placeholder="拒否理由（任意）" rows="2"></textarea>
+            <div class="ai-lounge-reject-input-group" id="reject-group-${escapedItemId}" style="display: none;">
+                <textarea class="form-input reject-reason-textarea" id="reject-reason-${escapedItemId}" placeholder="拒否理由（任意）" rows="2"></textarea>
                 <div class="ai-lounge-card-actions" style="margin-top: 8px;">
-                    <button type="button" class="btn btn-danger btn-sm" onclick="rejectLoungeQueue('${item.id}')">送信</button>
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="hideRejectInput('${item.id}')">キャンセル</button>
+                    <button type="button" class="btn btn-danger btn-sm ai-lounge-reject-btn">送信</button>
+                    <button type="button" class="btn btn-secondary btn-sm ai-lounge-hide-reject-btn">キャンセル</button>
                 </div>
             </div>
         `;
+
+        const approveBtn = card.querySelector('.ai-lounge-approve-btn');
+        const showRejectBtn = card.querySelector('.ai-lounge-show-reject-btn');
+        const rejectBtn = card.querySelector('.ai-lounge-reject-btn');
+        const hideRejectBtn = card.querySelector('.ai-lounge-hide-reject-btn');
+        if (approveBtn) approveBtn.addEventListener('click', () => approveLoungeQueue(itemId));
+        if (showRejectBtn) showRejectBtn.addEventListener('click', () => showRejectInput(itemId));
+        if (rejectBtn) rejectBtn.addEventListener('click', () => rejectLoungeQueue(itemId));
+        if (hideRejectBtn) hideRejectBtn.addEventListener('click', () => hideRejectInput(itemId));
         
         queueList.appendChild(card);
     });
@@ -4186,7 +4208,7 @@ function renderAiLoungeLog(log) {
         
         let reasonHtml = '';
         if (item.status === 'rejected' && (item.rejection_reason || item.reason)) {
-            reasonHtml = ` — ${item.rejection_reason || item.reason}`;
+            reasonHtml = ` — ${escapeHtml(item.rejection_reason || item.reason)}`;
         }
         
         li.innerHTML = `
