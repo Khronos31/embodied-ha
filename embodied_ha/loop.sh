@@ -42,6 +42,8 @@ ANOMALY_URGENCY="${ANOMALY_URGENCY:-}"
 _ANOMALY_CONTEXT_FILE="$TMP_DIR/anomaly_context.txt"
 _ANOMALY_URGENCY_FILE="$TMP_DIR/anomaly_urgency.txt"
 _ANOMALY_STATE_FILE_PATH="${EHA_ANOMALY_STATE_FILE:-$LOG_DIR/anomaly_state.json}"
+# 前回実行のスナップショット再利用を防ぐため、検出前に一時ファイルを消す。
+rm -f "$_ANOMALY_CONTEXT_FILE" "$_ANOMALY_URGENCY_FILE" 2>/dev/null || true
 if [ -n "$PRESENCE_SENSORS" ] || [ -n "$OPEN_LOOPS_JSON" ]; then
   (
     SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" ANOMALY_STATE_FILE="$_ANOMALY_STATE_FILE_PATH" SENSORS_DATA="$PRESENCE_SENSORS" OPEN_LOOPS_JSON="$OPEN_LOOPS_JSON" TRIGGER_REASON="${TRIGGER_REASON:-定期実行}" ANOMALY_CONTEXT_FILE="$_ANOMALY_CONTEXT_FILE" ANOMALY_URGENCY_FILE="$_ANOMALY_URGENCY_FILE" python3 << 'PYEOF'
@@ -67,10 +69,12 @@ with open(os.environ["ANOMALY_URGENCY_FILE"], "w", encoding="utf-8") as f:
     f.write(str(ast.compute_explore_urgency(updated)))
 PYEOF
   ) || true
-  if [ -z "$ANOMALY_CONTEXT" ] && [ -f "$_ANOMALY_CONTEXT_FILE" ]; then
+  # 今回のループで新規検出した結果を優先する（daemon から渡された env は、
+  # 検出が走らなかった場合のフォールバック）。空でなければ上書き。
+  if [ -s "$_ANOMALY_CONTEXT_FILE" ]; then
     ANOMALY_CONTEXT=$(cat "$_ANOMALY_CONTEXT_FILE")
   fi
-  if [ -z "$ANOMALY_URGENCY" ] && [ -f "$_ANOMALY_URGENCY_FILE" ]; then
+  if [ -s "$_ANOMALY_URGENCY_FILE" ]; then
     ANOMALY_URGENCY=$(cat "$_ANOMALY_URGENCY_FILE")
   fi
 fi
