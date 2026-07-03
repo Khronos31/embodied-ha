@@ -12,6 +12,7 @@ env: なし
 from __future__ import annotations
 
 import ipaddress
+import os
 import json
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -135,7 +136,7 @@ def http_post(args: dict[str, Any]):
 
 
 def main() -> None:
-    serve("http-mcp", "1.0", {
+    tools = {
         "http_get": {
             "spec": {
                 "name": "http_get",
@@ -155,7 +156,11 @@ def main() -> None:
             },
             "handler": http_get,
         },
-        "http_post": {
+    }
+    # http_post は用途廃止のためデフォルト無効。将来必要になったら EHA_HTTP_ALLOW_POST=1 で復活。
+    # 注意: allowedTools では MCP ツールを絞れないため、ここで tools/list に載せないことが唯一の封鎖手段。
+    if os.environ.get("EHA_HTTP_ALLOW_POST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        tools["http_post"] = {
             "spec": {
                 "name": "http_post",
                 "description": "ローカルネットワーク上の HTTP POST を実行する。body は JSON 文字列として送り、Content-Type は未指定なら application/json を付与する。",
@@ -174,8 +179,8 @@ def main() -> None:
                 },
             },
             "handler": http_post,
-        },
-    })
+        }
+    serve("http-mcp", "1.0", tools)
 
 
 if __name__ == "__main__":

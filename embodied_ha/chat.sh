@@ -533,7 +533,7 @@ if _sd:
             "mcp__audio__listen,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
             "mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,"
             "mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,"
-            "mcp__http__http_get,mcp__http__http_post,"
+            "mcp__http__http_get,"
             "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
             "mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,"
             "mcp__game__game_wiki6_start,mcp__game__game_wiki6_getlinks,mcp__game__game_wiki6_solve,"

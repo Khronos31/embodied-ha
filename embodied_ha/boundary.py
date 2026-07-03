@@ -19,6 +19,10 @@ import counterfactual_state as cs
 
 
 QUIET_HOURS = range(1, 7)
+# 自律家電操作(intent=action)を許可するループモード。
+# loop.sh 側で hacontrol サーバーを接続するモードと必ず一致させること（現在は explore のみ）。
+# ここと loop.sh の「MODE == explore」ゲートが唯一の対応点。将来モードを増やす場合は両方直す。
+ACTION_MODES = {"explore"}
 
 
 def _compact(text: Any) -> str:
@@ -125,7 +129,7 @@ def check(
     if intent not in {"speak", "action"}:
         return {"allowed": False, "reason": f"未知のintent: {intent or '（空）'}", "fallback": None}
 
-    if intent == "action" and mode != "loop":
+    if intent == "action" and mode not in ACTION_MODES:
         return {"allowed": False, "reason": f"{mode or 'unknown'}モードでは家電操作しない", "fallback": None}
 
     if mode == "chat" and intent == "speak":
@@ -265,7 +269,7 @@ def _load_prefs(path: str) -> dict[str, Any]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default="loop")
+    parser.add_argument("--mode", default="explore")
     parser.add_argument("--intent", default="speak")
     parser.add_argument("--hour", default="12")
     parser.add_argument("--autonomous", default="0")

@@ -69,7 +69,7 @@ class BoundaryTests(unittest.TestCase):
 
     def test_action_is_blocked_when_not_autonomous(self):
         result = boundary.check(
-            mode="watch",
+            mode="explore",
             intent="action",
             hour=10,
             is_autonomous=False,
