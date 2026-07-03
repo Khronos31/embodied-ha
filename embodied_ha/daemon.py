@@ -137,18 +137,15 @@ def _anomaly_urgency(state=None):
         state = _load_anomaly_state()
     return anomaly_state.compute_explore_urgency(state)
 def _load_desire_catalog():
-    with _desires_lock:
-        return desire_state.load_desires(DESIRES_FILE)
+    return desire_state.load_desires(DESIRES_FILE)
 
 
 def _load_desire_state(catalog=None):
-    with _desires_lock:
-        return desire_state.load_state(DESIRE_STATE_FILE, catalog=catalog)
+    return desire_state.load_state(DESIRE_STATE_FILE, catalog=catalog)
 
 
 def _save_desire_state(state, catalog=None):
-    with _desires_lock:
-        desire_state.save_state(DESIRE_STATE_FILE, state, catalog=catalog)
+    desire_state.save_state(DESIRE_STATE_FILE, state, catalog=catalog)
 
 
 def tick_body_state(loop_name, trigger_reason="", active_desires=None):
@@ -198,26 +195,27 @@ def tick_desires(body_state_snapshot=None, loop_name="loop", trigger_reason="", 
     """欲求状態を更新し、必要なら loop に流すプロンプト一覧を返す。"""
     try:
         catalog = _load_desire_catalog()
-        state = _load_desire_state(catalog)
-        updated = desire_state.decay_tick(
-            state,
-            catalog=catalog,
-            body_state=body_state_snapshot,
-            loop_name=loop_name,
-            trigger_reason=trigger_reason,
-        )
-        pressure = desire_state.compute_pressure(updated, catalog=catalog, body_state=body_state_snapshot)
-        active_names = desire_state.active_desire_names(updated, catalog)
-        active_prompts = desire_state.active_desire_prompts(updated, catalog) if emit_active else []
-
-        if emit_active and active_names:
-            updated = desire_state.consume_active_desires(
-                updated,
-                active_names,
+        with _desires_lock:
+            state = _load_desire_state(catalog)
+            updated = desire_state.decay_tick(
+                state,
                 catalog=catalog,
+                body_state=body_state_snapshot,
+                loop_name=loop_name,
+                trigger_reason=trigger_reason,
             )
+            pressure = desire_state.compute_pressure(updated, catalog=catalog, body_state=body_state_snapshot)
+            active_names = desire_state.active_desire_names(updated, catalog)
+            active_prompts = desire_state.active_desire_prompts(updated, catalog) if emit_active else []
 
-        _save_desire_state(updated, catalog)
+            if emit_active and active_names:
+                updated = desire_state.consume_active_desires(
+                    updated,
+                    active_names,
+                    catalog=catalog,
+                )
+
+            _save_desire_state(updated, catalog)
         if active_prompts:
             print(f"[daemon] desires fired: {len(active_prompts)} pressure={pressure:.3f}", flush=True)
         print(

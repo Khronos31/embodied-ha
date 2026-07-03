@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from typing import Any, Mapping
 
 from state_utils import clamp as _clamp
@@ -375,7 +376,7 @@ def load_state(path: str) -> dict[str, Any]:
 
 def save_state(path: str, state: Mapping[str, Any]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(normalize_state(dict(state)), f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import subprocess
+import uuid
 from typing import Any, Mapping
 
 from mcp_lib import log, serve, text
@@ -33,6 +34,7 @@ import memory_state as ms
 import counterfactual_state as cs
 import scene_state as scenes
 import sociality_state as ss
+from state_utils import file_lock
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -90,7 +92,7 @@ def _read_text(path: str) -> str:
 
 def _write_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
@@ -105,14 +107,15 @@ def _ensure_memory_seed() -> str:
 
 def _append_memory_line(line: str) -> bool:
     path = _memory_path()
-    content = _ensure_memory_seed()
-    if line in content:
-        return False
-    if not content.endswith("\n"):
-        content += "\n"
-    content += f"{line}\n"
-    _write_text(path, content)
-    return True
+    with file_lock(path):
+        content = _ensure_memory_seed()
+        if line in content:
+            return False
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"{line}\n"
+        _write_text(path, content)
+        return True
 
 
 def _merge_payload(args: Mapping[str, Any], key: str) -> dict[str, Any]:

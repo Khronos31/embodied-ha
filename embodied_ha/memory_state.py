@@ -18,6 +18,7 @@ from typing import Any, Iterable, Mapping
 from state_utils import clamp as _clamp
 from state_utils import clean as _clean
 from state_utils import now as _now
+from state_utils import file_lock
 from state_utils import parse_ts as _parse_ts
 from state_utils import read_json as _read_json
 from state_utils import write_json as _write_json
@@ -566,7 +567,9 @@ def save_daybook(log_dir: str | None, daybook: Mapping[str, Any]) -> dict[str, A
     normalized = normalize_daybook(dict(daybook))
     if not normalized["date"]:
         normalized["date"] = _clean(daybook.get("date")) or _now().date().isoformat()
-    _write_json(daybook_path(log_dir, normalized["date"]), normalized)
+    path = daybook_path(log_dir, normalized["date"])
+    with file_lock(path):
+        _write_json(path, normalized)
     return normalized
 
 
@@ -595,10 +598,6 @@ def build_daybook(
     if not date:
         date = _now().date().isoformat()
 
-    existing_path = daybook_path(log_dir, date)
-    if os.path.exists(existing_path) and not overwrite:
-        return load_daybook(log_dir, date)
-
     normalized_episodes = []
     if episodes is not None:
         normalized_episodes = [normalize_episode(ep) for ep in episodes]
@@ -624,7 +623,14 @@ def build_daybook(
         "raw_entry_count": max(0, int(len(episode_id_list) if raw_entry_count is None else raw_entry_count)),
         "episode_count": len(episode_id_list),
     })
-    return save_daybook(log_dir, daybook)
+
+    existing_path = daybook_path(log_dir, date)
+    with file_lock(existing_path):
+        if os.path.exists(existing_path) and not overwrite:
+            data = _load_json(existing_path, default_daybook(date))
+            return normalize_daybook(data, fallback_date=date)
+        _write_json(existing_path, daybook)
+    return daybook
 
 
 
@@ -656,25 +662,27 @@ def update_working_memory(log_dir: str | None, episode_id: str, reason: str) -> 
         return
     now_text = _now().isoformat(timespec="seconds")
     reason = _clean(reason) or "activated"
-    items = _load_working_memory(log_dir)
-    found = False
-    for item in items:
-        item["activation"] = round(_clamp(item.get("activation"), 0.0, 1.0, 0.0) * 0.82, 3)
-        if item["episode_id"] == episode_id:
-            item["activation"] = round(_clamp(item["activation"] + 0.45, 0.0, 1.0, 1.0), 3)
-            item["reason"] = reason
-            item["last_activated_at"] = now_text
-            found = True
-    if not found:
-        items.append({
-            "episode_id": episode_id,
-            "reason": reason,
-            "activation": 0.75,
-            "last_activated_at": now_text,
-        })
-    items = [item for item in items if _clamp(item.get("activation"), 0.0, 1.0, 0.0) >= 0.05]
-    items.sort(key=lambda item: (_clamp(item.get("activation"), 0.0, 1.0, 0.0), _clean(item.get("last_activated_at"))), reverse=True)
-    _write_json(working_memory_path(log_dir), items[:WORKING_MEMORY_MAX])
+    path = working_memory_path(log_dir)
+    with file_lock(path):
+        items = _load_working_memory(log_dir)
+        found = False
+        for item in items:
+            item["activation"] = round(_clamp(item.get("activation"), 0.0, 1.0, 0.0) * 0.82, 3)
+            if item["episode_id"] == episode_id:
+                item["activation"] = round(_clamp(item["activation"] + 0.45, 0.0, 1.0, 1.0), 3)
+                item["reason"] = reason
+                item["last_activated_at"] = now_text
+                found = True
+        if not found:
+            items.append({
+                "episode_id": episode_id,
+                "reason": reason,
+                "activation": 0.75,
+                "last_activated_at": now_text,
+            })
+        items = [item for item in items if _clamp(item.get("activation"), 0.0, 1.0, 0.0) >= 0.05]
+        items.sort(key=lambda item: (_clamp(item.get("activation"), 0.0, 1.0, 0.0), _clean(item.get("last_activated_at"))), reverse=True)
+        _write_json(path, items[:WORKING_MEMORY_MAX])
 
 
 def get_working_memory(log_dir: str | None = None) -> list[dict[str, Any]]:
@@ -799,9 +807,16 @@ def save_causal_chain(log_dir: str | None, causal_chain: Mapping[str, Any], *, o
     chain_id = normalized["id"] or _make_causal_chain_id(normalized["cause_episode_id"], normalized["effect_episode_id"])
     normalized["id"] = chain_id
     path = causal_chain_path(log_dir, chain_id)
-    if os.path.exists(path) and not overwrite:
-        return load_causal_chain(log_dir, chain_id)
-    _write_json(path, normalized)
+    with file_lock(path):
+        if os.path.exists(path) and not overwrite:
+            data = _load_json(path, default_causal_chain(chain_id, normalized["cause_episode_id"], normalized["effect_episode_id"]))
+            return normalize_causal_chain(
+                data,
+                fallback_id=chain_id,
+                fallback_cause_episode_id=normalized["cause_episode_id"],
+                fallback_effect_episode_id=normalized["effect_episode_id"],
+            )
+        _write_json(path, normalized)
     return normalized
 
 

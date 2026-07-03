@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 from state_utils import clean as _clean
 from state_utils import coerce_float as _coerce_float
+from state_utils import file_lock
 from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
 from state_utils import write_json as _write_json
@@ -192,7 +193,9 @@ def load_shared_focus(log_dir: str | None = None) -> dict[str, Any]:
 
 def save_shared_focus(log_dir: str | None, focus: Mapping[str, Any]) -> dict[str, Any]:
     normalized = normalize_shared_focus(dict(focus))
-    _write_json(_path(log_dir, SHARED_FOCUS_FILE), normalized)
+    path = _path(log_dir, SHARED_FOCUS_FILE)
+    with file_lock(path):
+        _write_json(path, normalized)
     return normalized
 
 
@@ -202,7 +205,9 @@ def load_person_models(log_dir: str | None = None) -> dict[str, Any]:
 
 
 def save_person_models(log_dir: str | None, models: Mapping[str, Any]) -> None:
-    _write_json(_path(log_dir, PERSON_MODELS_FILE), dict(models))
+    path = _path(log_dir, PERSON_MODELS_FILE)
+    with file_lock(path):
+        _write_json(path, dict(models))
 
 
 def get_person_model(log_dir: str | None, person: str) -> dict[str, Any]:
@@ -241,54 +246,82 @@ def save_person_model(log_dir: str | None, person: str, model: Mapping[str, Any]
     normalized = normalize_person_model(person_name, dict(model), shared_focus=load_shared_focus(log_dir))
     if not person_name:
         return normalized
-    models = load_person_models(log_dir)
-    models[person_name] = normalized
-    save_person_models(log_dir, models)
+    path = _path(log_dir, PERSON_MODELS_FILE)
+    with file_lock(path):
+        models = _load_json(path, {})
+        if not isinstance(models, dict):
+            models = {}
+        models[person_name] = normalized
+        _write_json(path, models)
     return normalized
 
 
 def merge_person_model(log_dir: str | None, person: str, patch: Mapping[str, Any]) -> dict[str, Any]:
     person_name = _clean(person)
-    current = get_person_model(log_dir, person_name)
-    merged = normalize_person_model(person_name, current, shared_focus=current.get("shared_focus"))
+    if not person_name:
+        return default_person_model("", load_shared_focus(log_dir))
 
-    boundary_patch = patch.get("boundary")
-    if isinstance(boundary_patch, dict):
+    shared_focus_snapshot = load_shared_focus(log_dir)
+    path = _path(log_dir, PERSON_MODELS_FILE)
+    focus_to_save: dict[str, Any] | None = None
+
+    with file_lock(path):
+        models = _load_json(path, {})
+        if not isinstance(models, dict):
+            models = {}
+        current = normalize_person_model(person_name, models.get(person_name), shared_focus=shared_focus_snapshot)
+        merged = normalize_person_model(person_name, current, shared_focus=current.get("shared_focus"))
+
+        boundary_patch = patch.get("boundary")
+        if isinstance(boundary_patch, dict):
+            for section in ("quiet_window", "consent", "turn_taking"):
+                if section in boundary_patch:
+                    merged["boundary"][section] = _merge_mapping(
+                        dict(merged["boundary"][section]),
+                        boundary_patch.get(section) or {},
+                    )
+
         for section in ("quiet_window", "consent", "turn_taking"):
-            if section in boundary_patch:
+            if section in patch and isinstance(patch.get(section), dict):
                 merged["boundary"][section] = _merge_mapping(
                     dict(merged["boundary"][section]),
-                    boundary_patch.get(section) or {},
+                    patch.get(section) or {},
                 )
 
-    for section in ("quiet_window", "consent", "turn_taking"):
-        if section in patch and isinstance(patch.get(section), dict):
-            merged["boundary"][section] = _merge_mapping(
-                dict(merged["boundary"][section]),
-                patch.get(section) or {},
-            )
+        if "shared_focus" in patch and patch.get("shared_focus") is not None:
+            focus_patch = patch.get("shared_focus")
+            if isinstance(focus_patch, dict):
+                merged["shared_focus"] = _merge_mapping(dict(merged["shared_focus"]), focus_patch)
+                merged["shared_focus"]["updated_at"] = (
+                    _clean(merged["shared_focus"].get("updated_at"))
+                    or _now().isoformat(timespec="seconds")
+                )
+                if _truthy(patch.get("sync_shared_focus", True)):
+                    focus_to_save = dict(merged["shared_focus"])
+            else:
+                topic = _clean(focus_patch)
+                if topic:
+                    merged["shared_focus"] = {
+                        "topic": topic,
+                        "context": "",
+                        "object_id": "",
+                        "scene_source": "",
+                        "last_seen_at": "",
+                        "updated_at": _now().isoformat(timespec="seconds"),
+                    }
+                    focus_to_save = dict(merged["shared_focus"])
 
-    if "shared_focus" in patch and patch.get("shared_focus") is not None:
-        focus_patch = patch.get("shared_focus")
-        if isinstance(focus_patch, dict):
-            merged["shared_focus"] = _merge_mapping(dict(merged["shared_focus"]), focus_patch)
-            merged["shared_focus"]["updated_at"] = (
-                _clean(merged["shared_focus"].get("updated_at"))
-                or _now().isoformat(timespec="seconds")
-            )
-            if _truthy(patch.get("sync_shared_focus", True)):
-                save_shared_focus(log_dir, merged["shared_focus"])
+        if "updated_at" in patch:
+            merged["updated_at"] = _clean(patch.get("updated_at")) or _now().isoformat(timespec="seconds")
         else:
-            synced = _apply_shared_focus_patch(log_dir, focus_patch)
-            if synced is not None:
-                merged["shared_focus"] = synced
+            merged["updated_at"] = _now().isoformat(timespec="seconds")
 
-    if "updated_at" in patch:
-        merged["updated_at"] = _clean(patch.get("updated_at")) or _now().isoformat(timespec="seconds")
-    else:
-        merged["updated_at"] = _now().isoformat(timespec="seconds")
+        models[person_name] = merged
+        _write_json(path, models)
 
-    return save_person_model(log_dir, person_name, merged)
+    if focus_to_save is not None:
+        save_shared_focus(log_dir, focus_to_save)
+    return merged
 
 
 def record_boundary(log_dir: str | None, person: str, patch: Mapping[str, Any]) -> dict[str, Any]:
@@ -308,8 +341,7 @@ def record_consent(
     if not person_name:
         return default_person_model("", load_shared_focus(log_dir))
 
-    current = get_person_model(log_dir, person_name)
-    consent = dict(current["boundary"]["consent"])
+    consent = dict(get_person_model(log_dir, person_name)["boundary"]["consent"])
     granted_bool = _truthy(granted)
     kind_norm = _compact(kind)
 
@@ -333,9 +365,14 @@ def record_consent(
     if note:
         consent["note"] = _clean(note)
 
-    current["boundary"]["consent"] = consent
-    current["updated_at"] = consent["updated_at"]
-    return save_person_model(log_dir, person_name, current)
+    return merge_person_model(
+        log_dir,
+        person_name,
+        {
+            "boundary": {"consent": consent},
+            "updated_at": consent["updated_at"],
+        },
+    )
 
 
 def _focus_matches(metadata_blob: str, focus: Mapping[str, Any]) -> bool:
@@ -658,8 +695,7 @@ def update_turn_taking(
     if not person_name:
         return default_person_model("", load_shared_focus(log_dir))
 
-    current = get_person_model(log_dir, person_name)
-    turn = dict(current["boundary"]["turn_taking"])
+    turn = dict(get_person_model(log_dir, person_name)["boundary"]["turn_taking"])
     speaker_norm = _compact(speaker)
     kind_norm = _compact(kind)
     text_clean = _clean(text)
@@ -688,19 +724,15 @@ def update_turn_taking(
     else:
         turn["state"] = turn.get("state") or "open"
 
-    current["boundary"]["turn_taking"] = turn
-    current["updated_at"] = now
+    patch: dict[str, Any] = {
+        "boundary": {"turn_taking": turn},
+        "updated_at": now,
+    }
     if shared_focus is not None:
+        patch["shared_focus"] = shared_focus
         if isinstance(shared_focus, dict):
-            current["shared_focus"] = normalize_shared_focus(shared_focus)
-            if not current["shared_focus"]["updated_at"]:
-                current["shared_focus"]["updated_at"] = now
-            save_shared_focus(log_dir, current["shared_focus"])
-        else:
-            focused = _apply_shared_focus_patch(log_dir, shared_focus)
-            if focused is not None:
-                current["shared_focus"] = focused
-    return save_person_model(log_dir, person_name, current)
+            patch["sync_shared_focus"] = True
+    return merge_person_model(log_dir, person_name, patch)
 
 
 def get_turn_taking_state(log_dir: str | None, person: str) -> dict[str, Any]:

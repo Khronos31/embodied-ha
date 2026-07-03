@@ -8,7 +8,9 @@ modules can import them under their existing private names.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
+import fcntl
 import json
 import os
 import uuid
@@ -73,6 +75,24 @@ def write_json(path: str, data: Any) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def file_lock(path: str):
+    """Exclusive lock for ``path`` using ``path.lock``.
+
+    Keep the lock only for a single RMW cycle. Do not nest file locks or mix
+    them with other file locks in the same critical section.
+    """
+
+    lock_path = f"{path}.lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
 def read_json(path: str, default: Any = None) -> Any:

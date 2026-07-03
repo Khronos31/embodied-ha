@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import uuid
 from typing import Any, Mapping
 
 from state_utils import clamp as _clamp
@@ -217,7 +218,7 @@ def load_catalog(path: str) -> dict[str, dict[str, Any]]:
 
 def save_catalog(path: str, catalog: Mapping[str, Any]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(normalize_desires(dict(catalog)), f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
@@ -309,7 +310,7 @@ def load_state(path: str, catalog: Mapping[str, Any] | None = None) -> dict[str,
 
 def save_state(path: str, state: Mapping[str, Any], catalog: Mapping[str, Any] | None = None) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(normalize_state(dict(state), catalog), f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)

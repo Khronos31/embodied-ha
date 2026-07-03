@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from typing import Any
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +19,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import memory_state as ms  # noqa: E402
 import counterfactual_state as cs  # noqa: E402
+from state_utils import file_lock  # noqa: E402
 
 
 def _clean(value: Any) -> str:
@@ -41,7 +43,7 @@ def _read_text(path: str) -> str:
 
 def _write_text(path: str, content: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
@@ -57,14 +59,15 @@ def _ensure_memory_seed(path: str) -> str:
 
 
 def _append_memory_brief(path: str, brief: str) -> bool:
-    content = _ensure_memory_seed(path)
-    if brief in content:
-        return False
-    if not content.endswith("\n"):
-        content += "\n"
-    content += f"{brief}\n"
-    _write_text(path, content)
-    return True
+    with file_lock(path):
+        content = _ensure_memory_seed(path)
+        if brief in content:
+            return False
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"{brief}\n"
+        _write_text(path, content)
+        return True
 
 
 def _write_marker(path: str, value: str) -> None:

@@ -8,6 +8,7 @@ import os
 from typing import Any, Mapping
 
 from state_utils import clean as _clean
+from state_utils import file_lock
 from state_utils import now as _now
 from state_utils import read_json as _read_json
 from state_utils import write_json as _write_json
@@ -89,11 +90,13 @@ def ingest_scene_parse(
         "people": _normalize_item_list(people, fallback_prefix="person"),
         "changes": [_clean(item) for item in changes if _clean(item)] if isinstance(changes, list) else [],
     }
-    state = _load_state(log_dir)
-    scenes = state.get("scenes", [])
-    scenes.append(scene)
-    state["scenes"] = scenes[-_MAX_SCENES:]
-    _save_state(log_dir, state)
+    path = scene_state_path(log_dir)
+    with file_lock(path):
+        state = _load_state(log_dir)
+        scenes = state.get("scenes", [])
+        scenes.append(scene)
+        state["scenes"] = scenes[-_MAX_SCENES:]
+        _save_state(log_dir, state)
     return scene_id
 
 
