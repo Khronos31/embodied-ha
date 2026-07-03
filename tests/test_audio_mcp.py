@@ -101,6 +101,21 @@ class AudioMcpTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs)}, clear=False):
                 self.assertEqual(self.audio_mcp.default_listen_source(), "rtsp://example.local/tv")
 
+    def test_listen_defaults_to_current_room_audio_source_for_physical_body(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            body = Path(tmpdir) / "body_location.json"
+            prefs.write_text(
+                json.dumps({"audio_sources": [
+                    {"source": "rtsp://example.local/living", "room": "living", "label": "Living"},
+                    {"source": "rtsp://example.local/study", "room": "study", "label": "Study"},
+                ]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            body.write_text(json.dumps({"current_entity": "", "current_room": "study"}, ensure_ascii=False), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs), "EHA_BODY_LOCATION_FILE": str(body)}, clear=False):
+                self.assertEqual(self.audio_mcp.default_listen_source(), "rtsp://example.local/study")
+
     def test_listen_returns_ffmpeg_missing_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "active_listen_log.jsonl"

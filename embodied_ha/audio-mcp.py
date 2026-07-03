@@ -16,6 +16,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import audio_stt
+from audio_source_resolve import DEFAULT_SOURCE, resolve_audio_source
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import log, serve, text
@@ -28,7 +29,6 @@ DEFAULT_SOURCES = [
     {"source": "rtsp://localhost:8558/mic_only",   "label": "Google TV"},
     {"source": "alsa://default",                    "label": "スタディマイク"},
 ]
-DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
 DEFAULT_ACTIVE_LISTEN_LOG_FILE = "/data/embodied-ha/log/active_listen_log.jsonl"
@@ -211,41 +211,11 @@ def _load_body_location() -> dict:
 
 
 def auto_listen_source(body_loc: dict, source_configs: list[dict]) -> str:
-    """body_location を参照して listen のデフォルト source を自動解決する。
-    電脳体で TCP ノードに侵入中: 同 IP の mic ソースを自動マッチ。
-    電脳体で HA エンティティに侵入中 or 物理体: 現在の部屋のソース（TCP 優先）。
-    """
-    current_entity = clean(body_loc.get("current_entity"))
-    projected_room = clean(body_loc.get("projected_room"))
-    current_room = clean(body_loc.get("current_room"))
-
-    if projected_room and current_entity:
-        if current_entity.startswith("tcp://"):
-            entity_host = current_entity[6:].split(":")[0]
-            for cfg in source_configs:
-                s = clean(cfg.get("source", ""))
-                if s.startswith("tcp://") and s[6:].split(":")[0] == entity_host:
-                    return s
-        # HA エンティティ or TCP マッチなし: 侵入先の部屋のソース（TCP 優先）
-        room_cfgs = [c for c in source_configs if isinstance(c, dict) and c.get("room") == projected_room]
-        tcp_cfgs = [c for c in room_cfgs if clean(c.get("source", "")).startswith("tcp://")]
-        best = tcp_cfgs[0] if tcp_cfgs else (room_cfgs[0] if room_cfgs else None)
-        if best:
-            return clean(best["source"])
-
-    # 物理体モード: current_room のソース（TCP 優先）
-    if current_room:
-        room_cfgs = [c for c in source_configs if isinstance(c, dict) and c.get("room") == current_room]
-        tcp_cfgs = [c for c in room_cfgs if clean(c.get("source", "")).startswith("tcp://")]
-        best = tcp_cfgs[0] if tcp_cfgs else (room_cfgs[0] if room_cfgs else None)
-        if best:
-            return clean(best["source"])
-
-    return clean(source_configs[0]["source"]) if source_configs else DEFAULT_SOURCE
+    return resolve_audio_source(body_loc, source_configs, default_source=DEFAULT_SOURCE)
 
 
 def default_listen_source() -> str:
-    return normalize_source_uri(auto_listen_source(_load_body_location(), load_audio_source_configs()))
+    return normalize_source_uri(resolve_audio_source(_load_body_location(), load_audio_source_configs(), default_source=DEFAULT_SOURCE))
 
 
 def load_stt_provider() -> str | None:
@@ -950,7 +920,7 @@ def listen(args: dict):
     _body_loc = _load_body_location()
     _src_cfgs = load_audio_source_configs()
     requested_source = clean(args.get("source"))
-    source = normalize_source_uri(requested_source) if requested_source else normalize_source_uri(auto_listen_source(_body_loc, _src_cfgs))
+    source = normalize_source_uri(requested_source) if requested_source else normalize_source_uri(resolve_audio_source(_body_loc, _src_cfgs, default_source=DEFAULT_SOURCE))
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)

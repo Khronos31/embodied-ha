@@ -16,6 +16,7 @@ import time
 import uuid
 
 import audio_stt
+from audio_source_resolve import resolve_audio_source
 from state_utils import clean, now
 
 DEFAULT_AUDIO_SESSION_BIN = "agy"
@@ -342,16 +343,26 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
     for entry in audio_sources:
         if not isinstance(entry, dict):
             continue
-        entry_entity = (entry.get("entity") or "").strip()
-        entry_source = (entry.get("source") or "").strip()
+        entry_entity = clean(entry.get("entity"))
+        entry_source = clean(entry.get("source"))
         if entry_entity and entry_entity == current_entity:
             matched_source = entry_source
             matched_label = clean(entry.get("label"))
             break
-        if not entry_entity and entry_source and entry_source == current_entity:
+        if entry_source and entry_source == current_entity:
             matched_source = entry_source
             matched_label = clean(entry.get("label"))
             break
+
+    if not matched_source:
+        matched_source = resolve_audio_source(bl, audio_sources)
+        if matched_source:
+            for entry in audio_sources:
+                if not isinstance(entry, dict):
+                    continue
+                if clean(entry.get("source")) == matched_source:
+                    matched_label = clean(entry.get("label")) or matched_source
+                    break
 
     if not matched_source:
         entry = {
@@ -360,7 +371,7 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
             'mode': mode,
             'queued_listen': True,
             'prepared_for_session': False,
-            'error': f"current_entity '{current_entity}' は audio_sources に登録されていません。VoiceS3R ノードに enter_cyberspace してから concentrate_hearing を呼んでください。",
+            'error': f"現在の部屋に対応する audio_sources が見つかりませんでした（current_entity='{current_entity}', current_room='{clean(bl.get('current_room'))}'）。preferences の audio_sources に room を設定してください。",
             'request_id': request.get('request_id'),
         }
         append_active_listen_result(entry)
