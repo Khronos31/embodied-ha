@@ -31,6 +31,8 @@ class AudioDaemonTests(unittest.TestCase):
         self.audio_daemon._non_speech_cache.clear()
         self.audio_daemon._TRANSCRIPT_DEDUP_CACHE.clear()
         self.audio_daemon._WAKE_ARMED.clear()
+        self.audio_daemon._TV_STATES_CACHE["expires_at"] = 0.0
+        self.audio_daemon._TV_STATES_CACHE["states"] = None
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
@@ -629,6 +631,78 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(event["mean_db"], -49.7)
         self.assertIsNone(event["confidence"])
         self.assertIsNone(event["raw_audio_ref"])
+
+    def test_tv_state_cache_marks_playing_for_matching_room(self):
+        def fake_ha_json(path):
+            if path == "/states/media_player.living_tv":
+                return {"state": "off"}
+            if path == "/states/media_player.study_tv":
+                return {"state": "playing"}
+            return None
+
+        prefs = {
+            "tv_state_entities": {
+                "living": "media_player.living_tv",
+                "study": "media_player.study_tv",
+            }
+        }
+        with mock.patch.object(self.audio_daemon, "ha_api_json", side_effect=fake_ha_json):
+            self.audio_daemon.refresh_tv_states_cache(prefs)
+
+        study_config = self.audio_daemon.AudioSourceConfig("alsa://study", "Study", 24, False, room="study")
+        event = self.audio_daemon.build_auditory_event(
+            study_config,
+            "声が聞こえた",
+            1.0,
+            "stt.home_assistant_cloud",
+            "ja-JP",
+            "2026-07-05T10:00:00",
+        )
+        self.assertEqual(event["tv_states"], {"living": "off", "study": "playing"})
+        self.assertTrue(event["tv_playing"])
+
+        living_config = self.audio_daemon.AudioSourceConfig("alsa://living", "Living", 24, False, room="living_room")
+        event = self.audio_daemon.build_auditory_event(
+            living_config,
+            "声が聞こえた",
+            1.0,
+            "stt.home_assistant_cloud",
+            "ja-JP",
+            "2026-07-05T10:00:01",
+        )
+        self.assertFalse(event["tv_playing"])
+
+    def test_tv_state_cache_failure_is_best_effort(self):
+        with mock.patch.object(self.audio_daemon, "ha_api_json", return_value=None):
+            self.audio_daemon.refresh_tv_states_cache()
+
+        config = self.audio_daemon.AudioSourceConfig("alsa://study", "Study", 24, False, room="study")
+        event = self.audio_daemon.build_auditory_event(
+            config,
+            "声が聞こえた",
+            1.0,
+            "stt.home_assistant_cloud",
+            "ja-JP",
+            "2026-07-05T10:00:00",
+        )
+        self.assertIsNone(event["tv_states"])
+        self.assertFalse(event["tv_playing"])
+
+    def test_build_auditory_event_does_not_fetch_tv_states_synchronously(self):
+        config = self.audio_daemon.AudioSourceConfig("alsa://study", "Study", 24, False, room="study")
+        with mock.patch.object(self.audio_daemon, "ha_api_json") as ha_api_json:
+            event = self.audio_daemon.build_auditory_event(
+                config,
+                "声が聞こえた",
+                1.0,
+                "stt.home_assistant_cloud",
+                "ja-JP",
+                "2026-07-05T10:00:00",
+            )
+
+        ha_api_json.assert_not_called()
+        self.assertIsNone(event["tv_states"])
+        self.assertFalse(event["tv_playing"])
 
     def test_process_segment_skips_fallback_noise_before_stt(self):
         config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")

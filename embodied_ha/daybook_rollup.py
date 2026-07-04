@@ -386,6 +386,7 @@ def main() -> None:
     else:
         start_d = yesterday_d
     if start_d > yesterday_d:
+        _write_marker(daybook_marker, today)
         raise SystemExit(0)
 
     max_days = 7
@@ -457,7 +458,7 @@ def main() -> None:
             else:
                 print(f"[DAYBOOK] 既存の structured daybook を再利用: {target_day}")
             _maybe_consolidate(log_dir, target_day, target_day)
-            new_marker = target_day
+            new_marker = today if target_day == yesterday_d.isoformat() else target_day
         else:
             draft = _summarize_with_claude(target_day, entries_by_day[target_day])
             if not draft:
@@ -465,7 +466,7 @@ def main() -> None:
             normalized = _normalize_draft(target_day, entries_by_day[target_day], draft)
             _write_daybook(log_dir, memory_file, target_day, normalized, entries_by_day[target_day])
             _maybe_consolidate(log_dir, target_day, target_day)
-            new_marker = target_day
+            new_marker = today if target_day == yesterday_d.isoformat() else target_day
 
     if new_marker:
         _write_marker(daybook_marker, new_marker)

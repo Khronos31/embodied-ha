@@ -66,6 +66,9 @@ _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
+_TV_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": None}
+_TV_STATES_LOCK = threading.Lock()
+_TV_STATES_THREAD_STARTED = False
 _non_speech_cache: dict[tuple, float] = {}
 TRANSCRIPT_DEDUP_WINDOW_SECONDS = 5.0
 _TRANSCRIPT_DEDUP_CACHE: dict[str, tuple[str, float]] = {}
@@ -77,10 +80,17 @@ _WAKE_ARM_GEN = itertools.count(1)
 MOTION_CLASSES = {"motion", "occupancy", "presence"}
 MOTION_ACTIVE_STATES = {"on", "open", "occupied", "detected", "home"}
 HA_STATES_CACHE_TTL_SECONDS = 15.0
+TV_STATES_CACHE_TTL_SECONDS = 45.0
 RECENT_MOTION_WINDOW_MINUTES = 20
 RECENT_VISUAL_WINDOW_MINUTES = 60
 RELATED_HA_STATE_LIMIT = 5
 LOCATION_PRIOR_ROOM_LIMIT = 4
+DEFAULT_TV_STATE_ENTITIES = {
+    "living": "media_player.rihinkunoterehi_2",
+    "study": "media_player.google_tv_streamer",
+}
+TV_PLAYING_STATES = {"on", "playing"}
+TV_OFF_STATES = {"off", "idle", "unavailable", "standby", ""}
 
 
 
@@ -578,6 +588,93 @@ def load_preferences() -> dict:
         log(f"failed to load preferences: {exc}")
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def tv_state_entities(preferences: dict | None = None) -> dict[str, str]:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    entities = dict(DEFAULT_TV_STATE_ENTITIES)
+    raw = prefs.get("tv_state_entities")
+    if isinstance(raw, dict):
+        for key in DEFAULT_TV_STATE_ENTITIES:
+            value = clean(raw.get(key))
+            if value:
+                entities[key] = value
+    return entities
+
+
+def _fetch_tv_states(preferences: dict | None = None) -> dict[str, str | None] | None:
+    states: dict[str, str | None] = {}
+    success_count = 0
+    for key, entity_id in tv_state_entities(preferences).items():
+        payload = ha_api_json(f"/states/{quote(entity_id, safe='')}")
+        if isinstance(payload, dict):
+            states[key] = clean(payload.get("state")) or None
+            success_count += 1
+        else:
+            states[key] = None
+    return states if success_count else None
+
+
+def refresh_tv_states_cache(preferences: dict | None = None) -> dict[str, str | None] | None:
+    try:
+        states = _fetch_tv_states(preferences)
+    except Exception as exc:
+        log(f"tv state refresh failed: {exc}")
+        states = None
+    with _TV_STATES_LOCK:
+        _TV_STATES_CACHE["states"] = dict(states) if isinstance(states, dict) else None
+        _TV_STATES_CACHE["expires_at"] = time.monotonic() + TV_STATES_CACHE_TTL_SECONDS
+    return dict(states) if isinstance(states, dict) else None
+
+
+def cached_tv_states() -> dict[str, str | None] | None:
+    with _TV_STATES_LOCK:
+        try:
+            expires_at = float(_TV_STATES_CACHE.get("expires_at") or 0.0)
+        except Exception:
+            expires_at = 0.0
+        states = _TV_STATES_CACHE.get("states")
+        if expires_at <= time.monotonic() or not isinstance(states, dict):
+            return None
+        return {key: clean(value) or None for key, value in states.items()}
+
+
+def tv_key_for_source_room(source_room: str | None) -> str:
+    room = clean(source_room).lower()
+    return "study" if "study" in room else "living"
+
+
+def tv_playing_for_room(source_room: str | None, tv_states: dict[str, str | None] | None) -> bool:
+    if not isinstance(tv_states, dict):
+        return False
+    state = clean(tv_states.get(tv_key_for_source_room(source_room))).lower()
+    if state in TV_PLAYING_STATES:
+        return True
+    if state in TV_OFF_STATES:
+        return False
+    return False
+
+
+def _tv_states_refresh_loop(preferences: dict) -> None:
+    while True:
+        refresh_tv_states_cache(preferences)
+        time.sleep(TV_STATES_CACHE_TTL_SECONDS)
+
+
+def start_tv_states_refresh_thread(preferences: dict | None = None) -> None:
+    global _TV_STATES_THREAD_STARTED
+    with _TV_STATES_LOCK:
+        if _TV_STATES_THREAD_STARTED:
+            return
+        _TV_STATES_THREAD_STARTED = True
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    thread = threading.Thread(
+        target=_tv_states_refresh_loop,
+        args=(prefs,),
+        daemon=True,
+        name="audio:tv-state-cache",
+    )
+    thread.start()
 
 
 def background_hearing_enabled(item: dict) -> bool:
@@ -1658,6 +1755,8 @@ def build_auditory_event(
         note=config.note,
         modality="auditory",
     )
+    tv_states = cached_tv_states()
+    source_room = clean(sensory.get("source_room")) or clean(config.room)
     event = {
         "timestamp": timestamp,
         "modality": "auditory",
@@ -1670,6 +1769,8 @@ def build_auditory_event(
         "stt_language": language,
         "confidence": None,
         "raw_audio_ref": None,
+        "tv_states": tv_states,
+        "tv_playing": tv_playing_for_room(source_room, tv_states),
         **sensory,
     }
     if isinstance(diagnostics, dict):
@@ -2231,6 +2332,7 @@ def main() -> int:
         return 0
 
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
+    start_tv_states_refresh_thread(preferences)
 
     threads = []
     for config in sources:
