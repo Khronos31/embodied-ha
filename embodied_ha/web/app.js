@@ -17,6 +17,7 @@ let prefsData = null;
 let entityList = {};
 let characterData = "";
 let extraContextData = "";
+let homePolicyData = "";
 let characterName = 'Claude';
 let antigravitySetupState = null;
 let antigravitySetupSource = null;
@@ -1106,12 +1107,16 @@ async function fetchSettings() {
             return;
         }
 
-        const [prefsRes, charRes, entitiesRes, extraContextRes] = await Promise.all([
+        const [prefsRes, charRes, entitiesRes, extraContextRes, homePolicyRes] = await Promise.all([
             fetch(`${base}/api/preferences`),
             fetch(`${base}/api/character`),
             fetch(`${base}/api/ha-entities?domain=media_player,tts,camera,binary_sensor,sensor,input_boolean,device_tracker,person,light,switch,climate,cover,fan,script`),
             fetch(`${base}/api/extra-context`).catch(err => {
                 console.warn("Failed to fetch extra context:", err);
+                return null;
+            }),
+            fetch(`${base}/api/home-policy`).catch(err => {
+                console.warn("Failed to fetch home policy:", err);
                 return null;
             })
         ]);
@@ -1126,6 +1131,10 @@ async function fetchSettings() {
         extraContextData = "";
         if (extraContextRes && extraContextRes.ok) {
             extraContextData = await extraContextRes.text();
+        }
+        homePolicyData = "";
+        if (homePolicyRes && homePolicyRes.ok) {
+            homePolicyData = await homePolicyRes.text();
         }
         const rawEntities = await entitiesRes.json();
 
@@ -1670,6 +1679,8 @@ async function renderSettingsForm() {
     const nameEl = document.getElementById('setting-character-name');
     if (nameEl) nameEl.value = prefsData.character_name || 'Claude';
     document.getElementById('setting-character').value = characterData || "";
+    const homePolicyEl = document.getElementById('setting-home-policy');
+    if (homePolicyEl) homePolicyEl.value = homePolicyData || "";
     const extraContextEl = document.getElementById('setting-extra-context');
     if (extraContextEl) {
         extraContextEl.value = extraContextData || "";
@@ -3543,6 +3554,7 @@ async function handleSaveSettings(e) {
 
     const newCharacter = document.getElementById('setting-character').value;
     const newExtraContext = document.getElementById('setting-extra-context')?.value || "";
+    const newHomePolicy = document.getElementById('setting-home-policy')?.value || "";
     
     if (!newCharacter || newCharacter.trim().length < 10) {
         highlightAndFocusValidationError(document.getElementById('setting-character'), 'キャラクター定義が短すぎるか空です。保存を中断しました。');
@@ -3613,7 +3625,7 @@ async function handleSaveSettings(e) {
     }
 
     try {
-        const [prefsRes, charRes, extraContextRes] = await Promise.all([
+        const [prefsRes, charRes, extraContextRes, homePolicyRes] = await Promise.all([
             fetch(`${base}/api/preferences`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -3628,14 +3640,20 @@ async function handleSaveSettings(e) {
                 method: 'POST',
                 headers: { 'Content-Type': 'text/plain; charset=utf-8' },
                 body: newExtraContext
+            }),
+            fetch(`${base}/api/home-policy`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                body: newHomePolicy
             })
         ]);
 
-        if (!prefsRes.ok || !charRes.ok || !extraContextRes.ok) {
+        if (!prefsRes.ok || !charRes.ok || !extraContextRes.ok || !homePolicyRes.ok) {
             const pErr = !prefsRes.ok ? (await prefsRes.json()).error : null;
             const cErr = !charRes.ok ? (await charRes.json()).error : null;
             const eErr = !extraContextRes.ok ? (await extraContextRes.json()).error : null;
-            throw new Error(pErr || cErr || eErr || "保存に失敗しました。");
+            const hErr = !homePolicyRes.ok ? (await homePolicyRes.json()).error : null;
+            throw new Error(pErr || cErr || eErr || hErr || "保存に失敗しました。");
         }
 
         prefsData = nextPrefs;
