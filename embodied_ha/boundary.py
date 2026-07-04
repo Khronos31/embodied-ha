@@ -210,13 +210,37 @@ def _load_policies(*paths: str) -> list[str]:
     return []
 
 
-def _presence_from_sensors_text(text: str, resident_label: str) -> dict[str, bool]:
+def _presence_entity_label(prefs: dict[str, Any]) -> str | None:
+    pres = prefs.get("presence")
+    entity = pres.get("entity") if isinstance(pres, dict) else None
+    if not entity:
+        return None
+
+    sensors = prefs.get("sensors")
+    groups = sensors.get("groups", []) if isinstance(sensors, dict) else []
+    for group in groups:
+        items = group.get("items", []) if isinstance(group, dict) else []
+        for item in items:
+            if isinstance(item, dict) and item.get("entity") == entity:
+                label = item.get("label")
+                return label if isinstance(label, str) and label.strip() else None
+    return None
+
+
+def _presence_from_sensors_text(
+    text: str,
+    resident_label: str,
+    extra_labels: list[str] | None = None,
+) -> dict[str, bool]:
     if not text:
         return {}
 
     labels = [resident_label]
     if resident_label:
         labels.append(f"{resident_label}さん")
+    for label in extra_labels or []:
+        if label:
+            labels.append(label)
 
     for raw_line in str(text).splitlines():
         line = raw_line.strip()
@@ -246,7 +270,7 @@ def _load_presence(args: argparse.Namespace, prefs: dict[str, Any]) -> dict[str,
         data = _load_json_file(path)
         if isinstance(data, dict):
             direct = data.get("presence")
-            if isinstance(direct, dict) and direct and all(
+            if isinstance(direct, dict) and direct and "entity" not in direct and all(
                 isinstance(v, (bool, int, float, str)) for v in direct.values()
             ):
                 presence = _coerce_presence(direct)
@@ -255,7 +279,12 @@ def _load_presence(args: argparse.Namespace, prefs: dict[str, Any]) -> dict[str,
 
     sensors_text = args.sensors_text or os.environ.get("SENSORS_DATA", "")
     resident_label = os.environ.get("RESIDENT", "resident")
-    presence = _presence_from_sensors_text(sensors_text, resident_label)
+    entity_label = _presence_entity_label(prefs)
+    presence = _presence_from_sensors_text(
+        sensors_text,
+        resident_label,
+        extra_labels=[entity_label] if entity_label else None,
+    )
     if presence:
         return presence
 

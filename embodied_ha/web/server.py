@@ -21,6 +21,7 @@ PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
 CHAT_LOG = os.path.join(LOG_DIR, "chat_log.jsonl")
 OBS_LOG  = os.path.join(LOG_DIR, "observations.jsonl")
+OBS_RECOVERED_LOG = os.path.join(LOG_DIR, "observations_recovered.jsonl")
 EXP_LOG  = os.path.join(LOG_DIR, "explore.jsonl")
 NON_SPEECH_AUDIO_EVENTS_LOG = os.environ.get(
     "EHA_NON_SPEECH_AUDIO_EVENTS_FILE",
@@ -640,7 +641,7 @@ def get_chat_messages(limit: int = 300) -> list:
 
 
 def get_soliloquy_messages(limit: int = 300) -> list:
-    """observations.jsonl + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
+    """observations.jsonl + recovered + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
 
     def _entry(row: dict, source: str, *, include_mode: bool = False):
         timestamp = row.get("timestamp", "")
@@ -659,14 +660,25 @@ def get_soliloquy_messages(limit: int = 300) -> list:
         }
         if include_mode:
             item["mode"] = row.get("mode", "")
+        if row.get("recovered"):
+            item["recovered"] = True
+            item["recovered_from"] = row.get("recovered_from")
         return item
 
     messages = []
+    seen_loop_timestamps = set()
     for row in read_jsonl(OBS_LOG):
         if row.get("private"):
             item = _entry(row, "loop")
             if item is not None:
                 messages.append(item)
+                seen_loop_timestamps.add(item["timestamp"])
+    for row in read_jsonl(OBS_RECOVERED_LOG):
+        if row.get("private"):
+            item = _entry(row, "loop_recovered")
+            if item is not None and item["timestamp"] not in seen_loop_timestamps:
+                messages.append(item)
+                seen_loop_timestamps.add(item["timestamp"])
     for row in read_jsonl(EXP_LOG):
         if row.get("private"):
             item = _entry(row, "explore", include_mode=True)
@@ -710,7 +722,8 @@ def send_chat(message: str, source: str = "chat"):
 def file_watcher():
     # chat_log は会話ルームと独り言ルーム（chat の private）の両方に使われるので両方へ通知する。
     watched = [(CHAT_LOG, ["chat", "soliloquy"]),
-               (OBS_LOG, ["soliloquy"]), (EXP_LOG, ["soliloquy"]),
+               (OBS_LOG, ["soliloquy"]), (OBS_RECOVERED_LOG, ["soliloquy"]),
+               (EXP_LOG, ["soliloquy"]),
                (NON_SPEECH_AUDIO_EVENTS_LOG, ["audio"]), (AUDIO_EVENT_TAGS_LOG, ["audio"])]
     mtimes: dict = {}
     while True:

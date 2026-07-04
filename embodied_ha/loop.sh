@@ -463,18 +463,29 @@ PYEOF
   PARSED_FILE="$TMP_DIR/${MODE}_parsed.json"
 fi
 
-printf '%s' "$RESPONSE" | python3 -c "
-import sys, re, json
+printf '%s' "$RESPONSE" | PARSED_FILE="$PARSED_FILE" python3 -c "
+import json, os, re, sys
 text = sys.stdin.read()
 text = re.sub(r'\`\`\`(?:json)?\\s*|\`\`\`', '', text)
-m = re.search(r'\{.*\}', text, re.DOTALL)
-result = {}
-if m:
-    try:
-        result = json.loads(m.group())
-    except Exception:
-        pass
-with open('$PARSED_FILE', 'w', encoding='utf-8') as f:
+
+def extract_last_json_object(value):
+    decoder = json.JSONDecoder()
+    best = None
+    for match in re.finditer(r'\{', value):
+        try:
+            obj, end = decoder.raw_decode(value, match.start())
+        except Exception:
+            continue
+        if isinstance(obj, dict) and (best is None or end > best[0] or (end == best[0] and match.start() > best[1])):
+            best = (end, match.start(), obj)
+    return best[2] if best else None
+
+result = extract_last_json_object(text)
+parse_ok = isinstance(result, dict)
+if not parse_ok:
+    result = {}
+result['_parse_ok'] = parse_ok
+with open(os.environ['PARSED_FILE'], 'w', encoding='utf-8') as f:
     json.dump(result, f, ensure_ascii=False)
 "
 
@@ -495,21 +506,46 @@ except Exception:
     pass
 " 2>/dev/null || true
 
-PRIVATE_JSON='""'; EMOTION=""; SPEAK=""; SPEAK_ROOM=""; TOPIC_JSON='""'
-eval "$(python3 -c "
-import json, shlex
+PRIVATE_JSON='""'; EMOTION=""; SPEAK=""; SPEAK_ROOM=""; TOPIC_JSON='""'; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
+eval "$(PARSED_FILE="$PARSED_FILE" python3 -c "
+import json, os, shlex
 try:
-    d = json.load(open('$PARSED_FILE', encoding='utf-8'))
+    d = json.load(open(os.environ['PARSED_FILE'], encoding='utf-8'))
 except Exception:
     d = {}
+private = d.get('private', '') or ''
+emotion = d.get('emotion', '') or ''
 pairs = {
-    'PRIVATE_JSON': json.dumps(d.get('private', '') or '', ensure_ascii=False),
-    'EMOTION': d.get('emotion', '') or '',
+    'PRIVATE_JSON': json.dumps(private, ensure_ascii=False),
+    'EMOTION': emotion,
     'TOPIC_JSON': json.dumps(d.get('topic', '') or '', ensure_ascii=False),
+    'PARSE_OK': '1' if d.get('_parse_ok') else '0',
+    'INTROSPECTION_EMPTY': '1' if not str(private).strip() and not str(emotion).strip() else '0',
 }
 for k, v in pairs.items():
-    print(f'{k}={shlex.quote(v)}')
+    print(f'{k}={shlex.quote(str(v))}')
 ")"
+
+if [ "$PARSE_OK" != "1" ] || [ "$INTROSPECTION_EMPTY" = "1" ]; then
+  if [ "$PARSE_OK" != "1" ]; then
+    SKIP_REASON="json_parse_failed"
+  else
+    SKIP_REASON="empty_introspection"
+  fi
+  printf '%s' "$RESPONSE" | TIMESTAMP="$TIMESTAMP" MODE="$MODE" REASON="$SKIP_REASON" LOG_DIR="$LOG_DIR" python3 -c "
+import json, os, sys
+row = {
+    'timestamp': os.environ.get('TIMESTAMP', ''),
+    'mode': os.environ.get('MODE', ''),
+    'reason': os.environ.get('REASON', ''),
+    'raw': sys.stdin.read()[:2000],
+}
+path = os.path.join(os.environ.get('LOG_DIR', '.'), 'loop_parse_errors.jsonl')
+os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+with open(path, 'a', encoding='utf-8') as f:
+    f.write(json.dumps(row, ensure_ascii=False) + '\n')
+" || true
+fi
 
 if [ "$MODE" = "observe" ]; then
   SCRIPT_DIR="$SCRIPT_DIR" LOG_DIR="$LOG_DIR" PARSED_FILE="$PARSED_FILE" python3 -c "
@@ -526,9 +562,13 @@ changes = d.get('scene_changes') if isinstance(d.get('scene_changes'), list) els
 if objects or people or changes:
     scene_state.ingest_scene_parse('loop_observe', {}, objects, people, changes, log_dir=os.environ.get('LOG_DIR'))
 " 2>/dev/null || true
-  echo "{\"timestamp\":\"$TIMESTAMP\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON}" >> "$OBSERVATION_LOG"
+  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
+    echo "{\"timestamp\":\"$TIMESTAMP\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON}" >> "$OBSERVATION_LOG"
+  fi
 else
-  echo "{\"timestamp\":\"$TIMESTAMP\",\"mode\":\"$MODE\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON,\"topic\":$TOPIC_JSON}" >> "$EXPLORE_LOG"
+  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
+    echo "{\"timestamp\":\"$TIMESTAMP\",\"mode\":\"$MODE\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON,\"topic\":$TOPIC_JSON}" >> "$EXPLORE_LOG"
+  fi
 fi
 
 PROPOSAL=$(python3 -c "

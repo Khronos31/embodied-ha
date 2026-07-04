@@ -401,27 +401,48 @@ def main() -> None:
         dd += dt.timedelta(days=1)
 
     entries_by_day = {d: [] for d in target_dates}
-    with open(log_file, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            ts = _clean(row.get("timestamp"))
-            day = ts[:10]
-            if day not in entries_by_day:
-                continue
-            entries_by_day[day].append(
-                {
-                    "timestamp": ts,
-                    "emotion": _clean(row.get("emotion")),
-                    "private": _clean(row.get("private")),
-                    "speak": _clean(row.get("speak")),
-                }
-            )
+    seen_entries: set[tuple[str, str]] = set()
+
+    def add_entry(row: dict[str, Any]) -> None:
+        ts = _clean(row.get("timestamp"))
+        day = ts[:10]
+        if day not in entries_by_day:
+            return
+        private = _clean(row.get("private"))
+        key = (ts, private)
+        if key in seen_entries:
+            return
+        seen_entries.add(key)
+        entries_by_day[day].append(
+            {
+                "timestamp": ts,
+                "emotion": _clean(row.get("emotion")),
+                "private": private,
+                "speak": _clean(row.get("speak")),
+            }
+        )
+
+    def read_observation_log(path: str, *, optional: bool = False) -> None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(row, dict):
+                        add_entry(row)
+        except FileNotFoundError:
+            if not optional:
+                raise
+
+    read_observation_log(log_file)
+    recovered_log_file = os.path.join(os.path.dirname(log_file) or log_dir, "observations_recovered.jsonl")
+    if os.path.abspath(recovered_log_file) != os.path.abspath(log_file):
+        read_observation_log(recovered_log_file, optional=True)
 
     target_day = next((d for d in target_dates if entries_by_day.get(d)), None)
     new_marker = None

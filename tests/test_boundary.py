@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 import sys
 
 
@@ -108,6 +110,92 @@ class BoundaryTests(unittest.TestCase):
             )
             policies = boundary._load_policies(str(prefs))
             self.assertEqual(policies, ["深夜は発話しない"])
+
+    def _write_presence_prefs(self, tmpdir: str, include_sensor_label: bool = True) -> Path:
+        prefs = Path(tmpdir) / "preferences.json"
+        data = {"presence": {"entity": "input_boolean.junya_home"}}
+        if include_sensor_label:
+            data["sensors"] = {
+                "groups": [
+                    {
+                        "items": [
+                            {"label": "潤哉", "entity": "input_boolean.junya_home"},
+                        ],
+                    },
+                ],
+            }
+        prefs.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return prefs
+
+    def _action_decision_from_prefs(self, prefs: Path, sensors_text: str, sociality_log_dir: str) -> dict:
+        args = boundary.parse_args(
+            [
+                "--mode",
+                "explore",
+                "--intent",
+                "action",
+                "--hour",
+                "14",
+                "--autonomous",
+                "1",
+                "--prefs-file",
+                str(prefs),
+                "--sensors-text",
+                sensors_text,
+                "--person",
+                "ゆの",
+                "--body-state-json",
+                "{}",
+                "--sociality-log-dir",
+                sociality_log_dir,
+            ]
+        )
+        loaded_prefs = boundary._load_prefs(args.prefs_file)
+        presence = boundary._load_presence(args, loaded_prefs)
+        return boundary.check(
+            mode=args.mode,
+            intent=args.intent,
+            hour=args.hour,
+            is_autonomous=args.autonomous,
+            presence=presence,
+            policies=[],
+            metadata={},
+            person=args.person,
+            body_state={},
+            sociality_log_dir=args.sociality_log_dir,
+        )
+
+    def test_presence_entity_label_allows_action_when_sensor_label_is_home(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = self._write_presence_prefs(tmpdir)
+            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+                result = self._action_decision_from_prefs(
+                    prefs,
+                    "## 在宅状態\n潤哉: on\nまどか: off",
+                    tmpdir,
+                )
+            self.assertTrue(result["allowed"])
+            self.assertEqual(result["reason"], "許可")
+
+    def test_presence_entity_label_blocks_action_when_sensor_label_is_away(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = self._write_presence_prefs(tmpdir)
+            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+                result = self._action_decision_from_prefs(
+                    prefs,
+                    "## 在宅状態\n潤哉: off\nまどか: off",
+                    tmpdir,
+                )
+            self.assertFalse(result["allowed"])
+            self.assertEqual(result["reason"], "不在のため家電操作を抑制")
+
+    def test_presence_entity_pointer_without_live_state_is_not_home(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = self._write_presence_prefs(tmpdir, include_sensor_label=False)
+            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+                result = self._action_decision_from_prefs(prefs, "", tmpdir)
+            self.assertFalse(result["allowed"])
+            self.assertEqual(result["reason"], "不在のため家電操作を抑制")
 
     def test_quiet_window_blocks_spontaneous_speak(self):
         with tempfile.TemporaryDirectory() as tmpdir:
