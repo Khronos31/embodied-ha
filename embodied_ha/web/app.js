@@ -2511,6 +2511,9 @@ function createMicRow(mic = {}) {
     tr.dataset.label = mic.label || '';
     tr.dataset.note = mic.note || '';
     tr.dataset.sttEnabled = mic.stt_enabled ? '1' : '0';
+    tr.dataset.sttRetention = mic.stt_retention_hours !== undefined ? String(mic.stt_retention_hours) : '60';
+    tr.dataset.wakeWordEnabled = mic.wake_word_enabled ? '1' : '0';
+    tr.dataset.backgroundHearingEnabled = mic.background_hearing_enabled !== false ? '1' : '0';
     tr.innerHTML = `
         <td>${esc(mic.room || '')}</td>
         <td>${esc(mic.source || '（未設定）')}</td>
@@ -2560,6 +2563,9 @@ function getMicsFromUI() {
         if (label) edits.label = label;
         if (note) edits.note = note;
         edits.stt_enabled = tr.dataset.sttEnabled === '1';
+        edits.stt_retention_hours = parseInt(tr.dataset.sttRetention || '60', 10);
+        edits.wake_word_enabled = tr.dataset.wakeWordEnabled === '1';
+        edits.background_hearing_enabled = tr.dataset.backgroundHearingEnabled !== '0';
         items.push(cleanRowData(mergeRowData(tr, edits)));
     });
     return items;
@@ -2914,6 +2920,9 @@ function openEditModal(type, tr) {
         const entity = tr.dataset.entity || '';
         const note = tr.dataset.note || '';
         const sttEnabled = tr.dataset.sttEnabled === '1';
+        const sttRetention = tr.dataset.sttRetention || '60';
+        const wakeWordEnabled = tr.dataset.wakeWordEnabled === '1';
+        const backgroundHearingEnabled = tr.dataset.backgroundHearingEnabled !== '0';
 
         bodyEl.innerHTML = `
             <div class="form-group">
@@ -2936,13 +2945,25 @@ function openEditModal(type, tr) {
                 <label class="form-label">メモ (note)</label>
                 <input type="text" class="mic-note-modal form-input" placeholder="メモ (任意)" value="${esc(note)}">
             </div>
-            <div class="checkbox-group" style="margin-top: 12px; margin-bottom: 12px;">
+            <div class="checkbox-group" style="margin-top: 12px; margin-bottom: 8px;">
                 <label class="checkbox-label" style="font-size: 13px;">
                     <input type="checkbox" class="mic-stt-enabled-modal" ${sttEnabled ? 'checked' : ''} onchange="toggleMicSttEnabledModal(this)"> STTを許可 (stt_enabled)
                 </label>
             </div>
+            <div class="checkbox-group" style="margin-bottom: 8px;">
+                <label class="checkbox-label" style="font-size: 13px;">
+                    <input type="checkbox" class="mic-wake-word-modal" ${wakeWordEnabled ? 'checked' : ''}> ウェイクワード検出を有効 (wake_word_enabled)
+                </label>
+            </div>
+            <div class="checkbox-group" style="margin-bottom: 12px;">
+                <label class="checkbox-label" style="font-size: 13px;">
+                    <input type="checkbox" class="mic-background-hearing-modal" ${backgroundHearingEnabled ? 'checked' : ''}> バックグラウンド聴取を有効 (background_hearing_enabled)
+                </label>
+            </div>
             <div class="form-group mic-stt-group-modal" style="margin-top: 8px; display: ${sttEnabled ? 'block' : 'none'};">
-                <p class="form-hint">STT の有無だけを切り替えます。保存時は未編集フィールドをそのまま維持します。</p>
+                <label class="form-label">データ保持期間（時間・stt_retention_hours）</label>
+                <input type="number" class="mic-retention-modal form-input" min="0" step="1" placeholder="60" value="${esc(String(sttRetention))}" style="max-width:160px;">
+                <p class="form-hint">STT文字起こしの保持時間。0で即時破棄。</p>
             </div>
         `;
 
@@ -3215,6 +3236,11 @@ function saveEditModal() {
         const entity = modal.querySelector('.mic-entity-modal').value.trim();
         const note = modal.querySelector('.mic-note-modal').value.trim();
         const sttEnabled = modal.querySelector('.mic-stt-enabled-modal').checked;
+        const wakeWordEnabled = modal.querySelector('.mic-wake-word-modal')?.checked || false;
+        const bgHearingEl = modal.querySelector('.mic-background-hearing-modal');
+        const backgroundHearingEnabled = bgHearingEl ? bgHearingEl.checked : true;
+        const retentionRaw = modal.querySelector('.mic-retention-modal')?.value;
+        const sttRetentionHours = (retentionRaw !== undefined && retentionRaw !== '') ? parseInt(retentionRaw, 10) : 60;
         const original = getOriginalRowData(_currentEditTr);
         const merged = cleanRowData(mergeRowData(_currentEditTr, {
             source,
@@ -3223,6 +3249,9 @@ function saveEditModal() {
             label,
             note,
             stt_enabled: sttEnabled,
+            wake_word_enabled: wakeWordEnabled,
+            background_hearing_enabled: backgroundHearingEnabled,
+            stt_retention_hours: sttRetentionHours,
         }));
 
         setOriginalRowData(_currentEditTr, merged);
@@ -3232,6 +3261,9 @@ function saveEditModal() {
         _currentEditTr.dataset.label = label;
         _currentEditTr.dataset.note = note;
         _currentEditTr.dataset.sttEnabled = sttEnabled ? '1' : '0';
+        _currentEditTr.dataset.wakeWordEnabled = wakeWordEnabled ? '1' : '0';
+        _currentEditTr.dataset.backgroundHearingEnabled = backgroundHearingEnabled ? '1' : '0';
+        _currentEditTr.dataset.sttRetention = String(sttRetentionHours);
 
         _currentEditTr.querySelector('td:nth-child(1)').textContent = room || '（未設定）';
         _currentEditTr.querySelector('td:nth-child(2)').textContent = source || '（未設定）';
