@@ -438,10 +438,19 @@
                     <!-- Tab 3: Devices & Sensors -->
                     <div class="settings-tab-content" id="settings-tab-devices" style="display:none;">
                         <!-- Section: いい感じの状態（ホームポリシー） -->
-                        <section class="settings-section card">
-                            <h3>いい感じの状態（ホームポリシー）</h3>
-                            <p class="section-desc">あかねが自律ループのとき、家の状態をここと照らし合わせて、明らかなズレだけ直します（自律操作ONのとき。OFFなら提案のみ）。自然な言葉で「こうなっていてほしい」を書いてください。例:「誰もいない部屋の照明は消えていてほしい」「暑い夜は在宅ならエアコンをつけていい」「寝ている人のいる部屋（お母さんの寝室など）は触らない」</p>
-                            <textarea id="setting-home-policy" rows="10" class="code-textarea" placeholder="家のいい感じの状態を自然言語で..."></textarea>
+                        <section class="settings-section card accordion-section" id="accordion-home-policy">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>いい感じの状態（ホームポリシー）</h3>
+                                </div>
+                            </div>
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">あかねが自律ループのとき、家の状態をここと照らし合わせて、明らかなズレだけ直します（自律操作ONのとき。OFFなら提案のみ）。自然な言葉で「こうなっていてほしい」を書いてください。例:「誰もいない部屋の照明は消えていてほしい」「暑い夜は在宅ならエアコンをつけていい」「寝ている人のいる部屋（お母さんの寝室など）は触らない」</p>
+                                <div class="form-group">
+                                    <textarea id="setting-home-policy" rows="10" class="code-textarea" placeholder="家のいい感じの状態を自然言語で..."></textarea>
+                                </div>
+                            </div>
                         </section>
 
                         <!-- Section 1: 操作できる家電 (entities) -->
