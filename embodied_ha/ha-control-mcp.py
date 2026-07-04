@@ -50,6 +50,14 @@ def _record(domain, service, entity_id, data, ok, extra=None):
         pass
 
 
+def _quiet_ok(domain, service):
+    if domain in ("climate", "fan"):
+        return True
+    if service in ("turn_off", "close_cover", "close", "stop_cover", "stop", "media_stop", "media_pause"):
+        return True
+    return False
+
+
 def ha_call_service(args):
     domain = (args.get("domain") or "").strip()
     service = (args.get("service") or "").strip()
@@ -66,6 +74,14 @@ def ha_call_service(args):
                      f"service={service} entity_id={entity_id}）")], True
 
     action_fields = action_fields_for_control(entity_id, domain, service)
+    hour = datetime.datetime.now().hour
+    if 1 <= hour <= 6 and not _quiet_ok(domain, service):
+        reason = (
+            "深夜帯（1-6時）は、消す系操作とエアコン/扇風機以外の家電操作を控えています。"
+            "（起こしてしまう操作を避けるため）"
+        )
+        _record(domain, service, entity_id, data, False, {**action_fields, "reason": reason, "quiet_hours": True})
+        return [text(reason)], True
     payload = dict(data) if entity_optional else {"entity_id": entity_id, **data}
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "10", "-X", "POST",
@@ -93,7 +109,7 @@ def ha_call_service(args):
     return [text(f"実行しました: {domain}.{service} {entity_id} {data}")]
 
 
-serve("ha-control-mcp", "1.0", {
+TOOLS = {
     "ha_call_service": {
         "spec": {
             "name": "ha_call_service",
@@ -121,4 +137,8 @@ serve("ha-control-mcp", "1.0", {
         },
         "handler": ha_call_service,
     },
-})
+}
+
+
+if __name__ == "__main__":
+    serve("ha-control-mcp", "1.0", TOOLS)

@@ -157,15 +157,20 @@ def check(
     if social.get("direct_override") or social.get("urgent_override"):
         return social
 
-    if hour in QUIET_HOURS:
+    if hour in QUIET_HOURS and intent == "speak":
         return {
             "allowed": False,
             "reason": _quiet_hours_reason(intent),
             "fallback": None,
         }
 
+    # 深夜の action は boundary では止めない。
+    # 実際に危険な ON 系は ha-control-mcp 側の深夜フィルタで弾く。
     if not social.get("allowed", True):
-        return social
+        if intent == "action" and social.get("reason") == "quiet_window":
+            pass
+        else:
+            return social
 
     if intent == "action":
         if not is_autonomous:

@@ -27,7 +27,7 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(result["reason"], "深夜帯（1-6時）のため発話抑制")
         self.assertIsNone(result["fallback"])
 
-    def test_quiet_hours_action_is_blocked_even_if_autonomous(self):
+    def test_quiet_hours_action_is_allowed_if_autonomous_and_home(self):
         result = boundary.check(
             mode="explore",
             intent="action",
@@ -37,8 +37,8 @@ class BoundaryTests(unittest.TestCase):
             policies=[],
             metadata={},
         )
-        self.assertFalse(result["allowed"])
-        self.assertEqual(result["reason"], "深夜帯（1-6時）のため自律操作抑制")
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "許可")
         self.assertIsNone(result["fallback"])
 
     def test_normal_time_speak_is_allowed(self):

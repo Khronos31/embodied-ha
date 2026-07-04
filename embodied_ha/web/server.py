@@ -60,6 +60,7 @@ GAME_CATALOG = [
 ]
 
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
+HOME_POLICY_FILE = os.environ.get("EHA_HOME_POLICY_FILE", os.path.join(DATA_DIR, "home_policy.md"))
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 
 CHIVE_DIR  = "/data/word2vec/chive-1.3-mc90_gensim"
@@ -1304,6 +1305,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data.encode("utf-8"))
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/home-policy":
+            filepath = HOME_POLICY_FILE
+            if not os.path.exists(filepath):
+                filepath = os.path.join(SCRIPT_DIR, "home_policy.md")
+            content = ""
+            if os.path.exists(filepath):
+                try:
+                    with open(filepath, encoding="utf-8") as f:
+                        content = f.read()
+                except Exception as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", len(content.encode("utf-8")))
+            self.end_headers()
+            self.wfile.write(content.encode("utf-8"))
         elif path == "/api/ha-entities":
             qs = parse_qs(parsed.query)
             domain_str = qs.get("domain", [""])[0]
@@ -1377,6 +1395,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "キャラクター定義が短すぎるか空です"}, 400)
                     return
                 atomic_write(CHARACTER_FILE, content)
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/home-policy":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body_raw = self.rfile.read(length)
+                content = body_raw.decode("utf-8")
+                atomic_write(HOME_POLICY_FILE, content)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
