@@ -325,7 +325,7 @@ CLAUDE_ENV = {**os.environ,
               "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
               "PATH": os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")}
 
-def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None):
+def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, content_blocks=None):
     if os.path.basename(CLAUDE) == "agy":
         cmd = [CLAUDE]
         if model:
@@ -338,9 +338,26 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None):
         cmd += ["--allowedTools", allowed_tools]
     if mcp_config:
         cmd += ["--mcp-config", mcp_config]
-    msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+    # content_blocks を渡せば画像等のマルチモーダルブロックをそのまま送る
+    # （以前は json.dumps(content) を text として包んでおり、画像がbase64テキスト化して届かなかった）
+    blocks = content_blocks if content_blocks is not None else [{"type": "text", "text": text}]
+    msg = json.dumps({"type": "user", "message": {"role": "user", "content": blocks}})
     r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd="/tmp/embodied-ha", env=CLAUDE_ENV)
-    return "".join(line for line in r.stdout.splitlines() if line.strip())
+    # stream-json から最終 result テキストのみ取り出す（explore分岐と同じ処理）。
+    # 生のstream-json全行を連結して返すと、後段の {.*} greedyパースが多重JSONで壊れ、
+    # observeの emotion/private が空欄で記録され続ける回帰の原因になっていた。
+    result_text = ""
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+            if d.get("type") == "result":
+                result_text = d.get("result", "")
+        except Exception:
+            pass
+    return result_text
 
 prefs = {}
 try:
@@ -388,7 +405,7 @@ content = []
 if cam_b64:
     content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": cam_b64}})
 content.append({"type": "text", "text": os.environ["USER_PROMPT"]})
-response = call_claude(json.dumps(content, ensure_ascii=False), model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""))
+response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), content_blocks=content)
 print(response)
 PYEOF
 )

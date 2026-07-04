@@ -415,6 +415,25 @@ def move_to(args: dict[str, Any]):
     return _json_text({"state": new_state, "event": event})
 
 
+def _available_cameras(prefs: dict[str, Any]) -> list[dict]:
+    """侵入候補のカメラ一覧（entity/room/label/PTZ可否）。侵入失敗時にあかねへ提示し、
+    switch等を掴んでしまっても正しい camera.* エンティティが分かるようにする。"""
+    roster = []
+    for cam in prefs.get("cameras", []):
+        if not isinstance(cam, dict):
+            continue
+        ent = clean(cam.get("entity")) or clean(cam.get("source"))
+        if not ent:
+            continue
+        roster.append({
+            "entity": ent,
+            "room": clean(cam.get("room")),
+            "label": clean(cam.get("label")),
+            "ptz": bool(cam.get("ptz")),
+        })
+    return roster
+
+
 def enter_cyberspace(args: dict[str, Any]):
     graph = load_room_graph()
     state = load_location_state(graph)
@@ -446,6 +465,8 @@ def enter_cyberspace(args: dict[str, Any]):
                 "error": "エンティティの部屋を解決できません。preferences.json に room を設定するか、HA でエリアを設定してください",
                 "entity": raw_entity,
                 "normalized_entity": entity,
+                "hint": "侵入できるのは下記カメラの entity（camera.* 等）。switch はカメラではありません。",
+                "available_cameras": _available_cameras(prefs),
             }), True
     body_room = state["current_room"]
     if target_room != body_room:
@@ -453,6 +474,8 @@ def enter_cyberspace(args: dict[str, Any]):
             "error": "physical room mismatch",
             "physical_room": body_room,
             "requested_room": target_room,
+            "hint": "物理体と同じ部屋のカメラにしか侵入できません。下記から現在の部屋のものを選んでください。",
+            "available_cameras": _available_cameras(prefs),
         }), True
     cost, path = shortest_path(body_room, target_room, graph)
     timestamp = now().isoformat(timespec="seconds")

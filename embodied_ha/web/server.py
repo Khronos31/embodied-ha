@@ -52,7 +52,7 @@ GAME_CATALOG = [
     },
     {
         "id": "wordvec_race",
-        "name": "WordVecチキンレース",
+        "name": "WordVecレース",
         "description": "基準語を決めて交互に単語を出す。前の単語より遠くなければ負け。chiVeモデル（約490MB）が必要。",
         "bundled": False,
         "requires": ["chiVe mc90モデル（~490MB）"],

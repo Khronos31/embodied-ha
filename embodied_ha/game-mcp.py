@@ -14,7 +14,10 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
+import subprocess
 import sys
+import uuid
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -257,15 +260,151 @@ def _lookup(kv, word: str) -> str | None:
     return None
 
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CPU_MODEL = os.environ.get("EHA_CPU_MODEL", "haiku")
+
+_CPU_RULES = """あなたは単語連想ゲーム「WordVecレース」のCPU対戦相手。
+ルール: お題となる基準語がある。プレイヤーと交互に単語を出す。
+自分の番では「直前に出た単語よりも、基準語からベクトル距離が遠い」日本語の実在単語を1つ出す。
+基準語に近い/同じだと負け。一気に遠くへ飛ばしすぎると後が続かず自滅しやすいので、着実に遠ざかるのが基本(読みは自由)。
+返答は必ず単語1つだけ。ひらがな・カタカナ・漢字いずれかの実在語。説明・前置き・記号・引用符・メタ発言は一切書かない。
+ツール（Bash/Read等）は絶対に使わない。求められているのは日本語の単語1語だけ。"""
+
+_CPU_MOVE_COUNTS: dict[str, int] = {}
+
+
+def _claude_env() -> dict[str, str]:
+    env = {**os.environ}
+    env["CLAUDE_CONFIG_DIR"] = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
+    return env
+
+
+def _claude_bin() -> str:
+    return shutil.which("claude") or "claude"
+
+
+def _run_claude_once(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=_SCRIPT_DIR,
+            env=_claude_env(),
+        )
+    except Exception as e:
+        return None, str(e)
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    if result.returncode == 0 and stdout:
+        return stdout, ""
+
+    reasons: list[str] = []
+    if result.returncode != 0:
+        reasons.append(f"exit {result.returncode}")
+    if not stdout:
+        reasons.append("empty output")
+    if stderr:
+        reasons.append(stderr)
+    return None, "; ".join(reasons) if reasons else "claude call failed"
+
+
+def _run_claude_with_retry(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
+    out, err = _run_claude_once(cmd, timeout=timeout)
+    if out:
+        return out, ""
+    retry_out, retry_err = _run_claude_once(cmd, timeout=timeout)
+    if retry_out:
+        return retry_out, ""
+    return None, retry_err or err or "claude call failed"
+
+
+_CPU_STRIP_CHARS = '"' + "'" + "「」『』（）()[]{}<>〈〉《》,，。．・!?！？:：;；`´"
+_CPU_PREFIX_CHARS = "「『（([{" + '"' + "'"
+_CPU_SUFFIX_CHARS = "」』）)]}" + '"' + "'.,，。．・!?！？:：;；"
+
+def _clean_cpu_word(raw: str) -> str:
+    lines = raw.splitlines()
+    token = lines[0].strip() if lines else raw.strip()
+    if not token:
+        return ""
+    token = token.split()[0]
+    token = token.strip().strip(_CPU_STRIP_CHARS)
+    while token and token[0] in _CPU_PREFIX_CHARS:
+        token = token[1:]
+    while token and token[-1] in _CPU_SUFFIX_CHARS:
+        token = token[:-1]
+    return token.strip()
+
+
+def _start_cpu_session(base_key: str, cpu_session_id: str) -> tuple[bool, str]:
+    # --system-prompt はデフォルトのシステムプロンプトを完全に置き換える（--append-system-prompt は
+    # 既定の"コーディング支援エージェント"人格に追記するだけになり、Bash承認待ち等のメタ発言を誘発した）。
+    # --resume 側では system-prompt を渡さない: セッション作成時の値を引き継ぐ必要があり、
+    # resume 時に再指定すると（--system-prompt/--append-system-prompt どちらでも）応答がハングする。
+    cmd = [
+        _claude_bin(),
+        "-p",
+        "--session-id",
+        cpu_session_id,
+        "--model",
+        CPU_MODEL,
+        "--system-prompt",
+        _CPU_RULES,
+        f"ゲーム開始。お題（基準語）は「{base_key}」。あなたはCPU側で後手。私が単語を出すたびに、基準語からより遠い実在語を1つだけ返す。準備できたら「OK」とだけ返して。",
+    ]
+    out, err = _run_claude_with_retry(cmd, timeout=30)
+    if out:
+        return True, out
+    return False, err
+
+
+def _ask_cpu_word(cpu_session_id: str, message: str) -> tuple[str | None, str]:
+    cmd = [
+        _claude_bin(),
+        "-p",
+        "--resume",
+        cpu_session_id,
+        "--model",
+        CPU_MODEL,
+        message,
+    ]
+    out, err = _run_claude_with_retry(cmd, timeout=30)
+    if not out:
+        return None, err
+    word = _clean_cpu_word(out)
+    return word or None, ""
+
+
 def game_wordvec_race_start(args: dict[str, Any]):
     if not _PLUGINS.get("wordvec_race"):
-        return _plugin_disabled_error("WordVecチキンレース")
+        return _plugin_disabled_error("WordVecレース")
     try:
         kv = _get_kv()
         base = str(args.get("base") or "").strip() or random.choice(_RACE_BASES)
+        mode = str(args.get("mode") or "human").strip() or "human"
         key = _lookup(kv, base)
         if key is None:
             return _json_error(f"「{base}」は語彙にありません")
+        if mode not in {"human", "cpu"}:
+            return _json_error("mode は human か cpu です")
+        if mode == "cpu":
+            cpu_session_id = str(uuid.uuid4())
+            ok, _ = _start_cpu_session(key, cpu_session_id)
+            if not ok:
+                return _json_error("CPU起動に失敗")
+            result = {
+                "base": key,
+                "mode": "cpu",
+                "cpu_session_id": cpu_session_id,
+                "message": (
+                    f"お題は「{key}」。あなた先手。game_wordvec_race_cpu_move に start/last/answer/cpu_session_id を渡して1手ずつ進めて。"
+                    "最初の手は last に base を入れて出す。"
+                ),
+            }
+            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
         result = {
             "base": key,
             "message": f"お題は「{key}」です。より遠い単語を交互に出してください。前の単語より近づいたら負け。",
@@ -275,9 +414,133 @@ def game_wordvec_race_start(args: dict[str, Any]):
         return _json_error(str(e))
 
 
+def game_wordvec_race_cpu_move(args: dict[str, Any]):
+    if not _PLUGINS.get("wordvec_race"):
+        return _plugin_disabled_error("WordVecレース")
+    cpu_session_id = str(args.get("cpu_session_id") or "").strip()
+    if not cpu_session_id:
+        return _json_error("cpu_session_id が空です")
+    try:
+        kv = _get_kv()
+        start = str(args.get("start") or "").strip()
+        last = str(args.get("last") or "").strip()
+        answer = str(args.get("answer") or "").strip()
+        move_count = int(args.get("move_count") or 0)
+        for w, label in [(start, "start"), (last, "last"), (answer, "answer")]:
+            if not w:
+                return _json_error(f"{label} が空です")
+        start_key = _lookup(kv, start)
+        last_key = _lookup(kv, last)
+        answer_key = _lookup(kv, answer)
+        if start_key is None:
+            return _json_error(f"「{start}」は語彙にありません")
+        if last_key is None:
+            return _json_error(f"「{last}」は語彙にありません")
+        if answer_key is None:
+            return _json_error(f"「{answer}」は語彙にありません")
+        sim_last = float(kv.similarity(last_key, start_key))
+        sim_answer = float(kv.similarity(answer_key, start_key))
+        if sim_answer >= sim_last:
+            _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+            result = {
+                "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+                "last_move": {"word": last_key, "sim": round(sim_last, 4)},
+                "start": start_key,
+                "game_over": True,
+                "winner": "cpu",
+                "reason": "あかねの手が前より近い",
+                "message": "あかねの手が前より近かったのでCPUの勝ちです。結果を会話ルームに報告してください。",
+            }
+            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+
+        cpu_msg = (
+            f"私は「{answer_key}」を出した（前手「{last_key}」より基準語「{start_key}」から遠い）。あなたの番。"
+            f"基準語「{start_key}」からさらに遠い、実在する日本語の単語を1つだけ。単語のみ、説明・記号・引用符なし。"
+        )
+        cpu_word, _ = _ask_cpu_word(cpu_session_id, cpu_msg)
+        if not cpu_word:
+            _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+            result = {
+                "game_over": True,
+                "winner": "aborted",
+                "reason": "CPU応答に失敗",
+                "message": "CPU応答に失敗したので対局を中断します。結果を会話ルームに報告してください。",
+            }
+            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+        cpu_key = _lookup(kv, cpu_word)
+        if cpu_key is None:
+            retry_msg = f"「{cpu_word}」は辞書に無い。実在する別の日本語の単語を1つだけ。"
+            cpu_word, _ = _ask_cpu_word(cpu_session_id, retry_msg)
+            if not cpu_word:
+                _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+                result = {
+                    "game_over": True,
+                    "winner": "aborted",
+                    "reason": "CPU応答に失敗",
+                }
+                return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+            cpu_key = _lookup(kv, cpu_word)
+            if cpu_key is None:
+                _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+                result = {
+                    "game_over": True,
+                    "winner": "akane",
+                    "reason": "CPUの手が語彙にありません",
+                    "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+                    "cpu_move_raw": cpu_word,
+                    "start": start_key,
+                    "message": "CPUが語彙外の単語しか出せませんでした。あかねの勝ちです。結果を会話ルームに報告してください。",
+                }
+                return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+        sim_cpu = float(kv.similarity(cpu_key, start_key))
+        if sim_cpu >= sim_answer:
+            _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+            result = {
+                "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+                "cpu_move": {"word": cpu_key, "sim": round(sim_cpu, 4)},
+                "start": start_key,
+                "game_over": True,
+                "winner": "akane",
+                "reason": "CPUの手が前より近い",
+                "message": "CPUの手が前より近かったのであかねの勝ちです。結果を会話ルームに報告してください。",
+            }
+            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+
+        turn = max(_CPU_MOVE_COUNTS.get(cpu_session_id, 0) + 1, move_count)
+        _CPU_MOVE_COUNTS[cpu_session_id] = turn
+        if turn >= 16:
+            _CPU_MOVE_COUNTS.pop(cpu_session_id, None)
+            result = {
+                "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+                "cpu_move": {"word": cpu_key, "sim": round(sim_cpu, 4)},
+                "start": start_key,
+                "next_last": cpu_key,
+                "game_over": True,
+                "winner": "draw",
+                "reason": "手数上限",
+                "message": "手数上限に達しました。結果を会話ルームに報告してください。",
+            }
+            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+
+        result = {
+            "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+            "cpu_move": {"word": cpu_key, "sim": round(sim_cpu, 4)},
+            "start": start_key,
+            "next_last": cpu_key,
+            "game_over": False,
+            "message": (
+                f"あなた: {answer_key}({sim_answer:.4f}) / CPU: {cpu_key}({sim_cpu:.4f})。"
+                f"次はあなたの番。last={cpu_key} で cpu_move を続けて。"
+            ),
+        }
+        return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+    except Exception as e:
+        return _json_error(str(e))
+
+
 def game_wordvec_race_submit(args: dict[str, Any]):
     if not _PLUGINS.get("wordvec_race"):
-        return _plugin_disabled_error("WordVecチキンレース")
+        return _plugin_disabled_error("WordVecレース")
     try:
         kv = _get_kv()
         start = str(args.get("start") or "").strip()
@@ -317,7 +580,7 @@ def game_wordvec_race_submit(args: dict[str, Any]):
 
 def game_wordvec_race_hint(args: dict[str, Any]):
     if not _PLUGINS.get("wordvec_race"):
-        return _plugin_disabled_error("WordVecチキンレース")
+        return _plugin_disabled_error("WordVecレース")
     try:
         kv = _get_kv()
         word1 = str(args.get("word1") or "").strip()
@@ -416,7 +679,8 @@ def main() -> None:
             "spec": {
                 "name": "game_wordvec_race_start",
                 "description": (
-                    "WordVecチキンレースを開始してお題語を返す。base 省略時はランダム。"
+                    "WordVecレースを開始してお題語を返す。base 省略時はランダム。"
+                    "mode='cpu' でCPU戦（Haiku）を開始できる。"
                     "【ルール】お題語を基準に、交互に単語を出し合う。"
                     "自分の手番では必ず submit を呼んで判定すること。"
                     "valid=true なら採用（前より遠ざかった）、valid=false なら出した本人の負け（前より近づいた）。"
@@ -426,16 +690,35 @@ def main() -> None:
                     "type": "object",
                     "properties": {
                         "base": {"type": "string", "description": "お題語（省略可）"},
+                        "mode": {"type": "string", "enum": ["human", "cpu"], "description": "human か cpu（既定: human）"},
                     },
                 },
             },
             "handler": game_wordvec_race_start,
         },
+        "game_wordvec_race_cpu_move": {
+            "spec": {
+                "name": "game_wordvec_race_cpu_move",
+                "description": "WordVecレースのCPU戦を1手進める。あかねの手を判定し、CPUの手を返す。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "start": {"type": "string", "description": "お題の基準語"},
+                        "last": {"type": "string", "description": "直前に出た単語"},
+                        "answer": {"type": "string", "description": "今回のあかねの手"},
+                        "cpu_session_id": {"type": "string", "description": "start で発行された CPU セッション ID"},
+                        "move_count": {"type": "integer", "description": "この対局で呼んだ回数の目安（省略可）"},
+                    },
+                    "required": ["start", "last", "answer", "cpu_session_id"],
+                },
+            },
+            "handler": game_wordvec_race_cpu_move,
+        },
         "game_wordvec_race_submit": {
             "spec": {
                 "name": "game_wordvec_race_submit",
                 "description": (
-                    "チキンレースで単語を判定する。自他問わず単語が出るたびに必ず呼ぶこと。"
+                    "WordVecレースで単語を判定する。自他問わず単語が出るたびに必ず呼ぶこと。"
                     "valid=true: answer が last より start から遠い → 合法、ゲーム続行。"
                     "valid=false: answer が last より start に近い → その単語を出したプレイヤーの負け、ゲーム終了。"
                 ),
