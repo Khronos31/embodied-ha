@@ -42,6 +42,9 @@ MQTT_PASS = os.environ.get("MQTT_PASS", "")
 # ロールアップ/daybookで長くなりうるので余裕を持たせる。
 CHAT_TIMEOUT = 300
 LOOP_TIMEOUT = 600
+ANOMALY_NIGHT_URGENCY_THRESHOLD = 30
+ANOMALY_NIGHT_URGENCY_FACTOR = 0.0
+QUIET_ANOMALY_PERIODS = {"late", "night", "deep_night"}
 
 ENV_PATH = os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")
 _chat_lock = threading.Lock()
@@ -414,17 +417,59 @@ def mqtt_listen(topic, handler, label):
         time.sleep(5)
 
 
-def run_chance(schedule=None, body_state_snapshot=None, loop_name="loop", desire_pressure=0.0, anomaly_urgency=0) -> int:
+def _schedule_period(schedule: dict | None = None, *, hour: int | None = None) -> str:
+    h = time.localtime().tm_hour if hour is None else int(hour) % 24
+    if 0 <= h < 7:
+        return "deep_night" if isinstance(schedule, dict) and "deep_night_probability" in schedule else "night"
+    if 22 <= h:
+        return "late" if isinstance(schedule, dict) and "late_probability" in schedule else "night"
+    return "day"
+
+
+def _base_probability_for_period(schedule: dict, period: str) -> int:
+    defaults = {"day": 100, "late": 30, "night": 10, "deep_night": 10}
+    key = f"{period}_probability"
+    if key not in schedule and period == "deep_night":
+        key = "night_probability"
+    return schedule.get(key, defaults.get(period, 100))
+
+
+def _effective_anomaly_urgency(schedule: dict, period: str, anomaly_urgency: int | float) -> int:
+    try:
+        urgency = int(anomaly_urgency)
+    except (TypeError, ValueError):
+        return 0
+    if urgency <= 0:
+        return 0
+    high_threshold = schedule.get("anomaly_night_urgency_threshold", ANOMALY_NIGHT_URGENCY_THRESHOLD)
+    try:
+        high_threshold = int(high_threshold)
+    except (TypeError, ValueError):
+        high_threshold = ANOMALY_NIGHT_URGENCY_THRESHOLD
+    if period in QUIET_ANOMALY_PERIODS and urgency < high_threshold:
+        factor = schedule.get("anomaly_night_urgency_factor", ANOMALY_NIGHT_URGENCY_FACTOR)
+        try:
+            factor = max(0.0, min(1.0, float(factor)))
+        except (TypeError, ValueError):
+            factor = ANOMALY_NIGHT_URGENCY_FACTOR
+        return int(round(urgency * factor))
+    return urgency
+
+
+def run_chance(
+    schedule=None,
+    body_state_snapshot=None,
+    loop_name="loop",
+    desire_pressure=0.0,
+    anomaly_urgency=0,
+    *,
+    hour: int | None = None,
+) -> int:
     """時間帯と body state に応じた実行確率(%)を返す"""
     if schedule is None:
         schedule = load_schedule()
-    h = time.localtime().tm_hour
-    if 0 <= h < 7:
-        base = schedule.get("night_probability", 10)
-    elif 22 <= h:
-        base = schedule.get("late_probability", 30)
-    else:
-        base = schedule.get("day_probability", 100)
+    period = _schedule_period(schedule, hour=hour)
+    base = _base_probability_for_period(schedule, period)
     if body_state_snapshot is None:
         body_state_snapshot = _load_body_state()
     chance = body_state.compute_run_chance(base, body_state_snapshot, loop_name)
@@ -434,7 +479,7 @@ def run_chance(schedule=None, body_state_snapshot=None, loop_name="loop", desire
         elif loop_name == "chat":
             chance += round(desire_pressure * 18)
     if loop_name == "loop" and anomaly_urgency:
-        chance += int(anomaly_urgency)
+        chance += _effective_anomaly_urgency(schedule, period, anomaly_urgency)
     # 下限クランプ。既定0＝各時間帯の確率をそのまま尊重（0%なら発火しない）。
     # 体調が悪い時間帯に完全停止して復帰しなくなるのを防ぎたい場合のみ正の値を設定する。
     try:

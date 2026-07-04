@@ -2,7 +2,7 @@
 """Stateful anomaly helpers for embodied-ha.
 
 This module keeps a small persistent anomaly state so loop.sh can record
-sensor spikes / unresolved loops / world-model mismatches and the daemon can
+sensor spikes / unresolved loops and the daemon can
 turn them into explore urgency.
 """
 
@@ -23,12 +23,34 @@ from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
 
 STATE_VERSION = 1
-ANOMALY_TYPES = ("sensor_spike", "unresolved_loop", "world_model_mismatch")
+ANOMALY_TYPES = ("sensor_spike", "unresolved_loop")
+
+URGENCY_STALE_FULL_HOURS = 1.0
+URGENCY_STALE_ZERO_HOURS = 8.0
+
+UNRESOLVED_LOOP_MIN_AGE_HOURS = 6.0
+UNRESOLVED_LOOP_MAX_AGE_HOURS = 48.0
+UNRESOLVED_LOOP_TRIGGER_SEVERITY = 0.20
+
+SENSOR_SPIKE_TRIGGER_SEVERITY = 0.55
+SENSOR_SPIKE_IGNORED_LABEL_RE = re.compile(
+    r"(battery|batterie|電池|バッテリ|idle|アイドル|uptime|時刻|time|date|timestamp|last[_ ]?seen)",
+    re.IGNORECASE,
+)
+SENSOR_SPIKE_NOISY_LABEL_RE = re.compile(
+    r"(cpu|memory|メモリ|load|disk|storage|wifi|rssi|signal|temperature|temp|湿度|humidity)",
+    re.IGNORECASE,
+)
+SENSOR_SPIKE_NOISY_ABS_DELTA = 10.0
+SENSOR_SPIKE_NOISY_RELATIVE_DELTA = 0.50
+SENSOR_SPIKE_DEFAULT_ABS_DELTA = 5.0
+SENSOR_SPIKE_DEFAULT_RELATIVE_DELTA = 0.35
 
 DEFAULT_RECORD: dict[str, Any] = {
     "type": "",
     "severity": 0.0,
     "detected_at": "",
+    "active_since": "",
     "last_seen_at": "",
     "resolved": True,
     "resolved_at": "",
@@ -298,6 +320,12 @@ def _normalize_anomaly_record(type_name: str, raw: Any) -> dict[str, Any]:
         record["severity"] = round(_clamp(raw.get("severity"), 0.0, 1.0), 3)
         record["detected_at"] = _clean(raw.get("detected_at"))
         record["last_seen_at"] = _clean(raw.get("last_seen_at")) or record["detected_at"]
+        record["active_since"] = (
+            _clean(raw.get("active_since"))
+            or record["last_seen_at"]
+            or record["detected_at"]
+            or _now().isoformat(timespec="seconds")
+        )
         record["resolved"] = _as_bool(raw.get("resolved"), True)
         record["resolved_at"] = _clean(raw.get("resolved_at"))
         record["trigger_explore"] = _as_bool(raw.get("trigger_explore"), False)
@@ -339,22 +367,17 @@ def normalize_state(raw: Any) -> dict[str, Any]:
 
         raw_anomalies = raw.get("anomalies", {})
         if isinstance(raw_anomalies, Mapping):
-            keys = list(ANOMALY_TYPES)
-            for key in raw_anomalies.keys():
-                clean_key = _clean(key)
-                if clean_key and clean_key not in keys:
-                    keys.append(clean_key)
-            for key in keys:
+            for key in ANOMALY_TYPES:
                 anomalies[key] = _normalize_anomaly_record(key, raw_anomalies.get(key))
         elif isinstance(raw_anomalies, list):
             for item in raw_anomalies:
                 if isinstance(item, Mapping):
                     key = _clean(item.get("type"))
-                    if key:
+                    if key in ANOMALY_TYPES:
                         anomalies[key] = _normalize_anomaly_record(key, item)
 
-    if not anomalies:
-        for key in ANOMALY_TYPES:
+    for key in ANOMALY_TYPES:
+        if key not in anomalies:
             anomalies[key] = _normalize_anomaly_record(key, None)
 
     state["anomalies"] = anomalies
@@ -395,6 +418,8 @@ def _sensor_spike_detection(
 
     all_keys = sorted(set(current_snapshot) | set(previous_snapshot))
     for key in all_keys:
+        if SENSOR_SPIKE_IGNORED_LABEL_RE.search(key):
+            continue
         prev = previous_snapshot.get(key)
         curr = current_snapshot.get(key)
         if prev is None or curr is None:
@@ -420,21 +445,30 @@ def _sensor_spike_detection(
             max_delta = max(deltas) if deltas else 0.0
             baseline = max(1.0, max([abs(n) for n in prev_numbers + curr_numbers] or [1.0]))
             relative = max_delta / baseline
-            if max_delta >= 1.5 or relative >= 0.20:
+            if SENSOR_SPIKE_NOISY_LABEL_RE.search(key):
+                abs_threshold = SENSOR_SPIKE_NOISY_ABS_DELTA
+                relative_threshold = SENSOR_SPIKE_NOISY_RELATIVE_DELTA
+            else:
+                abs_threshold = SENSOR_SPIKE_DEFAULT_ABS_DELTA
+                relative_threshold = SENSOR_SPIKE_DEFAULT_RELATIVE_DELTA
+            if max_delta >= abs_threshold or relative >= relative_threshold:
                 changed.append(key)
-                severity_points += min(1.0, 0.35 + max_delta * 0.08 + relative * 0.15)
+                severity_points += min(
+                    1.0,
+                    0.25 + (max_delta / abs_threshold) * 0.30 + (relative / relative_threshold) * 0.25,
+                )
                 mismatch_parts.append(f"{key}: {prev.get('raw', '')} -> {curr.get('raw', '')}")
                 continue
 
         if prev.get("raw") != curr.get("raw"):
             changed.append(key)
-            severity_points += 0.12
+            severity_points += 0.08
 
     if not changed:
         return False, 0.0, "", [], ""
 
-    severity = min(1.0, 0.28 + severity_points / max(1.0, len(changed)))
-    trigger = severity >= 0.32 or len(changed) >= 2
+    severity = min(1.0, 0.18 + severity_points / max(1.0, len(changed)))
+    trigger = severity >= SENSOR_SPIKE_TRIGGER_SEVERITY or len(changed) >= 3
     summary = f"センサー急変 {len(changed)}件"
     fingerprint = _hash_text("sensor_spike:" + "|".join(changed) + "|" + _stable_text(current_snapshot))
     details = mismatch_parts[:4] if mismatch_parts else [", ".join(changed[:4])]
@@ -443,67 +477,50 @@ def _sensor_spike_detection(
 
 def _unresolved_loop_detection(
     loops: list[dict[str, Any]],
+    *,
+    now: _dt.datetime | None = None,
 ) -> tuple[bool, float, str, list[str], str]:
     if not loops:
         return False, 0.0, "", [], ""
 
     entries: list[str] = []
+    stale_entries: list[str] = []
     max_age_hours = 0.0
-    now = _now()
+    current_now = now or _now()
     for loop in loops:
         text = _clean(loop.get("text"))
         loop_id = _clean(loop.get("id"))
         source = _clean(loop.get("source"))
-        if text:
-            entries.append(f"{loop_id or source or 'loop'}: {text}")
         created = _parse_ts(loop.get("created"))
         if created is not None:
             try:
-                age_hours = max(0.0, (now - created).total_seconds() / 3600.0)
+                age_hours = max(0.0, (current_now - created).total_seconds() / 3600.0)
                 max_age_hours = max(max_age_hours, age_hours)
             except Exception:
-                pass
+                age_hours = 0.0
+        else:
+            age_hours = 0.0
+        entry = f"{loop_id or source or 'loop'}: {text}" if text else loop_id or source or "loop"
+        if entry:
+            entries.append(entry)
+        if age_hours >= UNRESOLVED_LOOP_MIN_AGE_HOURS and entry:
+            stale_entries.append(entry)
 
-    severity = min(1.0, 0.24 + len(loops) * 0.14 + min(0.3, max_age_hours * 0.04))
-    trigger = severity >= 0.20
-    summary = f"未解決ループ {len(loops)}件"
+    if not stale_entries:
+        return False, 0.0, "", entries[:4], ""
+
+    age_ratio = _clamp(
+        (max_age_hours - UNRESOLVED_LOOP_MIN_AGE_HOURS)
+        / max(1.0, UNRESOLVED_LOOP_MAX_AGE_HOURS - UNRESOLVED_LOOP_MIN_AGE_HOURS),
+        0.0,
+        1.0,
+    )
+    severity = min(1.0, 0.12 + age_ratio * 0.70 + min(0.18, len(stale_entries) * 0.06))
+    trigger = severity >= UNRESOLVED_LOOP_TRIGGER_SEVERITY
+    summary = f"未解決ループ {len(stale_entries)}/{len(loops)}件"
     fingerprint = _hash_text("unresolved_loop:" + "|".join(sorted(item.get("id") or item.get("text", "") for item in loops)))
-    details = entries[:4]
+    details = stale_entries[:4]
     return trigger, round(severity, 3), summary, details, fingerprint
-
-
-def _world_model_mismatch_detection(
-    sensor_text: str,
-    loops: list[dict[str, Any]],
-) -> tuple[bool, float, str, list[str], str]:
-    if not loops:
-        return False, 0.0, "", [], ""
-
-    sensor_lower = sensor_text.lower()
-    contradictions: list[str] = []
-    for loop in loops:
-        text = _clean(loop.get("text"))
-        if not text:
-            continue
-        loop_lower = text.lower()
-        positive_loop = any(cue in loop_lower for cue in ("open", "on", "開いて", "点灯", "ついて", "起動", "在宅", "稼働", "正常"))
-        negative_loop = any(cue in loop_lower for cue in ("closed", "off", "閉じ", "消灯", "停止", "不在", "暗い"))
-        positive_sensor = any(cue in sensor_lower for cue in ("open", "on", "開いて", "点灯", "ついて", "起動", "在宅", "稼働", "正常"))
-        negative_sensor = any(cue in sensor_lower for cue in ("closed", "off", "閉じ", "消灯", "停止", "不在", "暗い"))
-
-        if positive_loop and negative_sensor:
-            contradictions.append(f"{text} / sensor: {sensor_text[:80]}")
-        elif negative_loop and positive_sensor:
-            contradictions.append(f"{text} / sensor: {sensor_text[:80]}")
-
-    if not contradictions:
-        return False, 0.0, "", [], ""
-
-    severity = min(1.0, 0.38 + len(contradictions) * 0.16)
-    trigger = severity >= 0.30
-    summary = f"世界モデルのズレ {len(contradictions)}件"
-    fingerprint = _hash_text("world_model_mismatch:" + "|".join(contradictions))
-    return trigger, round(severity, 3), summary, contradictions[:4], fingerprint
 
 
 def _update_record(
@@ -523,10 +540,15 @@ def _update_record(
         if fresh_detection:
             record["count"] = max(0, int(_coerce_float(record.get("count"), 0.0))) + 1
             record["detected_at"] = ts
+            record["active_since"] = ts
+            record["severity"] = round(_clamp(severity), 3)
+        elif not _clean(record.get("active_since")):
+            record["active_since"] = ts
         record["last_seen_at"] = ts
         record["resolved"] = False
         record["resolved_at"] = ""
-        record["severity"] = round(max(_clamp(record.get("severity")), _clamp(severity)), 3)
+        if not fresh_detection:
+            record["severity"] = round(max(_clamp(record.get("severity")), _clamp(severity)), 3)
         record["trigger_explore"] = bool(trigger_explore)
         record["fingerprint"] = fingerprint
         record["summary"] = _clean(summary) or _clean(record.get("summary"))
@@ -561,17 +583,15 @@ def detect_anomalies(
     current_now = now or _now()
     sensor_snapshot = _snapshot_from_sensor_logs(sensor_logs)
     loop_snapshot = _loops_from_input(open_loops)
-    sensor_text = _clean(sensor_logs)
     loops_text = "\n".join(_clean(loop.get("text")) for loop in loop_snapshot if _clean(loop.get("text")))
 
     spike_active, spike_severity, spike_summary, spike_details, spike_fp = _sensor_spike_detection(
         sensor_snapshot,
         current.get("last_sensor_snapshot", {}),
     )
-    loop_active, loop_severity, loop_summary, loop_details, loop_fp = _unresolved_loop_detection(loop_snapshot)
-    mismatch_active, mismatch_severity, mismatch_summary, mismatch_details, mismatch_fp = _world_model_mismatch_detection(
-        sensor_text or _stable_text(sensor_snapshot),
+    loop_active, loop_severity, loop_summary, loop_details, loop_fp = _unresolved_loop_detection(
         loop_snapshot,
+        now=current_now,
     )
 
     updated_anomalies = dict(current["anomalies"])
@@ -582,7 +602,7 @@ def detect_anomalies(
         summary=spike_summary,
         details=spike_details,
         fingerprint=spike_fp,
-        trigger_explore=spike_active and spike_severity >= 0.32,
+        trigger_explore=spike_active and spike_severity >= SENSOR_SPIKE_TRIGGER_SEVERITY,
         now=current_now,
     )
     updated_anomalies["unresolved_loop"] = _update_record(
@@ -595,22 +615,12 @@ def detect_anomalies(
         trigger_explore=loop_active,
         now=current_now,
     )
-    updated_anomalies["world_model_mismatch"] = _update_record(
-        updated_anomalies["world_model_mismatch"],
-        active=mismatch_active,
-        severity=mismatch_severity,
-        summary=mismatch_summary,
-        details=mismatch_details,
-        fingerprint=mismatch_fp,
-        trigger_explore=mismatch_active,
-        now=current_now,
-    )
 
     current["version"] = STATE_VERSION
     current["updated_at"] = current_now.isoformat(timespec="seconds")
     current["last_loop"] = _clean(loop_name)
     current["last_trigger_reason"] = _clean(trigger_reason)
-    current["last_sensor_text"] = sensor_text
+    current["last_sensor_text"] = _clean(sensor_logs)
     current["last_open_loops_text"] = loops_text
     current["last_sensor_snapshot"] = sensor_snapshot
     current["last_open_loops"] = loop_snapshot
@@ -638,28 +648,49 @@ def summarize_state(state: Mapping[str, Any] | None) -> dict[str, Any]:
         "active": len(active),
         "sensor_spike": int(not _as_bool(current["anomalies"]["sensor_spike"].get("resolved"), True)),
         "unresolved_loop": int(not _as_bool(current["anomalies"]["unresolved_loop"].get("resolved"), True)),
-        "world_model_mismatch": int(not _as_bool(current["anomalies"]["world_model_mismatch"].get("resolved"), True)),
         "urgency": compute_explore_urgency(current),
     }
 
 
-def compute_explore_urgency(state: Mapping[str, Any] | None) -> int:
+def _urgency_stale_factor(record: Mapping[str, Any], now: _dt.datetime | None = None) -> float:
+    active_since = (
+        _parse_ts(record.get("active_since"))
+        or _parse_ts(record.get("detected_at"))
+        or _parse_ts(record.get("last_seen_at"))
+    )
+    if active_since is None:
+        return 1.0
+    try:
+        age_hours = max(0.0, ((now or _now()) - active_since).total_seconds() / 3600.0)
+    except Exception:
+        return 1.0
+    if age_hours <= URGENCY_STALE_FULL_HOURS:
+        return 1.0
+    if age_hours >= URGENCY_STALE_ZERO_HOURS:
+        return 0.0
+    span = max(0.1, URGENCY_STALE_ZERO_HOURS - URGENCY_STALE_FULL_HOURS)
+    return _clamp(1.0 - ((age_hours - URGENCY_STALE_FULL_HOURS) / span), 0.0, 1.0)
+
+
+def compute_explore_urgency(state: Mapping[str, Any] | None, *, now: _dt.datetime | None = None) -> int:
     current = normalize_state(state)
     urgency = 0.0
     weights = {
         "sensor_spike": 18.0,
         "unresolved_loop": 14.0,
-        "world_model_mismatch": 22.0,
     }
     for record in current["anomalies"].values():
         if _as_bool(record.get("resolved"), True):
             continue
         type_name = _clean(record.get("type"))
-        weight = weights.get(type_name, 10.0)
+        weight = weights.get(type_name)
+        if weight is None:
+            continue
         severity = _clamp(record.get("severity"))
-        urgency += severity * weight
+        factor = _urgency_stale_factor(record, now=now)
+        urgency += severity * weight * factor
         if _as_bool(record.get("trigger_explore"), False):
-            urgency += severity * 6.0
+            urgency += severity * 6.0 * factor
     return int(max(0.0, min(45.0, round(urgency))))
 
 
@@ -671,7 +702,6 @@ def format_context_block(state: Mapping[str, Any] | None, limit: int = 3) -> str
     type_labels = {
         "sensor_spike": "センサー急変",
         "unresolved_loop": "未解決ループ",
-        "world_model_mismatch": "世界モデルのズレ",
     }
     lines = []
     for record in active[: max(1, limit)]:
@@ -697,7 +727,6 @@ def format_log_line(label: str, state: Mapping[str, Any] | None, **fields: Any) 
         f"urgency={summary['urgency']}",
         f"sensor_spike={summary['sensor_spike']}",
         f"unresolved_loop={summary['unresolved_loop']}",
-        f"world_model_mismatch={summary['world_model_mismatch']}",
     ]
     for key, value in fields.items():
         if value is None:
