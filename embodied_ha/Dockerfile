@@ -3,7 +3,7 @@ FROM node:22-slim
 # システム依存パッケージ
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip ffmpeg curl ca-certificates jq git mosquitto-clients \
-    libasound2-plugins \
+    libasound2-plugins pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true

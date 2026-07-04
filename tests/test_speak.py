@@ -132,6 +132,36 @@ class SpeakTcpTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(sent_data, [pcm_data])
 
+    def test_local_success_plays_to_sink(self):
+        prefs = {
+            "tts_provider": "tts.home_assistant_cloud",
+            "stt_language": "ja-JP",
+            "speakers": [
+                {
+                    "room": "本体",
+                    "label": "本体（M720q内蔵）",
+                    "type": "local",
+                    "sink": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+                }
+            ],
+        }
+        pcm_data = b"\x00\x01" * 800
+        played = []
+
+        prefs_path = self._write_prefs(prefs)
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(self.speak, "_fetch_pcm_for_message", return_value=pcm_data), \
+                 mock.patch.object(self.speak, "_play_pcm_local",
+                                   side_effect=lambda pcm, sink="", **kw: played.append((pcm, sink))):
+                ok = self.speak.speak("本体", "こんにちは")
+        finally:
+            os.unlink(prefs_path)
+
+        self.assertTrue(ok)
+        self.assertEqual(played, [(pcm_data, "alsa_output.pci-0000_00_1f.3.analog-stereo")])
+
     def test_tcp_missing_host_returns_false(self):
         prefs = {
             "tts_provider": "tts.home_assistant_cloud",

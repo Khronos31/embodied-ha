@@ -141,6 +141,28 @@ def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5)
         sock.sendall(pcm_bytes)
 
 
+def _play_pcm_local(pcm_bytes: bytes, sink: str = "", sample_rate: int = 16000,
+                    channels: int = 1, timeout: float = 30) -> None:
+    """コンテナ内の PulseAudio へ raw s16le PCM を再生する（ホスト内蔵スピーカー等）。
+    audio:true でホスト音声が注入され run.sh が PULSE_SERVER を設定済みなので、
+    sink（例: alsa_output.pci-0000_00_1f.3.analog-stereo）へそのまま出せる。
+    sink 未指定なら PulseAudio の既定 sink。
+    """
+    cmd = ["paplay", "--raw", f"--rate={sample_rate}",
+           f"--channels={channels}", "--format=s16le"]
+    if sink:
+        cmd.append(f"--device={sink}")
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        _, err = proc.communicate(input=pcm_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError("paplay timed out")
+    if proc.returncode != 0:
+        raise RuntimeError(f"paplay failed: {err.decode('utf-8', errors='replace').strip()}")
+
+
 def play_pcm_file(room, pcm_path, host=""):
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
 
@@ -279,6 +301,44 @@ def speak(room, message, host=""):
             return True
         except Exception as exc:
             print(f"[speak] tcp:{room} 送信失敗: {exc}", file=sys.stderr)
+            return False
+
+    elif config.get("type") == "local":
+        # ホスト(M720q)の内蔵スピーカー等、コンテナの PulseAudio へ直接再生する。
+        # audio:true でホスト音声が注入され、run.sh が PULSE_SERVER を設定済み。
+        # 合成は tcp 経路と同じ（HA TTS → mono s16le 16kHz PCM）を再利用。
+        sink = (config.get("sink") or "").strip()
+        _global_tts_entity = (prefs.get("tts_entity") or "").strip()
+        _derived_provider = _global_tts_entity.removeprefix("tts.") if _global_tts_entity else ""
+        tts_provider = (
+            config.get("tts_provider")
+            or prefs.get("tts_provider")
+            or _derived_provider
+            or ""
+        ).strip()
+        tts_language = (
+            config.get("tts_language")
+            or prefs.get("stt_language")
+            or "ja-JP"
+        ).strip()
+        if not tts_provider:
+            print(f"[speak] local speaker '{room}': tts_provider が未設定", file=sys.stderr)
+            return False
+
+        try:
+            pcm_bytes = _fetch_pcm_for_message(
+                message, ha_url, ha_token, tts_provider, tts_language
+            )
+        except Exception as exc:
+            print(f"[speak] local:{room} TTS 取得失敗: {exc}", file=sys.stderr)
+            return False
+
+        try:
+            _play_pcm_local(pcm_bytes, sink=sink)
+            print(f"[speak] local:{room} OK played={len(pcm_bytes)}B sink={sink or '(default)'}")
+            return True
+        except Exception as exc:
+            print(f"[speak] local:{room} 再生失敗: {exc}", file=sys.stderr)
             return False
 
     else:
