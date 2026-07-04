@@ -261,7 +261,7 @@ case "$MODE" in
 esac
 
 AUTONOMOUS_NOTE=""
-_boundary_json=$(env SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT" python3 "$SCRIPT_DIR/boundary.py" --json --mode "$MODE" --intent action --hour "$HOUR" --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE" --person "$RESIDENT" --body-state-json "$BODY_STATE" --sociality-log-dir "$LOG_DIR" 2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
+_boundary_json=$(env SENSORS_DATA="$PRESENCE_SENSORS" RESIDENT="$RESIDENT" python3 "$SCRIPT_DIR/boundary.py" --json --preflight --mode "$MODE" --intent action --hour "$HOUR" --autonomous "${EHA_AUTONOMOUS:-0}" --prefs-file "$EHA_PREFS_FILE" --person "$RESIDENT" --body-state-json "$BODY_STATE" --sociality-log-dir "$LOG_DIR" 2>/dev/null || printf '%s' '{"allowed":false,"reason":"boundary失敗","fallback":null}')
 _action_allowed=$(printf '%s' "$_boundary_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['allowed'])" 2>/dev/null || echo "False")
 if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   ALLOWED_TOOLS="${ALLOWED_TOOLS},mcp__hacontrol__ha_call_service"

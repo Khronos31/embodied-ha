@@ -92,6 +92,12 @@ def _presence_any_home(presence: dict[str, bool]) -> bool:
     return any(bool(v) for v in presence.values())
 
 
+def _presence_evidence(presence: dict[str, bool]) -> list[str]:
+    if not presence:
+        return ["presence=unknown"]
+    return [f"presence={name}:{'on' if value else 'off'}" for name, value in sorted(presence.items())]
+
+
 def _quiet_hours_reason(intent: str) -> str:
     if intent == "speak":
         return "深夜帯（1-6時）のため発話抑制"
@@ -249,8 +255,9 @@ def _presence_from_sensors_text(
         if ":" not in line:
             continue
         left, right = line.split(":", 1)
-        if any(left.strip() == label for label in labels if label):
-            return {resident_label or "resident": _truthy(right.strip())}
+        label = left.strip()
+        if any(label == candidate for candidate in labels if candidate):
+            return {label or resident_label or "resident": _truthy(right.strip())}
     return {}
 
 
@@ -317,6 +324,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--person", default=os.environ.get("RESIDENT", ""))
     parser.add_argument("--body-state-json", default=os.environ.get("EHA_BODY_STATE", ""))
     parser.add_argument("--sociality-log-dir", default=os.environ.get("EHA_LOG_DIR", ""))
+    parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -356,14 +364,14 @@ def main(argv: list[str] | None = None) -> int:
         body_state=body_state,
         sociality_log_dir=args.sociality_log_dir,
     )
-    if not result.get("allowed"):
+    if not result.get("allowed") and not args.preflight:
         intent = _compact(args.intent)
         reason = str(result.get("reason") or "boundary_denied")
         evidence = [f"hour={args.hour}"]
         if args.metadata_json:
             evidence.append(f"metadata={args.metadata_json}")
-        if args.body_state_json:
-            evidence.append("body_state=present")
+        if intent == "action":
+            evidence.extend(_presence_evidence(presence))
         try:
             hour = int(args.hour)
         except Exception:

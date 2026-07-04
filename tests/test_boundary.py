@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -294,6 +296,70 @@ class BoundaryTests(unittest.TestCase):
                 sociality_log_dir=tmpdir,
             )
             self.assertTrue(refreshed["allowed"])
+
+    def test_preflight_denial_does_not_record_counterfactual(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = self._write_presence_prefs(tmpdir)
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = boundary.main(
+                    [
+                        "--json",
+                        "--preflight",
+                        "--mode",
+                        "reflect",
+                        "--intent",
+                        "action",
+                        "--hour",
+                        "14",
+                        "--autonomous",
+                        "1",
+                        "--prefs-file",
+                        str(prefs),
+                        "--person",
+                        "ゆの",
+                        "--body-state-json",
+                        '{"energy": 0.5}',
+                        "--sociality-log-dir",
+                        tmpdir,
+                    ]
+                )
+            self.assertEqual(rc, 1)
+            self.assertFalse((Path(tmpdir) / "counterfactuals.jsonl").exists())
+
+    def test_action_denial_evidence_uses_presence_value_not_body_state_marker(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = self._write_presence_prefs(tmpdir)
+            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = boundary.main(
+                        [
+                            "--json",
+                            "--mode",
+                            "explore",
+                            "--intent",
+                            "action",
+                            "--hour",
+                            "14",
+                            "--autonomous",
+                            "1",
+                            "--prefs-file",
+                            str(prefs),
+                            "--sensors-text",
+                            "## 在宅状態\n潤哉: off\nまどか: off",
+                            "--person",
+                            "ゆの",
+                            "--body-state-json",
+                            '{"energy": 0.5}',
+                            "--sociality-log-dir",
+                            tmpdir,
+                        ]
+                    )
+            self.assertEqual(rc, 1)
+            rows = (Path(tmpdir) / "counterfactuals.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(rows), 1)
+            row = json.loads(rows[0])
+            self.assertIn("presence=潤哉:off", row["evidence"])
+            self.assertNotIn("body_state=present", row["evidence"])
 
 
 if __name__ == "__main__":
