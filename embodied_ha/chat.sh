@@ -543,7 +543,7 @@ if _sd:
             "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
             "mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,"
             "mcp__game__game_wiki6_start,mcp__game__game_wiki6_getlinks,mcp__game__game_wiki6_solve,"
-            "mcp__game__game_wordvec_race_start,mcp__game__game_wordvec_race_submit,mcp__game__game_wordvec_race_hint,"
+            "mcp__game__game_wordvec_race_start,mcp__game__game_wordvec_race_cpu_move,mcp__game__game_wordvec_race_submit,mcp__game__game_wordvec_race_hint,"
             "Read"
         )
         if chat_source == "voice":
