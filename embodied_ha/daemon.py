@@ -435,7 +435,13 @@ def run_chance(schedule=None, body_state_snapshot=None, loop_name="loop", desire
             chance += round(desire_pressure * 18)
     if loop_name == "loop" and anomaly_urgency:
         chance += int(anomaly_urgency)
-    return max(5, min(100, chance))
+    # 下限クランプ。既定0＝各時間帯の確率をそのまま尊重（0%なら発火しない）。
+    # 体調が悪い時間帯に完全停止して復帰しなくなるのを防ぎたい場合のみ正の値を設定する。
+    try:
+        min_p = max(0, min(100, int(schedule.get("min_probability", 0))))
+    except (TypeError, ValueError):
+        min_p = 0
+    return max(min_p, min(100, chance))
 
 def loop_scheduler():
     schedule = load_schedule()

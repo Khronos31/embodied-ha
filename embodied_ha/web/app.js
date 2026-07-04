@@ -1739,6 +1739,8 @@ async function renderSettingsForm() {
     if (loopLateProbEl) loopLateProbEl.value = loopSchedule.late_probability ?? 30;
     const loopNightProbEl = document.getElementById('setting-loop-night-prob');
     if (loopNightProbEl) loopNightProbEl.value = loopSchedule.night_probability ?? 10;
+    const loopMinProbEl = document.getElementById('setting-loop-min-prob');
+    if (loopMinProbEl) loopMinProbEl.value = loopSchedule.min_probability ?? 0;
 
     const policiesList = document.getElementById('policies-list');
     policiesList.innerHTML = '';
@@ -2045,6 +2047,7 @@ function serializeFormToPrefs() {
         day_probability: parseInt(document.getElementById('setting-loop-day-prob')?.value, 10) || 0,
         late_probability: parseInt(document.getElementById('setting-loop-late-prob')?.value, 10) || 0,
         night_probability: parseInt(document.getElementById('setting-loop-night-prob')?.value, 10) || 0,
+        min_probability: parseInt(document.getElementById('setting-loop-min-prob')?.value, 10) || 0,
     } : (prefsData.loop_schedule || undefined);
 
     const policies = [];
@@ -3599,6 +3602,7 @@ async function handleSaveSettings(e) {
             day_probability: parseInt(document.getElementById('setting-loop-day-prob')?.value, 10) || 0,
             late_probability: parseInt(document.getElementById('setting-loop-late-prob')?.value, 10) || 0,
             night_probability: parseInt(document.getElementById('setting-loop-night-prob')?.value, 10) || 0,
+            min_probability: parseInt(document.getElementById('setting-loop-min-prob')?.value, 10) || 0,
         };
         if (activeSettingsTab === 'advanced' && jsonEditor) {
             jsonEditor.setValue(JSON.stringify(nextPrefs, null, 2));
@@ -4134,7 +4138,7 @@ function initMockPreferences() {
             presence: { entity: "" },
             policies: [],
             sensors: { groups: [] },
-            loop_schedule: { loop_interval: 1800, day_probability: 100, late_probability: 30, night_probability: 10 }
+            loop_schedule: { loop_interval: 1800, day_probability: 100, late_probability: 30, night_probability: 10, min_probability: 0 }
         };
         updateCharacterName(prefsData);
         updateDynamicFeaturesUI();

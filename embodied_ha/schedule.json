@@ -2,5 +2,6 @@
   "loop_interval": 1800,
   "day_probability": 100,
   "late_probability": 30,
-  "night_probability": 10
+  "night_probability": 10,
+  "min_probability": 0
 }

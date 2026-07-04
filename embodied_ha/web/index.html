@@ -564,6 +564,12 @@
                                     </div>
                                 </div>
                             </div>
+
+                            <div class="form-group" style="max-width: 320px;">
+                                <label class="form-label">最低発火確率の下限（%）</label>
+                                <input type="number" id="setting-loop-min-prob" min="0" max="100" step="1" placeholder="0" class="form-input">
+                                <p class="form-hint">上の確率がこの値を下回っても、最低これだけは発火します。<strong>0なら確率どおり</strong>（例: 深夜0%にすると本当に沈黙します）。体調が悪い時間帯に完全停止して戻ってこなくなるのを防ぎたい場合だけ、小さな値（例: 2〜5）を入れてください。既定は0。</p>
+                            </div>
                         </section>
                         <section class="settings-section card">
                             <h3>preferences.json の直接編集</h3>
