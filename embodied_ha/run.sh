@@ -46,7 +46,7 @@ export PATH="${EHA_TOOLS_PATH}:${PATH}"
 # libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。
 # ソケットパスは HAOS バージョンで変わる可能性があるため複数パスを試す。
 if [ -z "${PULSE_SERVER:-}" ]; then
-    for _pulse_sock in "/run/audio/native" "/run/pulse/native" "/var/run/pulse/native" "/run/user/0/pulse/native"; do
+    for _pulse_sock in "/run/audio/pulse.sock" "/run/audio/native" "/run/pulse/native" "/var/run/pulse/native" "/run/user/0/pulse/native"; do
         if [ -S "$_pulse_sock" ]; then
             export PULSE_SERVER="unix://${_pulse_sock}"
             echo "[run] PulseAudio: PULSE_SERVER=unix://${_pulse_sock}"
@@ -55,20 +55,22 @@ if [ -z "${PULSE_SERVER:-}" ]; then
     done
     unset _pulse_sock
 fi
+# ソケットが見つからなかった時だけ、原因特定用の診断情報を出す
+# （見つかった通常時はログを汚さない。HAOS更新でパスが変わって再び失敗した際に効く）
 if [ -z "${PULSE_SERVER:-}" ]; then
     echo "[run] PulseAudio: ソケット見つからず（/run ls: $(find /run -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)）"
-fi
-if [ -d /run/audio ]; then
-    echo "[run] PulseAudio-diag: ls -la /run/audio"
-    ls -la /run/audio 2>&1 | sed 's/^/[run] PulseAudio-diag: /'
-else
-    echo "[run] PulseAudio-diag: /run/audio not found"
-fi
-if [ -f /etc/asound.conf ]; then
-    echo "[run] PulseAudio-diag: cat /etc/asound.conf"
-    sed 's/^/[run] PulseAudio-diag: /' /etc/asound.conf
-else
-    echo "[run] PulseAudio-diag: /etc/asound.conf not found"
+    if [ -d /run/audio ]; then
+        echo "[run] PulseAudio-diag: ls -la /run/audio"
+        ls -la /run/audio 2>&1 | sed 's/^/[run] PulseAudio-diag: /'
+    else
+        echo "[run] PulseAudio-diag: /run/audio not found"
+    fi
+    if [ -f /etc/asound.conf ]; then
+        echo "[run] PulseAudio-diag: cat /etc/asound.conf"
+        sed 's/^/[run] PulseAudio-diag: /' /etc/asound.conf
+    else
+        echo "[run] PulseAudio-diag: /etc/asound.conf not found"
+    fi
 fi
 
 mkdir -p /data/embodied-ha
