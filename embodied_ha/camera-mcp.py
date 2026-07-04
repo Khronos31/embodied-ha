@@ -14,6 +14,8 @@ import subprocess
 import sys
 
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
+from media_capture import fetch_frame
+from media_registry import resolve_media_item
 from sensory_origin import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, load_prefs
 
@@ -33,6 +35,25 @@ TOOL_USE_DEVICE_CAMERA = {
                 "enum": ["capture", "ptz_left", "ptz_right", "ptz_up", "ptz_down"],
                 "description": "実行するアクション。デフォルトは capture",
             }
+        },
+        "required": [],
+    },
+}
+
+TOOL_WATCH_MEDIA = {
+    "name": "watch_media",
+    "description": (
+        "テレビ・PC画面等のメディアを観る。カメラ(部屋を見る目)とは別で、侵入不要。\n"
+        "video_media に登録された映像ソースを id / source / label で解決して現在フレームを返す。\n"
+        "current_entity を問わず使える。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "video_media の id / source / label。省略時は video_media が1件ならそれを使う。",
+            },
         },
         "required": [],
     },
@@ -150,26 +171,6 @@ def press_button(entity_id, ha_url):
     return r.returncode == 0
 
 
-def fetch_image(source, ha_url, go2rtc_url):
-    if "." in source:
-        base = ha_url.rstrip("/")
-        if base.endswith("/api"):
-            base = base[:-4]
-        url = f"{base}/api/camera_proxy/{source}"
-        token = get_ha_token()
-        r = subprocess.run(
-            ["curl", "-sf", "--max-time", "8", "-H", f"Authorization: Bearer {token}", url],
-            capture_output=True,
-        )
-    else:
-        url = go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={source}"
-        r = subprocess.run(["curl", "-sf", "--max-time", "8", url], capture_output=True)
-
-    if r.returncode != 0 or len(r.stdout) < 100:
-        return None, url
-    return base64.b64encode(r.stdout).decode(), url
-
-
 def send(obj):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
@@ -197,8 +198,9 @@ def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: 
     if not source:
         send({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "カメラソースが見つかりません"}], "isError": True}})
         return
-    b64, url = fetch_image(source, ha_url, go2rtc_url)
-    if b64:
+    frame = fetch_frame(source, ha_url=ha_url, go2rtc_url=go2rtc_url, token=get_ha_token())
+    if frame:
+        b64 = base64.b64encode(frame).decode()
         context = camera_context(source)
         try:
             apply_action_to_body_state(
@@ -217,10 +219,46 @@ def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: 
             ]
         }})
     else:
+        url = f"{ha_url.rstrip('/')}/camera_proxy/{source}" if "." in source else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={source}"
         send({"jsonrpc": "2.0", "id": req_id, "result": {
             "content": [{"type": "text", "text": f"取得失敗: {source}（タイムアウトまたは未起動）\nURL: {url}"}],
             "isError": True
         }})
+
+
+def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id):
+    prefs = _load_prefs()
+    item, resolved_source, _ = resolve_media_item(prefs, source, buckets=("video_media",), allow_single=True)
+    if not item:
+        if source:
+            err = f"その映像ソースは未登録です（video_media に追加してください）: {clean(source)}"
+        else:
+            err = "watch_media に使える video_media が見つかりません"
+        send({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": err}], "isError": True}})
+        return
+
+    frame = fetch_frame(resolved_source, ha_url=ha_url, go2rtc_url=go2rtc_url, token=get_ha_token())
+    if not frame:
+        url = f"{ha_url.rstrip('/')}/camera_proxy/{resolved_source}" if "." in resolved_source else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={resolved_source}"
+        send({"jsonrpc": "2.0", "id": req_id, "result": {
+            "content": [{"type": "text", "text": f"取得失敗: {resolved_source}（タイムアウトまたは未起動）\nURL: {url}"}],
+            "isError": True
+        }})
+        return
+
+    context = {
+        "id": clean(item.get("id")),
+        "source": resolved_source,
+        "label": clean(item.get("label")),
+        "room": clean(item.get("room")),
+        "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    send({"jsonrpc": "2.0", "id": req_id, "result": {
+        "content": [
+            {"type": "text", "text": json.dumps({"media_context": context}, ensure_ascii=False)},
+            {"type": "image", "data": base64.b64encode(frame).decode(), "mimeType": "image/jpeg"},
+        ]
+    }})
 
 
 def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str, req_id):
@@ -271,11 +309,14 @@ def main():
             pass
 
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": [TOOL_USE_DEVICE_CAMERA]}})
+            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": [TOOL_USE_DEVICE_CAMERA, TOOL_WATCH_MEDIA]}})
 
         elif method == "tools/call":
             tool_name = req["params"]["name"]
             call_args = req["params"].get("arguments", {})
+            if tool_name == "watch_media":
+                _handle_watch_media(call_args.get("source"), args.ha_url, args.go2rtc_url, id_)
+                continue
             if tool_name != "use_device_camera":
                 send({"jsonrpc": "2.0", "id": id_, "result": {
                     "content": [{"type": "text", "text": f"未知のツール: {tool_name}"}],

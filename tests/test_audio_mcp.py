@@ -342,5 +342,31 @@ class AudioMcpTests(unittest.TestCase):
         local_mock.assert_called_once_with("/tmp/example.wav")
 
 
+
+    def test_listen_media_resolves_audio_media_to_recordable_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            prefs.write_text(
+                json.dumps({"audio_media": [{"id": "capture_tv_audio", "source": "capture_tv", "label": "テレビ音声", "room": "living"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs)}, clear=False),                  mock.patch.object(self.audio_mcp, "_current_body_state", return_value=({}, "", "", "")),                  mock.patch.object(self.audio_mcp, "_audio_listen_from_source", return_value=([{"type": "text", "text": "ok"}], False)) as listen_mock:
+                result = self.audio_mcp.listen_media({"source": "capture_tv_audio", "duration": 7, "transcribe": True})
+        self.assertEqual(result, ([{"type": "text", "text": "ok"}], False))
+        listen_mock.assert_called_once()
+        args, kwargs = listen_mock.call_args
+        self.assertEqual(args[0], "rtsp://localhost:8554/capture_tv")
+        self.assertEqual(args[1], 7)
+        self.assertTrue(args[2])
+        self.assertEqual(kwargs["source_label_override"], "テレビ音声")
+        self.assertEqual(kwargs["extra_payload"]["media_context"]["media_id"], "capture_tv_audio")
+        self.assertEqual(kwargs["extra_payload"]["media_context"]["label"], "テレビ音声")
+
+    def test_listen_media_errors_for_unknown_source(self):
+        with mock.patch.object(self.audio_mcp, "_current_body_state", return_value=({}, "", "", "")),              mock.patch.object(self.audio_mcp, "_resolve_audio_media_item", return_value=({}, "")):
+            result = self.audio_mcp.listen_media({"source": "missing"})
+        self.assertTrue(result[1])
+        self.assertIn("未登録", result[0][0]["text"])
+
 if __name__ == "__main__":
     unittest.main()

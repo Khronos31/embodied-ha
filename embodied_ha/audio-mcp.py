@@ -18,6 +18,7 @@ from pathlib import Path
 import audio_stt
 from audio_source_resolve import DEFAULT_SOURCE, resolve_audio_source
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
+from media_registry import resolve_media_item
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import log, serve, text
 from sensory_origin import classify_sensory_origin
@@ -262,7 +263,31 @@ def build_listen_spec() -> dict:
 
 TOOL_LISTEN = build_listen_spec()
 
-
+TOOL_LISTEN_MEDIA = {
+    "name": "listen_media",
+    "description": (
+        "番組音・音楽等のメディア音声を聴く。マイク(部屋を聞く耳)とは別で、侵入不要。\n"
+        "audio_media に登録された音声ソースを id / source / label で解決して録音・STT する。\n"
+        "current_entity を問わず使える。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "audio_media の id / source / label。",
+            },
+            "duration": {
+                "type": "integer",
+                "description": "録音秒数。デフォルト 5、最大 30",
+            },
+            "transcribe": {
+                "type": "boolean",
+                "description": "STT を行うか。デフォルト false",
+            },
+        },
+    },
+}
 
 TOOL_READ_AUDIO_LOG = {
 
@@ -366,6 +391,23 @@ def _source_map() -> dict[str, dict]:
 
 def _source_config_map() -> dict[str, dict]:
     return {clean(item.get("source")): item for item in load_mic_configs()}
+
+
+def _audio_media_source_uri(item: dict) -> str:
+    source = clean(item.get("source"))
+    if not source:
+        return ""
+    if "://" in source:
+        return source
+    return f"rtsp://localhost:8554/{source}"
+
+
+def _resolve_audio_media_item(source: str | None = None) -> tuple[dict, str]:
+    prefs = load_preferences()
+    item, _, _ = resolve_media_item(prefs, source, buckets=("audio_media",), allow_single=True)
+    if not item:
+        return {}, ""
+    return item, _audio_media_source_uri(item)
 
 
 def label_for_source(source: str) -> str:
@@ -780,11 +822,11 @@ def _speak_with_entry(entry: dict, message: str, *, mode_desc: str = "") -> tupl
     return [text(f"発話しました（{label}）")], False
 
 
-def _audio_listen_from_source(source: str, duration: int, transcribe: bool):
+def _audio_listen_from_source(source: str, duration: int, transcribe: bool, *, source_label_override: str | None = None, extra_payload: dict | None = None):
     source = normalize_source_uri(source)
     timestamp = now().isoformat(timespec="seconds")
     actor = clean(os.environ.get("EHA_ACTOR")) or "unknown"
-    source_label = label_for_source(source)
+    source_label = source_label_override or label_for_source(source)
     sensory = sensory_for_source(source, source_label)
 
     def base_payload() -> dict:
@@ -846,6 +888,8 @@ def _audio_listen_from_source(source: str, duration: int, transcribe: bool):
             "stt_provider": None,
             "stt_language": None,
         }
+        if extra_payload:
+            payload.update(extra_payload)
         if transcribe:
             payload["stt_provider"] = load_stt_provider()
             payload["stt_language"] = load_stt_language()
@@ -927,6 +971,36 @@ def listen(args: dict):
     return _audio_listen_from_source(source, duration, transcribe)
 
 
+def listen_media(args: dict):
+    _, current_entity, _, projected_room = _current_body_state()
+    broken_state = _broken_cyber_state_error(current_entity, projected_room)
+    if broken_state:
+        return broken_state
+    source_arg = clean(args.get("source"))
+    duration = normalize_duration(args.get("duration"))
+    transcribe_arg = args.get("transcribe", False)
+    transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)
+    item, record_source = _resolve_audio_media_item(source_arg or None)
+    if not item:
+        if source_arg:
+            return [text(f"その音声ソースは未登録です（audio_media に追加してください）: {source_arg}")], True
+        return [text("listen_media に使える audio_media が見つかりません")], True
+    media_context = {
+        "media_id": clean(item.get("id")),
+        "media_source": record_source,
+        "label": clean(item.get("label")),
+        "room": clean(item.get("room")),
+        "timestamp": now().isoformat(timespec="seconds"),
+    }
+    return _audio_listen_from_source(
+        record_source,
+        duration,
+        transcribe,
+        source_label_override=clean(item.get("label")),
+        extra_payload={"media_context": media_context},
+    )
+
+
 def use_device_microphone(args: dict):
     _, current_entity, _, projected_room = _current_body_state()
     broken_state = _broken_cyber_state_error(current_entity, projected_room)
@@ -971,6 +1045,7 @@ def concentrate_hearing(args: dict):
 if __name__ == "__main__":
     serve("audio-mcp", "1.0", {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
+        "listen_media": {"spec": TOOL_LISTEN_MEDIA, "handler": listen_media},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
         "read_heard_audio_log": {"spec": TOOL_READ_HEARD_AUDIO_LOG, "handler": read_heard_audio_log},
         "read_active_listen_log": {"spec": TOOL_READ_ACTIVE_LISTEN_LOG, "handler": read_active_listen_log},
