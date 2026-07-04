@@ -4,6 +4,8 @@
 
 `preferences.json` は会話で育てる主要設定ファイルです。実体は `EHA_PREFS_FILE`（通常 `/config/embodied-ha/preferences.json`）にあり、`chat.sh` の `preferences_update` から自動更新されます。
 
+知覚系の設定は、身体的知覚とメディア受信で分けて扱います。`cameras` と `mics` は実際にその機器へ侵入して使う身体的知覚で、部屋や減衰、在室推定に影響します。一方 `video_media` と `audio_media` は侵入不要のメディア受信で、部屋は文脈としてのみ使われ、減衰や在室判定には影響しません。
+
 ## トップレベル
 
 ### `character_name`
@@ -62,7 +64,7 @@ STT の言語コードです。
 |---|---|
 | array of object | `[]` |
 
-カメラデバイス一覧です。`camera-mcp` は `use_device_camera` だけを公開しており、`source` と `ha_entity` の組み合わせを使って画像取得や PTZ を行います。
+目として使うカメラ一覧です。侵入が必要な身体的知覚で、`camera-mcp` の `use_device_camera` が参照します。
 
 各要素の主なフィールド:
 
@@ -70,11 +72,10 @@ STT の言語コードです。
 |---|---|---|---|
 | `entity` | string | ○ | 侵入時に使う短い ID か HA entity_id |
 | `source` | string | ○ | go2rtc ストリーム名または HA camera entity_id |
-| `ha_entity` | string | — | HA カメラ entity_id。`source` が go2rtc 名のとき画像取得/PTZ に必要 |
-| `room` | string | — | 設置部屋 |
-| `label` | string | — | 表示名 |
-| `note` | string | — | 補足 |
+| `room` | string | ○ | 設置部屋 |
+| `label` | string | ○ | 表示名 |
 | `ptz` | object | — | `left/right/up/down` から button entity への対応表 |
+| `note` | string | — | 補足 |
 
 `ptz` の例:
 
@@ -89,13 +90,13 @@ STT の言語コードです。
 
 ---
 
-### `audio_sources`
+### `mics`
 
 | 型 | デフォルト |
 |---|---|
 | array of object | `[]` |
 
-マイクデバイス一覧です。`audio-mcp` の `listen` と `use_device_microphone`、`audio_daemon.py` が参照します。
+耳として使うマイク一覧です。侵入が必要な身体的知覚で、`audio-mcp` の `listen` と `use_device_microphone`、`audio_daemon.py` が参照します。
 
 各要素の主なフィールド:
 
@@ -103,13 +104,53 @@ STT の言語コードです。
 |---|---|---|---|
 | `entity` | string | ○ | 短い ID か HA entity_id |
 | `source` | string | ○ | `rtsp://...`, `alsa://default`, `tcp://host:port` のいずれか |
+| `room` | string | ○ | 所在部屋 |
 | `label` | string | ○ | 表示名 |
-| `room` | string | — | 所在部屋 |
-| `note` | string | — | 補足 |
 | `stt_enabled` | boolean | — | 常時 STT を有効にするか |
-| `stt_retention_hours` | number | — | STT ログ保持時間 |
-| `wake_word_enabled` | boolean | — | ウェイクワード検出を有効にするか |
-| `background_hearing_enabled` | boolean | — | 背景音の常時聴取を有効にするか |
+| `note` | string | — | 補足 |
+
+`stt_enabled: true` の `mics` は `audio_daemon.py` の監視対象になります。旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。
+
+---
+
+### `video_media`
+
+| 型 | デフォルト |
+|---|---|
+| array of object | `[]` |
+
+侵入不要で観る映像ソース一覧です。部屋は文脈としてのみ持ち、在室推定や距離減衰には使いません。
+
+各要素の主なフィールド:
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| `id` | string | ○ | 一意な ID |
+| `source` | string | ○ | 映像ソース名、URL、または取得先の識別子 |
+| `room` | string | — | 文脈上の部屋 |
+| `label` | string | ○ | 表示名 |
+| `note` | string | — | 補足 |
+
+---
+
+### `audio_media`
+
+| 型 | デフォルト |
+|---|---|
+| array of object | `[]` |
+
+侵入不要で聴く音声ソース一覧です。必要に応じて `video_media` と紐づけられますが、身体的知覚ではありません。
+
+各要素の主なフィールド:
+
+| フィールド | 型 | 必須 | 説明 |
+|---|---|---|---|
+| `id` | string | ○ | 一意な ID |
+| `source` | string | ○ | 音声ソース名、URL、または取得先の識別子 |
+| `room` | string | — | 文脈上の部屋 |
+| `label` | string | ○ | 表示名 |
+| `note` | string | — | 補足 |
+| `video_media` | string | — | 関連する映像ソース ID |
 
 `discover.py` は `media_player` の候補から `speakers` の下書きも作ります。
 
