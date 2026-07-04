@@ -257,6 +257,7 @@ def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id
         "content": [
             {"type": "text", "text": json.dumps({"media_context": context}, ensure_ascii=False)},
             {"type": "image", "data": base64.b64encode(frame).decode(), "mimeType": "image/jpeg"},
+            {"type": "text", "text": '観た内容を残すなら record_episode(kind="media_watch", ...) を使ってよい。'},
         ]
     }})
 

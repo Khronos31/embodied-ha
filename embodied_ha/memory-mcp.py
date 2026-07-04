@@ -475,7 +475,9 @@ def main() -> None:
                 "name": "record_episode",
                 "description": (
                     "出来事単位の episode を構造化して保存する。\n"
-                    "episode オブジェクトを丸ごと渡しても、トップレベルに summary / tags / importance を置いてもよい。"
+                    "episode オブジェクトを丸ごと渡しても、トップレベルに summary / tags / importance を置いてもよい。\n"
+                    "kind は自由文でよいが、代表例として observation（感覚の記録）、media_watch（映像メディア視聴の余暇体験）、"
+                    "media_listen（音声メディア視聴の余暇体験）がある。"
                 ),
                 "inputSchema": {
                     "type": "object",

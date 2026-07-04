@@ -361,6 +361,7 @@ class AudioMcpTests(unittest.TestCase):
         self.assertEqual(kwargs["source_label_override"], "テレビ音声")
         self.assertEqual(kwargs["extra_payload"]["media_context"]["media_id"], "capture_tv_audio")
         self.assertEqual(kwargs["extra_payload"]["media_context"]["label"], "テレビ音声")
+        self.assertEqual(kwargs["media_kind_hint"], '聴いた内容を残すなら record_episode(kind="media_listen", ...) を使ってよい。')
 
     def test_listen_media_errors_for_unknown_source(self):
         with mock.patch.object(self.audio_mcp, "_current_body_state", return_value=({}, "", "", "")),              mock.patch.object(self.audio_mcp, "_resolve_audio_media_item", return_value=({}, "")):

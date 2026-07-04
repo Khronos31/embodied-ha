@@ -107,6 +107,7 @@ class CameraMcpTests(unittest.TestCase):
         text_payload = sent[-1]["result"]["content"][0]["text"]
         self.assertIn('"media_context"', text_payload)
         self.assertIn('"label": "テレビ"', text_payload)
+        self.assertIn('record_episode(kind="media_watch"', sent[-1]["result"]["content"][-1]["text"])
         self.assertFalse(sent[-1]["result"].get("isError", False))
 
     def test_handle_watch_media_errors_for_unknown_source(self):

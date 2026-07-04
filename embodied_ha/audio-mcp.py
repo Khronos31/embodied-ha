@@ -822,7 +822,15 @@ def _speak_with_entry(entry: dict, message: str, *, mode_desc: str = "") -> tupl
     return [text(f"発話しました（{label}）")], False
 
 
-def _audio_listen_from_source(source: str, duration: int, transcribe: bool, *, source_label_override: str | None = None, extra_payload: dict | None = None):
+def _audio_listen_from_source(
+    source: str,
+    duration: int,
+    transcribe: bool,
+    *,
+    source_label_override: str | None = None,
+    extra_payload: dict | None = None,
+    media_kind_hint: str | None = None,
+):
     source = normalize_source_uri(source)
     timestamp = now().isoformat(timespec="seconds")
     actor = clean(os.environ.get("EHA_ACTOR")) or "unknown"
@@ -906,7 +914,10 @@ def _audio_listen_from_source(source: str, duration: int, transcribe: bool, *, s
             pass
         record_active_listen(payload, source)
         payload["audio_context"] = build_audio_context(payload)
-        return [text(json.dumps(payload, ensure_ascii=False))]
+        content = [text(json.dumps(payload, ensure_ascii=False))]
+        if media_kind_hint:
+            content.append(text(media_kind_hint))
+        return content
     finally:
         if tmp_path:
             try:
@@ -998,6 +1009,7 @@ def listen_media(args: dict):
         transcribe,
         source_label_override=clean(item.get("label")),
         extra_payload={"media_context": media_context},
+        media_kind_hint='聴いた内容を残すなら record_episode(kind="media_listen", ...) を使ってよい。',
     )
 
 

@@ -134,6 +134,33 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertEqual(payload["summary"], "")
         self.assertEqual(payload["kind"], "observation")
 
+    def test_list_episodes_filters_by_kind(self):
+        observation = self._json(
+            self.memory_mcp.record_episode(
+                {
+                    "timestamp": "2026-06-23T10:00:00+09:00",
+                    "day": "2026-06-23",
+                    "source": "watch",
+                    "kind": "observation",
+                    "summary": "部屋の温度を見た",
+                }
+            )
+        )
+        media = self._json(
+            self.memory_mcp.record_episode(
+                {
+                    "timestamp": "2026-06-23T11:00:00+09:00",
+                    "day": "2026-06-23",
+                    "source": "watch",
+                    "kind": "media_watch",
+                    "summary": "映画を見た",
+                }
+            )
+        )
+        items = self._json(self.memory_mcp.list_episodes({"kind": "media_watch"}))
+        self.assertEqual([item["id"] for item in items], [media["id"]])
+        self.assertNotIn(observation["id"], [item["id"] for item in items])
+
     def test_build_daybook_is_idempotent(self):
         episode = self._json(
             self.memory_mcp.record_episode(
