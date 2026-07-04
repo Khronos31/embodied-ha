@@ -2006,6 +2006,8 @@ function serializeFormToPrefs() {
             item.host = tr.dataset.host || '';
             const portNum = parseInt(tr.dataset.port || '3334', 10);
             item.port = isNaN(portNum) ? 3334 : portNum;
+        } else if (type === 'local') {
+            item.sink = tr.dataset.sink || undefined;
         }
         // undefinedキーを除去
         Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
@@ -2377,6 +2379,7 @@ function createSpeakerRow(item = {}) {
     const note = item.note || '';
     const host = item.host || '';
     const port = item.port || 3334;
+    const sink = item.sink || '';
 
     tr.dataset.type = type;
     tr.dataset.room = room;
@@ -2385,10 +2388,13 @@ function createSpeakerRow(item = {}) {
     tr.dataset.note = note;
     tr.dataset.host = host;
     tr.dataset.port = String(port);
+    tr.dataset.sink = sink;
 
     // 表示するエンティティ/ホスト文字列
     const entityDisplay = type === 'tcp'
         ? (host ? `${host}:${port}` : '（未設定）')
+        : type === 'local'
+        ? (sink || '(既定sink)')
         : (entity || '（未設定）');
 
     tr.innerHTML = `
@@ -2799,13 +2805,11 @@ function handleSpeakerTypeModalChange(select) {
     if (!modal) return;
     const ttsDiv = modal.querySelector('.speaker-fields-tts-modal');
     const tcpDiv = modal.querySelector('.speaker-fields-tcp-modal');
-    if (select.value === 'tcp') {
-        if (ttsDiv) ttsDiv.style.display = 'none';
-        if (tcpDiv) tcpDiv.style.display = 'block';
-    } else {
-        if (ttsDiv) ttsDiv.style.display = 'block';
-        if (tcpDiv) tcpDiv.style.display = 'none';
-    }
+    const localDiv = modal.querySelector('.speaker-fields-local-modal');
+    const v = select.value;
+    if (ttsDiv) ttsDiv.style.display = (v === 'tts') ? 'block' : 'none';
+    if (tcpDiv) tcpDiv.style.display = (v === 'tcp') ? 'block' : 'none';
+    if (localDiv) localDiv.style.display = (v === 'local') ? 'block' : 'none';
 }
 window.handleSpeakerTypeModalChange = handleSpeakerTypeModalChange;
 
@@ -3022,6 +3026,7 @@ function openEditModal(type, tr) {
         const note = tr.dataset.note || '';
         const host = tr.dataset.host || '';
         const port = tr.dataset.port || '3334';
+        const sink = tr.dataset.sink || '';
 
         bodyEl.innerHTML = `
             <div class="form-group">
@@ -3041,13 +3046,21 @@ function openEditModal(type, tr) {
                 <select class="speaker-type-select-modal form-input" onchange="handleSpeakerTypeModalChange(this)">
                     <option value="tts" ${spkType === 'tts' ? 'selected' : ''}>HAエンティティ (TTS)</option>
                     <option value="tcp" ${spkType === 'tcp' ? 'selected' : ''}>その他TCPスピーカー（手動設定）</option>
+                    <option value="local" ${spkType === 'local' ? 'selected' : ''}>本体内蔵スピーカー（ホストPulse）</option>
                 </select>
             </div>
-            <div class="speaker-fields-tts-modal form-group" style="display: ${spkType === 'tcp' ? 'none' : 'block'};">
+            <div class="speaker-fields-tts-modal form-group" style="display: ${spkType === 'tts' ? 'block' : 'none'};">
                 <label class="form-label">HAエンティティ (media_player.xxx)</label>
                 <select class="speaker-ha-entity-modal form-input">
                     <option value="">(未選択)</option>
                 </select>
+            </div>
+            <div class="speaker-fields-local-modal" style="display: ${spkType === 'local' ? 'block' : 'none'};">
+                <div class="form-group">
+                    <label class="form-label">出力先 sink（空欄で既定sink）</label>
+                    <input type="text" class="speaker-sink-modal form-input" placeholder="例: alsa_output.pci-0000_00_1f.3.analog-stereo" value="${esc(sink)}">
+                    <p class="form-hint" style="font-size:11px;">アドオンが動く実機(ホスト)の PulseAudio sink 名。<code>ha audio info</code> の output で確認できます。空欄なら既定sink。tts_provider はグローバル設定を使用。</p>
+                </div>
             </div>
             <div class="speaker-fields-tcp-modal" style="display: ${spkType === 'tcp' ? 'block' : 'none'};">
                 <div class="form-group">
@@ -3319,9 +3332,12 @@ function saveEditModal() {
         let entity = '';
         let host = '';
         let port = '3334';
+        let sink = '';
 
         if (type === 'tts') {
             entity = modal.querySelector('.speaker-ha-entity-modal').value;
+        } else if (type === 'local') {
+            sink = modal.querySelector('.speaker-sink-modal').value.trim();
         } else {
             entity = modal.querySelector('.speaker-entity-modal').value.trim();
             host = modal.querySelector('.speaker-host-modal').value.trim();
@@ -3335,9 +3351,12 @@ function saveEditModal() {
         _currentEditTr.dataset.note = note;
         _currentEditTr.dataset.host = host;
         _currentEditTr.dataset.port = port;
+        _currentEditTr.dataset.sink = sink;
 
         const entityDisplay = type === 'tcp'
             ? (host ? `${host}:${port}` : '（未設定）')
+            : type === 'local'
+            ? (sink || '(既定sink)')
             : (entity || '（未設定）');
 
         _currentEditTr.querySelector('td:nth-child(1)').textContent = room || '（未設定）';
