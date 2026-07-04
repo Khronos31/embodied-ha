@@ -234,7 +234,7 @@
                                         onclick="event.stopPropagation(); addCameraRowAndOpen()">＋ 追加</button>
                             </div>
                             <div class="accordion-content" style="display: none;">
-                                <p class="section-desc">エージェントがアクセス可能なカメラを定義します。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
+                                <p class="section-desc">カメラとマイクは部屋の感覚として扱い、部屋への侵入や減衰の影響を受けます。HAの camera エンティティ、または go2rtc のストリーム名を指定します。</p>
                                 <div class="table-responsive">
                                     <table class="settings-table">
                                         <thead>
@@ -252,18 +252,18 @@
                             </div>
                         </section>
 
-                        <!-- Section: Audio Sources -->
-                        <section class="settings-section card accordion-section" id="accordion-audio-sources">
+                        <!-- Section: Mics -->
+                        <section class="settings-section card accordion-section" id="accordion-mics">
                             <div class="accordion-header" onclick="toggleAccordion(this)">
                                 <div class="accordion-title-container">
                                     <span class="accordion-icon">▶</span>
-                                    <h3>音声ソース (audio_sources)</h3>
+                                    <h3>マイク (mics)</h3>
                                 </div>
                                 <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
-                                        onclick="event.stopPropagation(); addAudioSourceRowAndOpen()">＋ 追加</button>
+                                        onclick="event.stopPropagation(); addMicRowAndOpen()">＋ 追加</button>
                             </div>
                             <div class="accordion-content" style="display: none;">
-                                <p class="section-desc">エージェントが「聴く」ことができる音声ソースを定義します。RTSPストリームURL（go2rtc経由）またはTCP/ALSAを指定します。デフォルトソース（最初の行）は省略時に使用されます。</p>
+                                <p class="section-desc">カメラとマイクは部屋の感覚として扱い、部屋への侵入や減衰の影響を受けます。実マイクや環境音の入力元を指定し、STT を使うかどうかを切り替えます。</p>
                                 <div class="table-responsive">
                                     <table class="settings-table">
                                         <thead>
@@ -275,7 +275,67 @@
                                                 <th style="width:50px; text-align:center;">削除</th>
                                             </tr>
                                         </thead>
-                                        <tbody id="audio-sources-tbody"></tbody>
+                                        <tbody id="mics-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Section: Video Media -->
+                        <section class="settings-section card accordion-section" id="accordion-video-media">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>映像ソース (video_media)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
+                                        onclick="event.stopPropagation(); addVideoMediaRowAndOpen()">＋ 追加</button>
+                            </div>
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">映像ソースと音声ソースはメディア受信として扱い、侵入不要でコンテンツが届きます。テレビや画面などの映像入力を指定します。</p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ID</th>
+                                                <th>ソース (source)</th>
+                                                <th>部屋 (room)</th>
+                                                <th>ラベル (label)</th>
+                                                <th style="width:50px; text-align:center;">編集</th>
+                                                <th style="width:50px; text-align:center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="video-media-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Section: Audio Media -->
+                        <section class="settings-section card accordion-section" id="accordion-audio-media">
+                            <div class="accordion-header" onclick="toggleAccordion(this)">
+                                <div class="accordion-title-container">
+                                    <span class="accordion-icon">▶</span>
+                                    <h3>音声ソース (audio_media)</h3>
+                                </div>
+                                <button type="button" class="btn btn-primary btn-sm btn-accordion-add"
+                                        onclick="event.stopPropagation(); addAudioMediaRowAndOpen()">＋ 追加</button>
+                            </div>
+                            <div class="accordion-content" style="display: none;">
+                                <p class="section-desc">映像ソースと音声ソースはメディア受信として扱い、侵入不要でコンテンツが届きます。番組音や音楽などの音声入力を指定します。</p>
+                                <div class="table-responsive">
+                                    <table class="settings-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ID</th>
+                                                <th>ソース (source)</th>
+                                                <th>部屋 (room)</th>
+                                                <th>ラベル (label)</th>
+                                                <th style="width:50px; text-align:center;">編集</th>
+                                                <th style="width:50px; text-align:center;">削除</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="audio-media-tbody"></tbody>
                                     </table>
                                 </div>
                             </div>
