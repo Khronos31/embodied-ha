@@ -55,6 +55,7 @@ def format_earlier_today_chat(
     resident: str,
     tail_n: int = 10,
     max_chars: int = 80,
+    character_name: str = "エージェント",
 ) -> str:
     try:
         if not log_path:
@@ -77,7 +78,7 @@ def format_earlier_today_chat(
             if user:
                 lines.append(f'{hhmm} {resident}さん: 「{user}」')
             if claude:
-                lines.append(f"{hhmm} あかね: {claude}")
+                lines.append(f"{hhmm} {character_name}: {claude}")
 
         return "\n".join(lines) if len(lines) > 1 else ""
     except Exception:
@@ -88,4 +89,5 @@ if __name__ == "__main__":
     log_dir = os.environ.get("EHA_LOG_DIR") or os.environ.get("LOG_DIR", "")
     log_path = os.path.join(log_dir, "chat_log.jsonl") if log_dir else ""
     resident = os.environ.get("RESIDENT", "ユーザー")
-    print(format_earlier_today_chat(log_path, resident))
+    character_name = os.environ.get("EHA_CHARACTER_NAME") or "エージェント"
+    print(format_earlier_today_chat(log_path, resident, character_name=character_name))

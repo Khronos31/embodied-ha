@@ -599,7 +599,7 @@ def _location_belief_path() -> str:
 
 
 def _update_user_location_belief(room: str, source: str) -> None:
-    """ウェイクワード検知時にユーザーの推定位置を更新する。あかねの body_location は変更しない。"""
+    """ウェイクワード検知時にユーザーの推定位置を更新する。エージェント自身の body_location は変更しない。"""
     path = _location_belief_path()
     state = read_json(path, {})
     if not isinstance(state, dict):

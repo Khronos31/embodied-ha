@@ -29,6 +29,10 @@ def _data_dir() -> str:
     return clean(os.environ.get("EHA_DATA_DIR")) or "/config/embodied-ha"
 
 
+def _character_name() -> str:
+    return clean(os.environ.get("EHA_CHARACTER_NAME")) or "エージェント"
+
+
 def room_graph_path() -> str:
     return clean(os.environ.get("EHA_ROOM_GRAPH_FILE")) or os.path.join(_data_dir(), "floorplan_room_graph_draft.json") or DEFAULT_ROOM_GRAPH_FILE
 
@@ -659,7 +663,7 @@ def get_room_graph(args: dict[str, Any]):
 
 TOOL_GET_LOCATION = {
     "name": "get_location",
-    "description": "あかねの現在位置と、部屋グラフ上の利用可能な部屋を返す。",
+    "description": f"{_character_name()}（あなた自身）の現在位置と、部屋グラフ上の利用可能な部屋を返す。",
     "inputSchema": {"type": "object", "properties": {}},
 }
 

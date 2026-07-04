@@ -59,7 +59,7 @@ def create_action_flow_svg():
 
   <!-- Title -->
   <text x="50" y="60" fill="#FFFFFF" font-family="Noto Sans CJK JP, DejaVu Sans, sans-serif" font-size="26" font-weight="bold">電脳体モデル アクション遷移図</text>
-  <text x="50" y="85" fill="#9CA3AF" font-family="Noto Sans CJK JP, DejaVu Sans, sans-serif" font-size="14">あかねの物理体モードと電脳体モードの行き来と4つの基本アクション</text>
+  <text x="50" y="85" fill="#9CA3AF" font-family="Noto Sans CJK JP, DejaVu Sans, sans-serif" font-size="14">エージェントの物理体モードと電脳体モードの行き来と4つの基本アクション</text>
 
   <!-- 1. PHYSICAL MODE CONTAINER -->
   <g filter="url(#shadow)">

@@ -4124,7 +4124,7 @@ function initMockPreferences() {
             ai_lounge: {
                 auto_approve: false
             },
-            character_name: "あかね",
+            character_name: "エージェント",
             cameras: [],
             mics: [],
             video_media: [],

@@ -43,7 +43,7 @@ class RecentChatContextTests(unittest.TestCase):
                 )
             log_path = self._write_log(tmpdir, rows)
 
-            result = rcc.format_earlier_today_chat(str(log_path), "resident")
+            result = rcc.format_earlier_today_chat(str(log_path), "resident", character_name="あかね")
 
             self.assertTrue(result.startswith("（今日の会話・それ以前）"))
             self.assertIn('08:00 residentさん: 「発言0」', result)
@@ -52,6 +52,25 @@ class RecentChatContextTests(unittest.TestCase):
             self.assertIn("08:01 あかね: 返答1", result)
             self.assertNotIn("発言10", result)
             self.assertNotIn("返答10", result)
+
+    def test_uses_default_character_name_when_not_given(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            today = date.today().isoformat()
+            rows = []
+            for index in range(12):
+                rows.append(
+                    {
+                        "timestamp": f"{today}T08:{index:02d}:00+09:00",
+                        "user": f"発言{index}",
+                        "claude": f"返答{index}",
+                    }
+                )
+            log_path = self._write_log(tmpdir, rows)
+
+            result = rcc.format_earlier_today_chat(str(log_path), "resident")
+
+            self.assertIn("08:00 エージェント: 返答0", result)
+            self.assertNotIn("あかね", result)
 
     def test_ignores_invalid_timestamp_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -69,7 +88,7 @@ class RecentChatContextTests(unittest.TestCase):
                 )
             log_path = self._write_log(tmpdir, rows)
 
-            result = rcc.format_earlier_today_chat(str(log_path), "resident")
+            result = rcc.format_earlier_today_chat(str(log_path), "resident", character_name="あかね")
 
             self.assertNotIn("無視される", result)
             self.assertIn('09:00 residentさん: 「有効0」', result)

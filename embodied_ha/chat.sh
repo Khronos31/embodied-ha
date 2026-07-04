@@ -137,7 +137,7 @@ fi
 # --- 文脈: 今日の会話（直近10件より前）---
 RECENT_CHAT_CONTEXT=""
 if [ -f "$CHAT_LOG" ] && [ -s "$CHAT_LOG" ]; then
-  RECENT_CHAT_CONTEXT=$(LOG_DIR="$LOG_DIR" RESIDENT="$RESIDENT" python3 "$SCRIPT_DIR/recent_chat_context.py" 2>/dev/null || true)
+  RECENT_CHAT_CONTEXT=$(LOG_DIR="$LOG_DIR" RESIDENT="$RESIDENT" EHA_CHARACTER_NAME="$EHA_CHARACTER_NAME" python3 "$SCRIPT_DIR/recent_chat_context.py" 2>/dev/null || true)
 fi
 
 # --- 文脈: 開いたループ（やりかけ・約束。セッションをまたいで気にかける）---
