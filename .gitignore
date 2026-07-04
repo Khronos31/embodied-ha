@@ -4,3 +4,8 @@ embodied_ha/log/
 body_state.json
 body_state.json.lock
 embodied_ha/github_app.pem
+
+# ウェイクワードSE 開発アーティファクト（ディスク上には保全・公開アドオンには載せない）
+embodied_ha/assets/wake_ack_candidates/
+embodied_ha/assets/wake_ack_pairs/
+embodied_ha/assets/*.bak

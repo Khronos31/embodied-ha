@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from auditory_context import append_auditory_event
 from sensory_origin import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
+from speak import play_pcm_file
 from state_utils import clean, now, parse_ts, read_json
 
 try:
@@ -51,6 +53,8 @@ FALLBACK_SEGMENT_HARD_PEAK_DB = -36.0
 NON_SPEECH_IMPORTANCE_THRESHOLD = 0.55
 NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD = 0.65
 TMP_DIR = Path("/tmp/embodied-ha/audio-daemon")
+WAKE_ACK_DEFAULT_PCM = Path(__file__).resolve().parent / "assets" / "wake_ack.pcm"
+WAKE_ACK_CONFIRM_DEFAULT_PCM = Path(__file__).resolve().parent / "assets" / "wake_ack_confirm.pcm"
 DEFAULT_AUDIO_LOG_FILE = "/data/embodied-ha/log/audio_log.jsonl"
 DEFAULT_BACKGROUND_AUDIO_LOG_FILE = "/data/embodied-ha/log/background_audio_log.jsonl"
 DEFAULT_NON_SPEECH_AUDIO_EVENTS_FILE = "/data/embodied-ha/log/non_speech_audio_events.jsonl"
@@ -66,6 +70,9 @@ _non_speech_cache: dict[tuple, float] = {}
 TRANSCRIPT_DEDUP_WINDOW_SECONDS = 5.0
 _TRANSCRIPT_DEDUP_CACHE: dict[str, tuple[str, float]] = {}
 _TRANSCRIPT_DEDUP_LOCK = threading.Lock()
+_WAKE_ARM_LOCK = threading.Lock()
+_WAKE_ARMED: dict[str, dict] = {}
+_WAKE_ARM_GEN = itertools.count(1)
 
 MOTION_CLASSES = {"motion", "occupancy", "presence"}
 MOTION_ACTIVE_STATES = {"on", "open", "occupied", "detected", "home"}
@@ -1677,6 +1684,113 @@ def should_trigger_wake_word(text_value: str, wake_words: list[str]) -> bool:
     return bool(lowered) and any(lowered.startswith(word) for word in wake_words)
 
 
+def strip_wake_prefix(text_value: str, wake_words: list[str]) -> str:
+    text = clean(text_value)
+    lowered = text.lower()
+    for raw_word in wake_words:
+        word = clean(raw_word).lower()
+        if word and lowered.startswith(word):
+            return text[len(word):].lstrip(" \t\r\n　、,。.!?！？，．:：;；")
+    return text
+
+
+def _wake_ack_config(preferences: dict | None = None) -> dict:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    wake_ack = prefs.get("wake_ack")
+    if not isinstance(wake_ack, dict):
+        return {}
+    return wake_ack
+
+
+def _wake_ack_enabled(preferences: dict | None = None) -> bool:
+    return _wake_ack_config(preferences).get("enabled") is not False
+
+
+def _wake_window_sec(preferences: dict | None = None) -> int:
+    try:
+        value = int(float(_wake_ack_config(preferences).get("window_sec", 8)))
+    except Exception:
+        value = 8
+    return max(1, min(60, value))
+
+
+def _play_ack_se(config: AudioSourceConfig, se_path: str) -> None:
+    try:
+        ok = play_pcm_file(config.room, se_path)
+    except Exception as exc:
+        log(f"[wake-ack] SE→{config.room} ng: {exc}")
+        return
+    log(f"[wake-ack] SE→{config.room} {'ok' if ok else 'ng'}")
+
+
+def play_wake_ack(config: AudioSourceConfig) -> None:
+    prefs = load_preferences()
+    if not _wake_ack_enabled(prefs):
+        return
+    wake_ack = _wake_ack_config(prefs)
+    se_path = clean(wake_ack.get("se_file")) or str(WAKE_ACK_DEFAULT_PCM)
+    _play_ack_se(config, se_path)
+
+
+def play_confirm_ack(config: AudioSourceConfig) -> None:
+    prefs = load_preferences()
+    if not _wake_ack_enabled(prefs):
+        return
+    wake_ack = _wake_ack_config(prefs)
+    se_path = clean(wake_ack.get("confirm_se_file")) or str(WAKE_ACK_CONFIRM_DEFAULT_PCM)
+    log(f"[wake-ack] confirm→{config.room}")
+    _play_ack_se(config, se_path)
+
+
+def arm_wake_window(room: str, wake_text: str, window_sec: float) -> None:
+    room_key = clean(room)
+    if not room_key:
+        return
+    deadline = time.monotonic() + max(0.0, float(window_sec))
+    with _WAKE_ARM_LOCK:
+        gen = next(_WAKE_ARM_GEN)
+        _WAKE_ARMED[room_key] = {
+            "deadline": deadline,
+            "wake_text": clean(wake_text),
+            "gen": gen,
+        }
+    timer = threading.Timer(max(0.0, float(window_sec)), _wake_window_timeout, args=(room_key, gen))
+    timer.daemon = True
+    timer.start()
+    log(f"[wake-ack] arm room={room_key} win={window_sec:g}s")
+
+
+def pop_armed_if_active(room: str) -> dict | None:
+    room_key = clean(room)
+    if not room_key:
+        return None
+    with _WAKE_ARM_LOCK:
+        armed = _WAKE_ARMED.get(room_key)
+        if not isinstance(armed, dict):
+            return None
+        try:
+            deadline = float(armed.get("deadline") or 0.0)
+        except Exception:
+            deadline = 0.0
+        if time.monotonic() <= deadline:
+            return _WAKE_ARMED.pop(room_key, None)
+        _WAKE_ARMED.pop(room_key, None)
+    return None
+
+
+def _wake_window_timeout(room: str, gen: int) -> None:
+    wake_text = ""
+    with _WAKE_ARM_LOCK:
+        armed = _WAKE_ARMED.get(room)
+        if not isinstance(armed, dict) or armed.get("gen") != gen:
+            return
+        wake_text = clean(armed.get("wake_text"))
+        _WAKE_ARMED.pop(room, None)
+    if wake_text:
+        log(f"[wake-ack] timeout→post name room={room}")
+        post_wake_message(wake_text)
+
+
 def post_wake_message(text_value: str) -> None:
     ingress_port = clean(os.environ.get("INGRESS_PORT")) or "8099"
     body = json.dumps({"message": text_value, "source": "voice"}, ensure_ascii=False).encode("utf-8")
@@ -1774,9 +1888,28 @@ def process_segment(
             config.retention_hours,
             config.label,
         )
-        if config.wake_word_enabled and should_trigger_wake_word(text_value, wake_words):
-            update_current_room_from_audio_source(config)
-            post_wake_message(text_value)
+        if config.wake_word_enabled:
+            prefs = load_preferences()
+            wake_ack_enabled = _wake_ack_enabled(prefs)
+            if should_trigger_wake_word(text_value, wake_words):
+                update_current_room_from_audio_source(config)
+                if not wake_ack_enabled:
+                    post_wake_message(text_value)
+                else:
+                    remainder = strip_wake_prefix(text_value, wake_words)
+                    if remainder:
+                        pop_armed_if_active(config.room)
+                        play_confirm_ack(config)
+                        post_wake_message(text_value)
+                    else:
+                        play_wake_ack(config)
+                        arm_wake_window(config.room, text_value, _wake_window_sec(prefs))
+            elif wake_ack_enabled:
+                armed = pop_armed_if_active(config.room)
+                if armed is not None:
+                    update_current_room_from_audio_source(config)
+                    play_confirm_ack(config)
+                    post_wake_message(text_value)
     except Exception as exc:
         error_text = str(exc)
         entry["error"] = error_text

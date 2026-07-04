@@ -136,6 +136,62 @@ def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
     return pcm_bytes
 
 
+def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5) -> None:
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.sendall(pcm_bytes)
+
+
+def play_pcm_file(room, pcm_path, host=""):
+    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+
+    prefs = {}
+    try:
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
+    except Exception:
+        pass
+
+    if host:
+        config = _find_speaker_by_host(prefs.get("speakers", []), host)
+    else:
+        config = _find_speaker(prefs.get("speakers", []), room)
+
+    if not config:
+        print(f"[speak] '{room}' は preferences.json に未登録。PCM 再生をスキップ。", file=sys.stderr)
+        return False
+
+    if config.get("type") != "tcp":
+        print(f"[speak] PCM file playback is unsupported for speaker type: {config.get('type')}", file=sys.stderr)
+        return False
+
+    target_host = (config.get("host") or "").strip()
+    try:
+        port = int(config.get("port") or 3334)
+    except Exception:
+        port = 3334
+    if not target_host or port <= 0:
+        print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
+        return False
+
+    try:
+        with open(pcm_path, "rb") as f:
+            pcm_bytes = f.read()
+    except Exception as exc:
+        print(f"[speak] PCM file read failed ({pcm_path}): {exc}", file=sys.stderr)
+        return False
+    if not pcm_bytes:
+        print(f"[speak] PCM file is empty ({pcm_path})", file=sys.stderr)
+        return False
+
+    try:
+        _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=3)
+        print(f"[speak] tcp:{room} PCM OK sent={len(pcm_bytes)}B ({target_host}:{port})")
+        return True
+    except Exception as exc:
+        print(f"[speak] tcp:{room} PCM 送信失敗: {exc}", file=sys.stderr)
+        return False
+
+
 def speak(room, message, host=""):
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
     ha_url = os.environ["HA_URL"]
@@ -143,7 +199,8 @@ def speak(room, message, host=""):
 
     prefs = {}
     try:
-        prefs = json.load(open(prefs_file, encoding="utf-8"))
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
     except Exception:
         pass
 
@@ -217,8 +274,7 @@ def speak(room, message, host=""):
             return False
 
         try:
-            with socket.create_connection((host, port), timeout=5) as sock:
-                sock.sendall(pcm_bytes)
+            _send_pcm_to_tcp(host, port, pcm_bytes, timeout=5)
             print(f"[speak] tcp:{room} OK sent={len(pcm_bytes)}B ({host}:{port})")
             return True
         except Exception as exc:

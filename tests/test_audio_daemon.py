@@ -30,6 +30,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.audio_daemon = load_audio_daemon_module()
         self.audio_daemon._non_speech_cache.clear()
         self.audio_daemon._TRANSCRIPT_DEDUP_CACHE.clear()
+        self.audio_daemon._WAKE_ARMED.clear()
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
@@ -423,6 +424,36 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertTrue(self.audio_daemon.should_trigger_wake_word("AkAnE, listen", ["akane"]))
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("HELLO AKANE", ["akane"]))  # prefix only
         self.assertFalse(self.audio_daemon.should_trigger_wake_word("こんにちは", ["akane"]))
+
+    def test_strip_wake_prefix_returns_instruction_remainder(self):
+        self.assertEqual(self.audio_daemon.strip_wake_prefix("あかねちゃん", ["あかねちゃん"]), "")
+        self.assertEqual(
+            self.audio_daemon.strip_wake_prefix("あかねちゃん、エアコンつけて", ["あかねちゃん"]),
+            "エアコンつけて",
+        )
+        self.assertEqual(self.audio_daemon.strip_wake_prefix("あかねちゃん つけて", ["あかねちゃん"]), "つけて")
+        self.assertEqual(self.audio_daemon.strip_wake_prefix("こんにちは", ["あかねちゃん"]), "こんにちは")
+
+    def test_wake_window_pop_active_once_and_is_room_scoped(self):
+        with mock.patch.object(self.audio_daemon, "post_wake_message"):
+            self.audio_daemon.arm_wake_window("living", "あかねちゃん", 5)
+            self.audio_daemon.arm_wake_window("study", "あかねちゃん", 5)
+            living = self.audio_daemon.pop_armed_if_active("living")
+            self.assertIsNotNone(living)
+            self.assertEqual(living["wake_text"], "あかねちゃん")
+            self.assertIsNone(self.audio_daemon.pop_armed_if_active("living"))
+            study = self.audio_daemon.pop_armed_if_active("study")
+            self.assertIsNotNone(study)
+            self.assertEqual(study["wake_text"], "あかねちゃん")
+
+    def test_wake_window_timeout_posts_name_and_expires(self):
+        with mock.patch.object(self.audio_daemon, "post_wake_message") as post_mock:
+            self.audio_daemon.arm_wake_window("living", "あかねちゃん", 0.05)
+            deadline = time.monotonic() + 1.0
+            while post_mock.call_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIsNone(self.audio_daemon.pop_armed_if_active("living"))
+            post_mock.assert_called_once_with("あかねちゃん")
 
     def test_update_current_room_from_audio_source_updates_user_location_belief(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -852,7 +883,7 @@ class AudioDaemonTests(unittest.TestCase):
             auditory_events.append(entry)
 
         with mock.patch.object(self.audio_daemon, "write_wav"), \
-             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="ねえsample"), \
+             mock.patch.object(self.audio_daemon, "transcribe_wav", return_value="ねえsample きいて"), \
              mock.patch.object(self.audio_daemon, "append_audio_log", side_effect=capture_log), \
              mock.patch.object(self.audio_daemon, "append_auditory_event", side_effect=capture_event), \
              mock.patch.object(self.audio_daemon, "post_wake_message", side_effect=wake_posts.append), \
@@ -872,7 +903,7 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(len(logged_entries), 2)
         # 1件目（サンプル1）: primary
         self.assertNotIn("deduplicated", logged_entries[0])
-        self.assertEqual(logged_entries[0]["text"], "ねえsample")
+        self.assertEqual(logged_entries[0]["text"], "ねえsample きいて")
         # 2件目（サンプル2）: deduplicated フラグあり
         self.assertTrue(logged_entries[1].get("deduplicated"))
         # auditory_events は 1件のみ（サンプル1）
