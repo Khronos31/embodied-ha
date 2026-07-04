@@ -194,6 +194,16 @@ if [ ! -f "$EHA_CHARACTER_FILE" ]; then
     fi
 fi
 
+# --- home_policy.md（家のいい感じの状態。ユーザーが Markdown で編集可能）---
+export EHA_HOME_POLICY_FILE="${EHA_HOME_POLICY_FILE:-$EHA_DATA_DIR/home_policy.md}"
+if [ ! -f "$EHA_HOME_POLICY_FILE" ]; then
+    if cp "$SCRIPT_DIR/home_policy.md" "$EHA_HOME_POLICY_FILE" 2>/dev/null; then
+        echo "[run] home_policy.md を同梱デフォルトから初期化（$EHA_HOME_POLICY_FILE）"
+    else
+        echo "[run] home_policy.md 初期化失敗（同梱デフォルトを使用）"
+    fi
+fi
+
 # --- personal.inc（個人向け設定。なければ example から seed-once）---
 # EHA_DATA_DIR 配下に置くことで File Editor から編集可能になり再ビルドでも消えない。
 export EHA_PERSONAL_INC="${EHA_PERSONAL_INC:-$EHA_DATA_DIR/personal.inc}"

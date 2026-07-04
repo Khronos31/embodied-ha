@@ -37,6 +37,12 @@ FEATURES_MD="$(cat "$SCRIPT_DIR/features.md" 2>/dev/null || echo "")"
 FEATURES_PRESENTED="$(python3 "$SCRIPT_DIR/feature-flags.py" get 2>/dev/null || echo "")"
 PRESENCE_SENSORS="$(python3 "$SCRIPT_DIR/render-sensors.py" --context loop 2>/dev/null || echo "（センサー取得失敗）")"
 
+HOME_POLICY=""
+_policy_file="${EHA_HOME_POLICY_FILE:-$EHA_DATA_DIR/home_policy.md}"
+if [ -f "$_policy_file" ] && [ -s "$_policy_file" ]; then
+  HOME_POLICY=$(cat "$_policy_file")
+fi
+
 ANOMALY_CONTEXT="${ANOMALY_CONTEXT:-}"
 ANOMALY_URGENCY="${ANOMALY_URGENCY:-}"
 _ANOMALY_CONTEXT_FILE="$TMP_DIR/anomaly_context.txt"
@@ -260,7 +266,7 @@ _action_allowed=$(printf '%s' "$_boundary_json" | python3 -c "import sys,json; p
 if [ "$_action_allowed" = "True" ] && [ "$MODE" = "explore" ]; then
   ALLOWED_TOOLS="${ALLOWED_TOOLS},mcp__hacontrol__ha_call_service"
   MCP_SERVERS="$MCP_SERVERS hacontrol"
-  AUTONOMOUS_NOTE="\n# 家電操作について（自律操作ON）\n消し忘れ・明らかに直した方がよい状況は、proposal で待たずに ha_call_service で自分の判断で直してよい。\n操作したら必ず speak / use_device_speaker で${RESIDENT}さんに『何を・なぜ』操作したか事後報告する（報告は必須）。"
+  AUTONOMOUS_NOTE="\n# 家電操作について（自律操作ON）\n消し忘れ・明らかに直した方がよい状況、そしてホームポリシーとの明らかなズレは、proposal で待たずに ha_call_service で自分の判断で直してよい。\n操作したら必ず speak / use_device_speaker で${RESIDENT}さんに『何を・なぜ』操作したか事後報告する（報告は必須）。\nただし、人がいる部屋を勝手に変えない。深夜の音出し操作はしない。"
 fi
 
 PROJECTED_CAMERA_NOTE=""
@@ -274,6 +280,21 @@ if [ -n "$FEATURES_MD" ]; then
   [ -n "$FEATURES_PRESENTED" ] && _presented_note="既に伝えた機能: ${FEATURES_PRESENTED}（繰り返し紹介しなくてよい）\n"
   FEATURES_NOTE="\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n${_presented_note}${FEATURES_MD}\n"
 fi
+
+POLICY_NOTE=""
+case "$MODE" in
+  observe|explore)
+    if [ -n "$HOME_POLICY" ]; then
+      POLICY_NOTE="
+# ホームポリシー
+${HOME_POLICY}
+
+# ポリシー照合の方針
+現在の家の状態（get_sensors / ha_get で確認できるもの）をこのポリシーと照らし合わせ、明らかにズレていて直した方がよいものだけ気にかける。細かい好みや、その場の事情が読めないもの、人がいる部屋を勝手に変える類、深夜の音出し操作は触らない。
+ズレがあっても自律操作の権限がなければ proposal で提案し、権限があれば是正して事後報告する。"
+    fi
+    ;;
+esac
 
 eval "$(
 SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
@@ -289,7 +310,7 @@ if ctx:
 PYEOF
 )"
 
-SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
+SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\n${POLICY_NOTE}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
 
 USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
 
