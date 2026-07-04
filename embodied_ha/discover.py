@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """discover.py — HA Template API でセンサーを走査し、preferences.json の
-sensors マニフェストの「下書き」を生成する（公開アドオンのゼロ設定初回起動用）。
+sensors / source マニフェストの「下書き」を生成する（公開アドオンのゼロ設定初回起動用）。
 
 下書きはあくまで出発点。area 誤り・ペアリング曖昧・要選別バッテリ等は会話で補正する前提。
 
@@ -18,7 +18,15 @@ env: HA_URL, SUPERVISOR_TOKEN, EHA_PREFS_FILE, RESIDENT
   （なし）       下書きを JSON で stdout に出力（dry-run。確認用）
   --write       preferences.json の sensors を下書きで置き換える（presence 行も付与）
 """
-import sys, json, os, subprocess, argparse, re
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+from migrate_source_schema import build_source_draft, classify_source  # type: ignore  # noqa: F401  (classify_source re-exported for shared-classifier use/tests)
 
 
 def get_token():
@@ -209,6 +217,18 @@ def build_entities_draft(rows):
     return out, warnings
 
 
+def build_source_draft_from_preferences(prefs):
+    """preferences.json の source 系列を 4 バケツへ正規化する。"""
+    if isinstance(prefs.get("audio_sources"), list):
+        return build_source_draft(prefs)
+    return {
+        "cameras": list(prefs.get("cameras") or []),
+        "mics": list(prefs.get("mics") or []),
+        "video_media": list(prefs.get("video_media") or []),
+        "audio_media": list(prefs.get("audio_media") or []),
+    }, []
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--write", action="store_true",
@@ -226,8 +246,18 @@ def main():
     draft, warnings = build_draft(rows, resident)
     speakers_draft, default_tts, speaker_warnings = build_speakers_draft(rows)
     entities_draft, entity_warnings = build_entities_draft(rows)
+    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+    source_draft = {"cameras": [], "mics": [], "video_media": [], "audio_media": []}
+    source_warnings = []
+    if prefs_file and os.path.exists(prefs_file):
+        try:
+            prefs = json.load(open(prefs_file, encoding="utf-8"))
+        except Exception:
+            prefs = {}
+        if isinstance(prefs, dict):
+            source_draft, source_warnings = build_source_draft_from_preferences(prefs)
 
-    for w in warnings + speaker_warnings + entity_warnings:
+    for w in warnings + speaker_warnings + entity_warnings + source_warnings:
         print(f"[discover][warn] {w}", file=sys.stderr)
 
     if args.write:
@@ -249,6 +279,12 @@ def main():
         if not prefs.get("entities") and entities_draft:
             prefs["entities"] = entities_draft
             print(f"[discover] entities 下書きを書き込みました（{len(entities_draft)}件）", file=sys.stderr)
+        source_keys = ("cameras", "mics", "video_media", "audio_media")
+        if not any(prefs.get(key) for key in source_keys) and any(source_draft.values()):
+            for key in source_keys:
+                prefs[key] = source_draft[key]
+            total = sum(len(source_draft[key]) for key in source_keys)
+            print(f"[discover] source 下書きを書き込みました（{total}件）", file=sys.stderr)
         tmp = prefs_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(prefs, f, ensure_ascii=False, indent=2)
@@ -258,7 +294,12 @@ def main():
             print(f"[discover] preferences.json に sensors を書き込みました（{len(draft['groups'])}グループ / {n}項目）",
                   file=sys.stderr)
     else:
-        output = {"sensors": draft, "speakers": speakers_draft, "entities": entities_draft}
+        output = {
+            "sensors": draft,
+            "speakers": speakers_draft,
+            "entities": entities_draft,
+            **source_draft,
+        }
         if default_tts:
             output["tts_entity"] = default_tts
         print(json.dumps(output, ensure_ascii=False, indent=2))

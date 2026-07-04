@@ -1,94 +1,36 @@
 {
   "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
-
   "character_name": "Claude",
-  "wake_words": ["ねえクロード", "クロード"],
-
+  "wake_words": [
+    "ねえクロード",
+    "クロード"
+  ],
   "tts_entity": "tts.home_assistant_cloud",
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
-
-  "_cameras_doc": "カメラデバイス一覧。電脳体として侵入可能なカメラも含む。entity: HAエンティティIDか独自の短いID（侵入時に使う）。source: go2rtcストリーム名 or HAカメラentity_id。ha_entity: HAカメラentity_id（sourceがgo2rtcのとき画像取得・PTZに必要）。",
+  "_cameras_doc": "カメラ（目）: 侵入して見る実デバイス。entity は侵入時の ID、source は HA エンティティ ID か go2rtc / 直接 URL。ptz は必要なカメラだけ設定する。",
   "cameras": [
     {
-      "entity": "camera_tv",
-      "source": "living_tv_stream",
+      "entity": "camera.living_room_live_view",
+      "source": "camera.living_room_live_view",
       "room": "living",
-      "label": "テレビ",
-      "note": "HDDレコーダー出力。今何が放送されているか確認できる"
-    },
-    {
-      "entity": "camera.living_room_entity_id",
-      "source": "camera.living_room_entity_id",
-      "ha_entity": "camera.living_room_entity_id",
-      "room": "living",
-      "label": "リビング",
-      "note": "リビングの広角カメラ（HA統合経由）"
-    },
-    {
-      "entity": "camera_living_ptz",
-      "source": "camera_living_ptz",
-      "ha_entity": "camera.living_ptz",
-      "room": "living",
-      "label": "リビング（PTZ）",
-      "note": "PTZ対応カメラ。use_device_camera で ptz_left/right/up/down 操作可能",
+      "label": "リビングの見守りカメラ",
       "ptz": {
-        "left": "button.your_camera_pan_left",
-        "right": "button.your_camera_pan_right",
-        "up": "button.your_camera_tilt_up",
-        "down": "button.your_camera_tilt_down"
-      }
+        "up": "up",
+        "down": "down",
+        "left": "left",
+        "right": "right"
+      },
+      "note": "部屋を見るための実カメラ"
+    },
+    {
+      "entity": "camera.study_webcam",
+      "source": "camera.study_webcam",
+      "room": "study",
+      "label": "書斎Webカメラ",
+      "note": "作業中の様子を見る"
     }
   ],
-
-  "_audio_sources_doc": "マイクデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。HAエンティティでないもの（rtsp/alsa/tcp）は独自IDを設定する。",
-  "audio_sources": [
-    {
-      "entity": "mic_tv",
-      "source": "rtsp://localhost:8554/living_tv_stream",
-      "label": "TV・レコーダー",
-      "room": "living",
-      "note": "go2rtc経由のTV/レコーダー音声",
-      "stt_enabled": false,
-      "stt_retention_hours": 0,
-      "wake_word_enabled": false,
-      "background_hearing_enabled": false
-    },
-    {
-      "entity": "mic_pc",
-      "source": "rtsp://localhost:8556/mic_only",
-      "label": "PC",
-      "room": "study",
-      "note": "PCマイク",
-      "stt_enabled": false,
-      "stt_retention_hours": 0,
-      "wake_word_enabled": false,
-      "background_hearing_enabled": false
-    },
-    {
-      "entity": "mic_alsa",
-      "source": "alsa://default",
-      "label": "スタディマイク",
-      "room": "study",
-      "note": "USBマイク直接録音（/dev/snd 必要）",
-      "stt_enabled": true,
-      "stt_retention_hours": 24,
-      "wake_word_enabled": true,
-      "background_hearing_enabled": true
-    },
-    {
-      "entity": "mic_node_kitchen",
-      "source": "tcp://192.168.1.xxx:3333",
-      "label": "廊下 VoiceS3R",
-      "room": "hallway",
-      "note": "常時計測用の固定IPノード",
-      "stt_enabled": true,
-      "stt_retention_hours": 24,
-      "wake_word_enabled": true,
-      "background_hearing_enabled": true
-    }
-  ],
-
   "_speakers_doc": "スピーカーデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。tts タイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。tcp タイプは raw PCM を TCP ソケットに送信する（VoiceS3R 等）。",
   "speakers": [
     {
@@ -108,20 +50,20 @@
       "note": "VoiceS3R スピーカー。tts_provider はグローバルの tts_entity から自動取得"
     }
   ],
-
   "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
   "entities": [
-    { "name": "リビングのライト", "entity_id": "light.living_room", "note": "" }
+    {
+      "name": "リビングのライト",
+      "entity_id": "light.living_room",
+      "note": ""
+    }
   ],
-
   "presence": {
     "entity": "input_boolean.resident_home"
   },
-
   "policies": [
     "深夜1〜6時は発話しない（loop/explore に組み込み済み）"
   ],
-
   "_loop_schedule_doc": "自律ループ(loop.sh)の定期実行間隔と、時間帯ごとの発火確率。loop_interval は秒。0-7時=night、22-24時=late、それ以外=day。Web UIの「高度な設定」タブから編集可能。",
   "loop_schedule": {
     "loop_interval": 1800,
@@ -129,39 +71,118 @@
     "late_probability": 30,
     "night_probability": 10
   },
-
   "_sensors_doc": "自律ループ(loop)/会話(chat)で毎回コンテキストに渡す『おもなデバイス』センサーの定義。render-sensors.py が HA Template API で描画する。全エンティティは ha_get ツールで常時 pull 可能なので、ここに無い＝見えないではなく『自分から取りに行く対象』になるだけ。discover.py で下書きを自動生成できる。",
   "sensors": {
     "groups": [
       {
         "title": "人感センサー",
-        "contexts": ["loop"],
+        "contexts": [
+          "loop"
+        ],
         "items": [
-          { "label": "リビング", "entity": "binary_sensor.living_motion" },
-          { "label": "廊下1", "entity": "binary_sensor.hall_motion_1", "note": "リビング誤反応あり" }
+          {
+            "label": "リビング",
+            "entity": "binary_sensor.living_motion"
+          },
+          {
+            "label": "廊下1",
+            "entity": "binary_sensor.hall_motion_1",
+            "note": "リビング誤反応あり"
+          }
         ]
       },
       {
         "title": "温湿度",
-        "contexts": ["loop"],
+        "contexts": [
+          "loop"
+        ],
         "items": [
-          { "label": "リビング", "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%" }
+          {
+            "label": "リビング",
+            "template": "{{ states('sensor.living_temp') }}℃ / {{ states('sensor.living_humidity') }}%"
+          }
         ]
       },
       {
         "title": "テレビ",
-        "contexts": ["loop"],
+        "contexts": [
+          "loop"
+        ],
         "items": [
-          { "label": "最前面アプリ", "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}", "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入" }
+          {
+            "label": "最前面アプリ",
+            "template": "{{ state_attr('media_player.android_tv_xxx','app_name') or state_attr('media_player.android_tv_xxx','source') or 'オフ' }}",
+            "note": "HAのAndroid TV(ADB)統合のmedia_player。今見ているアプリ。要統合導入"
+          }
         ]
       },
       {
-        "contexts": ["chat"],
+        "contexts": [
+          "chat"
+        ],
         "items": [
-          { "label": "在宅", "entity": "input_boolean.resident_home" },
-          { "template": "人感→ リビング:{{ states('binary_sensor.living_motion') }}" }
+          {
+            "label": "在宅",
+            "entity": "input_boolean.resident_home"
+          },
+          {
+            "template": "人感→ リビング:{{ states('binary_sensor.living_motion') }}"
+          }
         ]
       }
     ]
-  }
+  },
+  "_mics_doc": "マイク（耳）: 侵入して聴く実デバイス。entity は侵入時の ID、source は HA エンティティ ID か外部入力の識別子。stt_enabled で文字起こし対象を切り替える。",
+  "_video_media_doc": "映像ソース（観る）: 侵入不要で届くフレーム。id はメディア用 ID、source は camera_proxy / go2rtc / 直接 URL など。room は文脈用。",
+  "_audio_media_doc": "音声ソース（聴く）: 侵入不要で届く音。id はメディア用 ID、source は音声取得元。video_media で対応する映像ソースを参照できる。",
+  "mics": [
+    {
+      "entity": "mic_alsa_default",
+      "source": "alsa://default",
+      "room": "study",
+      "label": "書斎マイク",
+      "stt_enabled": true
+    },
+    {
+      "entity": "mic_node_hallway",
+      "source": "tcp://192.168.1.xxx:3333",
+      "room": "hallway",
+      "label": "廊下 VoiceS3R",
+      "stt_enabled": true
+    }
+  ],
+  "video_media": [
+    {
+      "id": "capture_tv",
+      "source": "camera.living_room_tv_proxy",
+      "room": "living",
+      "label": "テレビ映像",
+      "note": "レコーダー/TVの画面"
+    },
+    {
+      "id": "home_pc_screenshot",
+      "source": "camera.study_pc_screenshot",
+      "room": "study",
+      "label": "書斎PC画面",
+      "note": "スクリーンショットの取得元"
+    }
+  ],
+  "audio_media": [
+    {
+      "id": "capture_tv_audio",
+      "source": "capture_tv",
+      "room": "living",
+      "label": "テレビ音声",
+      "note": "テレビ映像とペア",
+      "video_media": "capture_tv"
+    },
+    {
+      "id": "capture_pc_audio",
+      "source": "capture_pc2",
+      "room": "study",
+      "label": "PC音声",
+      "note": "PC画面の音",
+      "video_media": "home_pc_screenshot"
+    }
+  ]
 }
