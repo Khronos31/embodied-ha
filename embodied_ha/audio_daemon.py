@@ -581,7 +581,7 @@ def background_hearing_enabled(item: dict) -> bool:
 
 def _audio_source_entry_by_source(preferences: dict | None, source: str) -> dict | None:
     prefs = preferences if isinstance(preferences, dict) else load_preferences()
-    raw_sources = prefs.get("audio_sources")
+    raw_sources = prefs.get("mics")
     if not isinstance(raw_sources, list):
         return None
     target = clean(source)
@@ -886,9 +886,9 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
     )
 
 
-def load_enabled_audio_sources(preferences: dict | None = None) -> list[AudioSourceConfig]:
+def load_enabled_mics(preferences: dict | None = None) -> list[AudioSourceConfig]:
     prefs = preferences if isinstance(preferences, dict) else load_preferences()
-    raw_sources = prefs.get("audio_sources")
+    raw_sources = prefs.get("mics")
     if not isinstance(raw_sources, list):
         return []
 
@@ -937,7 +937,7 @@ def load_runtime_settings(
     effective_config = base_config
     stt_enabled = True
 
-    raw_sources = prefs.get("audio_sources")
+    raw_sources = prefs.get("mics")
     if isinstance(raw_sources, list):
         for item in raw_sources:
             if not isinstance(item, dict):
@@ -2092,7 +2092,7 @@ def tcp_pull_worker(
 
 def main() -> int:
     preferences = load_preferences()
-    sources = load_enabled_audio_sources(preferences)
+    sources = load_enabled_mics(preferences)
     if not sources:
         log("no STT/background audio sources; exiting")
         return 0

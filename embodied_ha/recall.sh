@@ -202,13 +202,13 @@ def audio_background_values(d):
     return " ".join(str(part) for part in parts if part)
 
 
-audio_sources = [
+audio_log_sources = [
     ("auditory_events.jsonl", format_audio_heard, audio_heard_values),
     ("active_listen_log.jsonl", format_audio_listened, audio_listened_values),
     ("background_audio_log.jsonl", format_audio_background, audio_background_values),
 ]
 audio_hits = []
-for fname, formatter, values_for_search in audio_sources:
+for fname, formatter, values_for_search in audio_log_sources:
     path = os.path.join(log_dir, fname)
     if not os.path.exists(path):
         continue

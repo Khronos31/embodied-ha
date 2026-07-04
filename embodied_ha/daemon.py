@@ -55,7 +55,7 @@ _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG
 _CLAUDE_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
 
 
-def load_enabled_audio_sources() -> list[dict]:
+def load_enabled_mics() -> list[dict]:
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
     if not prefs_file:
         return []
@@ -65,7 +65,7 @@ def load_enabled_audio_sources() -> list[dict]:
     except Exception as e:
         print(f"[daemon] failed to load preferences for audio daemon: {e}", flush=True)
         return []
-    sources = prefs.get("audio_sources")
+    sources = prefs.get("mics")
     if not isinstance(sources, list):
         return []
     return [item for item in sources if isinstance(item, dict) and item.get("stt_enabled") is True]
@@ -551,7 +551,7 @@ def start_runtime_threads():
             print("[daemon] 警告: MQTT_HOST 未設定。チャット/観察トリガーを受信できません"
                   "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
         threading.Thread(target=loop_scheduler, daemon=True).start()
-        if load_enabled_audio_sources():
+        if load_enabled_mics():
             threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
             print("[daemon] audio daemon watchdog enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)

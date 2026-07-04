@@ -238,6 +238,10 @@ if [ "$NEED_DISCOVER" = "1" ]; then
         || echo "[run] discover.py 失敗（スキップ。起動は続ける）"
 fi
 
+# --- 起動時のソーススキーマ移行（旧2キー→新4キー）---
+# 旧2キー構成なら新4キーへ一度だけ移行（冪等・バックアップ+アトミック）
+python3 "$SCRIPT_DIR/migrate_source_schema.py" --apply "$EHA_PREFS_FILE" 2>&1 | sed 's/^/[run][migrate] /' || true
+
 # --- MQTT discovery（HA にエンティティを生やす）---
 MQTT=$(curl -sf -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
     http://supervisor/services/mqtt 2>/dev/null || echo "")

@@ -95,7 +95,7 @@ class AudioMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = Path(tmpdir) / "preferences.json"
             prefs.write_text(
-                json.dumps({"audio_sources": [{"source": "rtsp://example.local/tv", "label": "TV"}]}, ensure_ascii=False),
+                json.dumps({"mics": [{"source": "rtsp://example.local/tv", "label": "TV"}]}, ensure_ascii=False),
                 encoding="utf-8",
             )
             with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": str(prefs)}, clear=False):
@@ -106,7 +106,7 @@ class AudioMcpTests(unittest.TestCase):
             prefs = Path(tmpdir) / "preferences.json"
             body = Path(tmpdir) / "body_location.json"
             prefs.write_text(
-                json.dumps({"audio_sources": [
+                json.dumps({"mics": [
                     {"source": "rtsp://example.local/living", "room": "living", "label": "Living"},
                     {"source": "rtsp://example.local/study", "room": "study", "label": "Study"},
                 ]}, ensure_ascii=False),
@@ -191,6 +191,11 @@ class AudioMcpTests(unittest.TestCase):
     def test_listen_records_active_log_with_transcript(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "active_listen_log.jsonl"
+            prefs_path = Path(tmpdir) / "preferences.json"
+            prefs_path.write_text(
+                json.dumps({"mics": [{"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
             responses = [mock.Mock(returncode=0, stdout="", stderr="")]
             fixed_now = self.audio_mcp.parse_ts("2026-06-26T10:00:00+09:00")
             with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
@@ -199,7 +204,7 @@ class AudioMcpTests(unittest.TestCase):
                  mock.patch.object(self.audio_mcp, "analyze_volume", return_value=(-11.0, -24.0)), \
                  mock.patch.object(self.audio_mcp, "transcribe_audio", return_value="聞こえました"), \
                  mock.patch.object(self.audio_mcp, "now", return_value=fixed_now), \
-                 mock.patch.dict(os.environ, {"EHA_ACTOR": "explore"}, clear=False):
+                 mock.patch.dict(os.environ, {"EHA_ACTOR": "explore", "EHA_PREFS_FILE": str(prefs_path)}, clear=False):
                 payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5, "transcribe": True}))
 
             self.assertEqual(payload["transcript"], "聞こえました")

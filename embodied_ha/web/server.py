@@ -515,7 +515,7 @@ def _room_entries_from_preferences(prefs: dict) -> dict:
             room_item.setdefault("display_name", room_key)
             rooms.setdefault(room_key, room_item)
 
-    for key in ("cameras", "audio_sources", "speakers", "entities", "projection_targets"):
+    for key in ("cameras", "mics", "video_media", "audio_media", "speakers", "entities", "projection_targets"):
         value = prefs.get(key)
         if not isinstance(value, list):
             continue

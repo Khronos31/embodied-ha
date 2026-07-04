@@ -169,10 +169,10 @@ def load_preferences() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def load_audio_source_configs() -> list[dict]:
-    sources = load_preferences().get("audio_sources")
+def load_mic_configs() -> list[dict]:
+    sources = load_preferences().get("mics")
     if not isinstance(sources, list):
-        sources = DEFAULT_SOURCES
+        sources = []
 
     normalized = []
     for item in sources:
@@ -185,13 +185,13 @@ def load_audio_source_configs() -> list[dict]:
         config["source"] = source
         config["label"] = clean(item.get("label")) or source
         normalized.append(config)
-    return normalized or list(DEFAULT_SOURCES)
+    return normalized
 
 
-def load_audio_sources() -> list[dict]:
+def load_mics() -> list[dict]:
     return [
         {"source": item["source"], "label": item["label"]}
-        for item in load_audio_source_configs()
+        for item in load_mic_configs()
     ]
 
 
@@ -215,7 +215,7 @@ def auto_listen_source(body_loc: dict, source_configs: list[dict]) -> str:
 
 
 def default_listen_source() -> str:
-    return normalize_source_uri(resolve_audio_source(_load_body_location(), load_audio_source_configs(), default_source=DEFAULT_SOURCE))
+    return normalize_source_uri(resolve_audio_source(_load_body_location(), load_mic_configs(), default_source=DEFAULT_SOURCE))
 
 
 def load_stt_provider() -> str | None:
@@ -227,7 +227,7 @@ def load_stt_language() -> str:
 
 
 def build_listen_spec() -> dict:
-    sources = load_audio_sources()
+    sources = load_mics()
     source_lines = "\n".join(
         f'  - "{s["source"]}"（{s["label"]}）' for s in sources
     )
@@ -361,11 +361,11 @@ TOOL_READ_AUDIO_EVENT_TAGS = {
 
 
 def _source_map() -> dict[str, dict]:
-    return {clean(item.get("source")): item for item in load_audio_sources()}
+    return {clean(item.get("source")): item for item in load_mics()}
 
 
 def _source_config_map() -> dict[str, dict]:
-    return {clean(item.get("source")): item for item in load_audio_source_configs()}
+    return {clean(item.get("source")): item for item in load_mic_configs()}
 
 
 def label_for_source(source: str) -> str:
@@ -918,7 +918,7 @@ def listen(args: dict):
     if current_entity:
         return [text("電脳体モードでは listen は使えません。use_device_microphone を使ってください。")], True
     _body_loc = _load_body_location()
-    _src_cfgs = load_audio_source_configs()
+    _src_cfgs = load_mic_configs()
     requested_source = clean(args.get("source"))
     source = normalize_source_uri(requested_source) if requested_source else normalize_source_uri(resolve_audio_source(_body_loc, _src_cfgs, default_source=DEFAULT_SOURCE))
     duration = normalize_duration(args.get("duration"))

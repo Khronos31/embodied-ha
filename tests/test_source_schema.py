@@ -88,13 +88,30 @@ class SourceSchemaMigrationTests(unittest.TestCase):
         self.assertEqual(migration.classify_source("audio", {"source": "alsa://default"}), "mics")
         self.assertEqual(migration.classify_source("audio", {"source": "tcp://192.168.1.153:3333"}), "mics")
 
-    def test_build_source_draft_from_preferences_splits_legacy_lists(self):
-        draft, warnings = discover.build_source_draft_from_preferences(self._sample_prefs())
+    def test_build_source_draft_from_preferences_keeps_new_buckets(self):
+        draft, warnings = discover.build_source_draft_from_preferences(
+            {
+                "cameras": [
+                    {"source": "camera.living_room_entity_id", "room": "living", "label": "リビング"},
+                    {"source": "capture_tv", "room": "living", "label": "テレビ"},
+                ],
+                "mics": [
+                    {"source": "alsa://default", "room": "study", "label": "書斎マイク"},
+                    {"source": "tcp://192.168.1.5:3333", "room": "hallway", "label": "VoiceS3R"},
+                ],
+                "video_media": [
+                    {"source": "camera.home_pc_screenshot", "room": "study", "label": "PC画面"},
+                ],
+                "audio_media": [
+                    {"source": "rtsp://192.168.1.130:8558/mic_only", "room": "living", "label": "テレビ音声"},
+                ],
+            }
+        )
         self.assertEqual(len(draft["cameras"]), 2)
         self.assertEqual(len(draft["video_media"]), 1)
-        self.assertEqual(len(draft["mics"]), 3)
+        self.assertEqual(len(draft["mics"]), 2)
         self.assertEqual(len(draft["audio_media"]), 1)
-        self.assertTrue(any("ambiguous" in warning for warning in warnings))
+        self.assertEqual(warnings, [])
 
     def test_migration_dry_run_and_apply_are_idempotent(self):
         with tempfile.TemporaryDirectory() as tmpdir:

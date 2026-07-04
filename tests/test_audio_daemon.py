@@ -163,28 +163,28 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertGreaterEqual(strong, self.audio_daemon.NON_SPEECH_EMPTY_TRANSCRIPTION_THRESHOLD)
         self.assertLess(weak, strong)
 
-    def test_load_enabled_audio_sources_filters_and_normalizes(self):
+    def test_load_enabled_mics_filters_and_normalizes(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "wake_word_enabled": True},
                 {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": False},
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].source, "alsa://default")
         self.assertEqual(sources[0].label, "Desk")
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
 
-    def test_load_enabled_audio_sources_keeps_zero_retention_as_background_by_default(self):
+    def test_load_enabled_mics_keeps_zero_retention_as_background_by_default(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "stt_retention_hours": 0},
                 {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": True, "stt_retention_hours": 1},
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(len(sources), 2)
         self.assertEqual(sources[0].label, "Desk")
         self.assertTrue(sources[0].background_only)
@@ -192,9 +192,9 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(sources[1].label, "TV")
         self.assertFalse(sources[1].background_only)
 
-    def test_load_enabled_audio_sources_skips_zero_retention_when_background_disabled(self):
+    def test_load_enabled_mics_skips_zero_retention_when_background_disabled(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {
                     "source": "rtsp://example/recorder",
                     "label": "Recorder",
@@ -213,14 +213,14 @@ class AudioDaemonTests(unittest.TestCase):
                 },
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].label, "Google TV")
         self.assertTrue(sources[0].background_only)
 
-    def test_load_enabled_audio_sources_parses_tcp_pull_source(self):
+    def test_load_enabled_mics_parses_tcp_pull_source(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {
                     "source": "tcp://192.168.1.100:3333",
                     "label": "Hallway VoiceS3R",
@@ -232,7 +232,7 @@ class AudioDaemonTests(unittest.TestCase):
                 }
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].transport, "tcp_pull")
         self.assertEqual(sources[0].source, "tcp://192.168.1.100:3333")
@@ -243,9 +243,9 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(sources[0].channels, 1)
         self.assertEqual(sources[0].audio_format, "s16le")
 
-    def test_load_enabled_audio_sources_rejects_invalid_tcp_pull_source(self):
+    def test_load_enabled_mics_rejects_invalid_tcp_pull_source(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {
                     "source": "tcp://192.168.1.100:3333",
                     "label": "Hallway VoiceS3R",
@@ -257,12 +257,12 @@ class AudioDaemonTests(unittest.TestCase):
                 }
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(sources, [])
 
-    def test_load_enabled_audio_sources_rejects_missing_room(self):
+    def test_load_enabled_mics_rejects_missing_room(self):
         prefs = {
-            "audio_sources": [
+            "mics": [
                 {
                     "source": "alsa://default",
                     "label": "Desk",
@@ -270,7 +270,7 @@ class AudioDaemonTests(unittest.TestCase):
                 }
             ]
         }
-        sources = self.audio_daemon.load_enabled_audio_sources(prefs)
+        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(sources, [])
 
     def test_parse_tcp_port_accepts_valid_range(self):
@@ -287,7 +287,7 @@ class AudioDaemonTests(unittest.TestCase):
                 "stt_provider": "stt.home_assistant_cloud",
                 "stt_language": "ja-JP",
                 "wake_words": ["sampleちゃん"],
-                "audio_sources": [
+                "mics": [
                     {
                         "source": "alsa://default",
                         "label": "Desk",
@@ -312,7 +312,7 @@ class AudioDaemonTests(unittest.TestCase):
             base_config,
             {
                 "stt_provider": "stt.home_assistant_cloud",
-                "audio_sources": [
+                "mics": [
                     {
                         "source": "alsa://default",
                         "label": "Desk",
@@ -332,7 +332,7 @@ class AudioDaemonTests(unittest.TestCase):
             base_config,
             {
                 "stt_provider": "stt.home_assistant_cloud",
-                "audio_sources": [
+                "mics": [
                     {
                         "source": "alsa://default",
                         "label": "Desk",
@@ -354,7 +354,7 @@ class AudioDaemonTests(unittest.TestCase):
             base_config,
             {
                 "stt_provider": "stt.home_assistant_cloud",
-                "audio_sources": [
+                "mics": [
                     {
                         "source": "rtsp://example",
                         "label": "Recorder",
@@ -430,7 +430,7 @@ class AudioDaemonTests(unittest.TestCase):
             body_location_path = Path(tmpdir) / "body_location.json"
             belief_path = Path(tmpdir) / "location_belief.json"
             prefs_path.write_text(
-                json.dumps({"audio_sources": [{"source": "default", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
+                json.dumps({"mics": [{"source": "default", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
                 encoding="utf-8",
             )
             body_location_path.write_text(

@@ -219,13 +219,18 @@ def build_entities_draft(rows):
 
 def build_source_draft_from_preferences(prefs):
     """preferences.json の source 系列を 4 バケツへ正規化する。"""
-    if isinstance(prefs.get("audio_sources"), list):
-        return build_source_draft(prefs)
+    if any(key in prefs for key in ("cameras", "mics", "video_media", "audio_media")):
+        return {
+            "cameras": list(prefs.get("cameras") or []),
+            "mics": list(prefs.get("mics") or []),
+            "video_media": list(prefs.get("video_media") or []),
+            "audio_media": list(prefs.get("audio_media") or []),
+        }, []
     return {
-        "cameras": list(prefs.get("cameras") or []),
-        "mics": list(prefs.get("mics") or []),
-        "video_media": list(prefs.get("video_media") or []),
-        "audio_media": list(prefs.get("audio_media") or []),
+        "cameras": [],
+        "mics": [],
+        "video_media": [],
+        "audio_media": [],
     }, []
 
 

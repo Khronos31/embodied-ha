@@ -94,7 +94,7 @@ class ListenQueueTests(unittest.TestCase):
             prefs_path = Path(tmpdir) / "preferences.json"
             request_path = Path(tmpdir) / "next_listen_request.json"
             body_location_path.write_text(json.dumps({"current_entity": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
-            prefs_path.write_text(json.dumps({"audio_sources": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen", "label": "Kitchen"}]}, ensure_ascii=False), encoding="utf-8")
+            prefs_path.write_text(json.dumps({"mics": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen", "label": "Kitchen"}]}, ensure_ascii=False), encoding="utf-8")
             request_path.write_text(json.dumps({"request_id": "req-1", "duration": 4, "transcribe": True, "mode": "watch"}, ensure_ascii=False), encoding="utf-8")
             old_env = {k: os.environ.get(k) for k in ["EHA_BODY_LOCATION_FILE", "EHA_PREFS_FILE", "EHA_NEXT_LISTEN_REQUEST_FILE"]}
             logged = []
@@ -131,7 +131,7 @@ class ListenQueueTests(unittest.TestCase):
             prefs_path = Path(tmpdir) / "preferences.json"
             request_path = Path(tmpdir) / "next_listen_request.json"
             body_location_path.write_text(json.dumps({"current_entity": "", "current_room": "study"}, ensure_ascii=False), encoding="utf-8")
-            prefs_path.write_text(json.dumps({"audio_sources": [
+            prefs_path.write_text(json.dumps({"mics": [
                 {"entity": "camera.living", "source": "rtsp://example.local/living", "label": "Living", "room": "living"},
                 {"entity": "camera.study", "source": "rtsp://example.local/study", "label": "Study", "room": "study"},
             ]}, ensure_ascii=False), encoding="utf-8")
@@ -166,7 +166,7 @@ class ListenQueueTests(unittest.TestCase):
             prefs_path = Path(tmpdir) / "preferences.json"
             request_path = Path(tmpdir) / "next_listen_request.json"
             body_location_path.write_text(json.dumps({"current_entity": "camera.kitchen"}, ensure_ascii=False), encoding="utf-8")
-            prefs_path.write_text(json.dumps({"audio_sources": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen"}]}, ensure_ascii=False), encoding="utf-8")
+            prefs_path.write_text(json.dumps({"mics": [{"entity": "camera.kitchen", "source": "rtsp://example.local/kitchen"}]}, ensure_ascii=False), encoding="utf-8")
             request_path.write_text(json.dumps({"request_id": "req-3", "duration": 4, "mode": "watch"}, ensure_ascii=False), encoding="utf-8")
             old_env = {k: os.environ.get(k) for k in ["EHA_BODY_LOCATION_FILE", "EHA_PREFS_FILE", "EHA_NEXT_LISTEN_REQUEST_FILE"]}
             try:

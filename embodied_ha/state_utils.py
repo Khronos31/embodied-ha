@@ -146,7 +146,7 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
                     return item
         return None
 
-    mic_entry = _find_entry(prefs.get("audio_sources"), extra_keys=("source",))
+    mic_entry = _find_entry(prefs.get("mics"), extra_keys=("source",))
     speaker_entry = _find_entry(prefs.get("speakers"), extra_keys=("media_player",))
     camera_entry = _find_entry(prefs.get("cameras"), extra_keys=("source", "ha_entity"))
     return {

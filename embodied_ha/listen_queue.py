@@ -337,10 +337,10 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
     except Exception:
         prefs = {}
 
-    audio_sources = prefs.get("audio_sources") or []
+    mics = prefs.get("mics") or []
     matched_source = None
     matched_label = None
-    for entry in audio_sources:
+    for entry in mics:
         if not isinstance(entry, dict):
             continue
         entry_entity = clean(entry.get("entity"))
@@ -355,9 +355,9 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
             break
 
     if not matched_source:
-        matched_source = resolve_audio_source(bl, audio_sources)
+        matched_source = resolve_audio_source(bl, mics)
         if matched_source:
-            for entry in audio_sources:
+            for entry in mics:
                 if not isinstance(entry, dict):
                     continue
                 if clean(entry.get("source")) == matched_source:
@@ -371,7 +371,7 @@ def prepare_queued_listen_session(mode: str, *, cwd: str | None = None) -> dict 
             'mode': mode,
             'queued_listen': True,
             'prepared_for_session': False,
-            'error': f"現在の部屋に対応する audio_sources が見つかりませんでした（current_entity='{current_entity}', current_room='{clean(bl.get('current_room'))}'）。preferences の audio_sources に room を設定してください。",
+            'error': f"現在の部屋に対応する mics が見つかりませんでした（current_entity='{current_entity}', current_room='{clean(bl.get('current_room'))}'）。preferences の mics に room を設定してください。",
             'request_id': request.get('request_id'),
         }
         append_active_listen_result(entry)
