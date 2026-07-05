@@ -441,7 +441,19 @@ content = []
 if cam_b64:
     content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": cam_b64}})
 content.append({"type": "text", "text": os.environ["USER_PROMPT"]})
-response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), content_blocks=content, facts_path=os.environ.get("FACTS_FILE", ""))
+
+# MCP設定を組み立てて渡す（explore分岐と同じ手順）。これが無いと ALLOWED_TOOLS に並ぶ
+# mcp__* ツールが存在せず、observeは組み込みツールしか使えない（2026-07-06発覚の欠落）。
+mcp_config_path = None
+mcp_servers = os.environ.get("MCP_SERVERS", "").split()
+if mcp_servers and os.environ.get("SCRIPT_DIR", ""):
+    mcp_config_path = "/tmp/embodied-ha/mcp.json"
+    gen = os.path.join(os.environ["SCRIPT_DIR"], "mcp-config.py")
+    subprocess.run(["python3", gen, mcp_config_path, *mcp_servers], env=CLAUDE_ENV, check=False)
+    if not os.path.exists(mcp_config_path):
+        mcp_config_path = None
+
+response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), mcp_config=mcp_config_path, content_blocks=content, facts_path=os.environ.get("FACTS_FILE", ""))
 print(response)
 PYEOF
 )
