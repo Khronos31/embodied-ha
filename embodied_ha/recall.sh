@@ -130,7 +130,8 @@ for fname, label, extract in jsonl_sources:
         values_blob = " ".join(str(v) for v in d.values())
         if match(text + " " + values_blob):
             ts = (d.get("timestamp", "") or "")[:16]
-            raw_hits.append((ts, f"{ts} [{label}] {text}"))
+            marker = " ※発話記録なし" if label.startswith(("観察", "探索")) and d.get("ungrounded_speech_claim") else ""
+            raw_hits.append((ts, f"{ts} [{label}] {text}{marker}"))
 raw_hits.sort(key=lambda h: h[0] or "")
 raw_hits.reverse()
 for ts, line in raw_hits:

@@ -660,6 +660,10 @@ def get_soliloquy_messages(limit: int = 300) -> list:
         }
         if include_mode:
             item["mode"] = row.get("mode", "")
+        if isinstance(row.get("facts"), dict):
+            item["facts"] = row.get("facts")
+        if row.get("ungrounded_speech_claim"):
+            item["ungrounded_speech_claim"] = True
         if row.get("recovered"):
             item["recovered"] = True
             item["recovered_from"] = row.get("recovered_from")

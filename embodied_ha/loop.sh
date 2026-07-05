@@ -88,8 +88,10 @@ export ANOMALY_CONTEXT ANOMALY_URGENCY
 
 PREV_EXPLORE="なし"
 if [ -f "$EXPLORE_LOG" ] && [ -s "$EXPLORE_LOG" ]; then
-  PREV_EXPLORE=$(tail -5 "$EXPLORE_LOG" | python3 -c '
-import json, sys
+  PREV_EXPLORE=$(tail -5 "$EXPLORE_LOG" | SCRIPT_DIR="$SCRIPT_DIR" python3 -c '
+import json, os, sys
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from introspection_facts import format_facts_summary
 lines=[]
 for line in sys.stdin:
     line=line.strip()
@@ -98,10 +100,19 @@ for line in sys.stdin:
     try:
         d=json.loads(line)
         ts, mode, topic = d.get("timestamp","")[:16], d.get("mode",""), d.get("topic","")
-        lines.append(f"{ts} [{mode}] {topic}")
+        facts = format_facts_summary(d.get("facts"))
+        measured = f" [実測: {facts}]" if facts else ""
+        note = ""
+        if d.get("ungrounded_speech_claim"):
+            note = "（※このときの発話は記録に残っていません。伝えたかったことがまだあれば、今伝えて大丈夫です）"
+        lines.append(f"{ts} [{mode}] {topic}{measured}{note}")
     except Exception:
         pass
-print("\n".join(lines) if lines else "なし")
+if lines:
+    print("※以下のメモは主観的な内省です。[実測:]が客観記録です。")
+    print("\n".join(lines))
+else:
+    print("なし")
 ')
 fi
 
@@ -216,7 +227,7 @@ print("\n".join(lines) if lines else "（特になし）")
 PYEOF
 )
 
-JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（${RESIDENT}さんへの発話は speak / use_device_speaker ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
+JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）（感想・解釈でよい。ただし実際にやっていない行為を完了形で書かない）\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（${RESIDENT}さんへの発話は speak / use_device_speaker ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   observe)
@@ -296,6 +307,25 @@ ${HOME_POLICY}
     ;;
 esac
 
+FACTS_FILE="$TMP_DIR/${MODE}_facts.json"
+rm -f "$FACTS_FILE" 2>/dev/null || true
+
+RECENT_FACTS_SUMMARY=""
+if [ "$MODE" = "reflect" ]; then
+  RECENT_FACTS_SUMMARY=$(SCRIPT_DIR="$SCRIPT_DIR" OBSERVATION_LOG="$OBSERVATION_LOG" EXPLORE_LOG="$EXPLORE_LOG" python3 << 'PYEOF'
+import os, sys
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from introspection_facts import format_recent_facts_block, recent_facts_from_logs
+rows = recent_facts_from_logs([os.environ["OBSERVATION_LOG"], os.environ["EXPLORE_LOG"]], hours=24, limit=10)
+print(format_recent_facts_block(rows, hours=24))
+PYEOF
+)
+fi
+FACTS_PROMPT_BLOCK=""
+if [ -n "$RECENT_FACTS_SUMMARY" ]; then
+  FACTS_PROMPT_BLOCK="\n\n${RECENT_FACTS_SUMMARY}"
+fi
+
 eval "$(
 SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import os, shlex, sys
@@ -312,20 +342,21 @@ PYEOF
 
 SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\n${POLICY_NOTE}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
 
-USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
+USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}${FACTS_PROMPT_BLOCK}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
 
 if [ "$MODE" = "observe" ]; then
-  RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MCP_SERVERS="$MCP_SERVERS" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+  RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MCP_SERVERS="$MCP_SERVERS" SCRIPT_DIR="$SCRIPT_DIR" FACTS_FILE="$FACTS_FILE" python3 << 'PYEOF'
 import base64, json, os, re, subprocess, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from antigravity_setup import extract_agy_result
+from introspection_facts import extract_facts_from_stream_text, write_facts_file
 from media_capture import fetch_frame
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 CLAUDE_ENV = {**os.environ,
               "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
               "PATH": os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")}
 
-def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, content_blocks=None):
+def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, content_blocks=None, facts_path=None):
     if os.path.basename(CLAUDE) == "agy":
         cmd = [CLAUDE]
         if model:
@@ -343,6 +374,11 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, conte
     blocks = content_blocks if content_blocks is not None else [{"type": "text", "text": text}]
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": blocks}})
     r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd="/tmp/embodied-ha", env=CLAUDE_ENV)
+    if facts_path:
+        try:
+            write_facts_file(facts_path, extract_facts_from_stream_text(r.stdout))
+        except Exception as e:
+            print(f"[loop][facts] failed to write facts: {e}", file=sys.stderr)
     # stream-json から最終 result テキストのみ取り出す（explore分岐と同じ処理）。
     # 生のstream-json全行を連結して返すと、後段の {.*} greedyパースが多重JSONで壊れ、
     # observeの emotion/private が空欄で記録され続ける回帰の原因になっていた。
@@ -405,16 +441,17 @@ content = []
 if cam_b64:
     content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": cam_b64}})
 content.append({"type": "text", "text": os.environ["USER_PROMPT"]})
-response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), content_blocks=content)
+response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), content_blocks=content, facts_path=os.environ.get("FACTS_FILE", ""))
 print(response)
 PYEOF
 )
   PARSED_FILE="$TMP_DIR/observe_parsed.json"
 else
-  RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
+  RESPONSE=$(SYS_PROMPT="$SYS_PROMPT" USER_PROMPT="$USER_PROMPT" ALLOWED_TOOLS="$ALLOWED_TOOLS" MODE="$MODE" MCP_SERVERS="$MCP_SERVERS" SCRIPT_DIR="$SCRIPT_DIR" FACTS_FILE="$FACTS_FILE" python3 << 'PYEOF'
 import json, os, subprocess, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from antigravity_setup import extract_agy_result
+from introspection_facts import extract_facts_from_stream_text, write_facts_file
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 env = {**os.environ,
        "EHA_ACTOR": "loop",
@@ -448,6 +485,10 @@ else:
         if os.path.exists(mcp_config_path):
             cmd += ["--mcp-config", mcp_config_path]
     r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or "/tmp/embodied-ha", env=env)
+    try:
+        write_facts_file(os.environ.get("FACTS_FILE", ""), extract_facts_from_stream_text(r.stdout))
+    except Exception as e:
+        print(f"[loop][facts] failed to write facts: {e}", file=sys.stderr)
     for line in r.stdout.splitlines():
         line = line.strip()
         if not line:
@@ -506,7 +547,7 @@ except Exception:
     pass
 " 2>/dev/null || true
 
-PRIVATE_JSON='""'; EMOTION=""; SPEAK=""; SPEAK_ROOM=""; TOPIC_JSON='""'; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
+SPEAK=""; SPEAK_ROOM=""; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
 eval "$(PARSED_FILE="$PARSED_FILE" python3 -c "
 import json, os, shlex
 try:
@@ -516,9 +557,6 @@ except Exception:
 private = d.get('private', '') or ''
 emotion = d.get('emotion', '') or ''
 pairs = {
-    'PRIVATE_JSON': json.dumps(private, ensure_ascii=False),
-    'EMOTION': emotion,
-    'TOPIC_JSON': json.dumps(d.get('topic', '') or '', ensure_ascii=False),
     'PARSE_OK': '1' if d.get('_parse_ok') else '0',
     'INTROSPECTION_EMPTY': '1' if not str(private).strip() and not str(emotion).strip() else '0',
 }
@@ -563,13 +601,59 @@ if objects or people or changes:
     scene_state.ingest_scene_parse('loop_observe', {}, objects, people, changes, log_dir=os.environ.get('LOG_DIR'))
 " 2>/dev/null || true
   if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
-    echo "{\"timestamp\":\"$TIMESTAMP\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON}" >> "$OBSERVATION_LOG"
+    SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" OBSERVATION_LOG="$OBSERVATION_LOG" python3 << 'PYEOF'
+import json, os, sys
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from introspection_facts import load_facts_file, should_flag_ungrounded_speech_claim
+try:
+    d = json.load(open(os.environ["PARSED_FILE"], encoding="utf-8"))
+except Exception:
+    d = {}
+facts = load_facts_file(os.environ.get("FACTS_FILE", ""))
+private = d.get("private", "") or ""
+row = {
+    "timestamp": os.environ["TIMESTAMP"],
+    "emotion": d.get("emotion", "") or "",
+    "private": private,
+}
+if facts is not None:
+    row["facts"] = facts
+if should_flag_ungrounded_speech_claim(private=private, topic=d.get("topic", "") or "", facts=facts, proposal=d.get("proposal")):
+    row["ungrounded_speech_claim"] = True
+with open(os.environ["OBSERVATION_LOG"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+PYEOF
   fi
 else
   if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
-    echo "{\"timestamp\":\"$TIMESTAMP\",\"mode\":\"$MODE\",\"emotion\":\"$EMOTION\",\"private\":$PRIVATE_JSON,\"topic\":$TOPIC_JSON}" >> "$EXPLORE_LOG"
+    SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" MODE="$MODE" EXPLORE_LOG="$EXPLORE_LOG" python3 << 'PYEOF'
+import json, os, sys
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from introspection_facts import load_facts_file, should_flag_ungrounded_speech_claim
+try:
+    d = json.load(open(os.environ["PARSED_FILE"], encoding="utf-8"))
+except Exception:
+    d = {}
+facts = load_facts_file(os.environ.get("FACTS_FILE", ""))
+private = d.get("private", "") or ""
+topic = d.get("topic", "") or ""
+row = {
+    "timestamp": os.environ["TIMESTAMP"],
+    "mode": os.environ["MODE"],
+    "emotion": d.get("emotion", "") or "",
+    "private": private,
+    "topic": topic,
+}
+if facts is not None:
+    row["facts"] = facts
+if should_flag_ungrounded_speech_claim(private=private, topic=topic, facts=facts, proposal=d.get("proposal")):
+    row["ungrounded_speech_claim"] = True
+with open(os.environ["EXPLORE_LOG"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+PYEOF
   fi
 fi
+
 
 PROPOSAL=$(python3 -c "
 import json

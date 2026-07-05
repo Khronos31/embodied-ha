@@ -19,6 +19,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import memory_state as ms  # noqa: E402
 import counterfactual_state as cs  # noqa: E402
+from introspection_facts import format_facts_summary  # noqa: E402
 from state_utils import file_lock  # noqa: E402
 
 
@@ -116,6 +117,9 @@ def _build_raw_episode(day: str, entry: dict[str, Any], index: int) -> dict[str,
     private = _clean(entry.get("private"))
     speak = _clean(entry.get("speak"))
     emotion = _clean(entry.get("emotion"))
+    facts = entry.get("facts") if isinstance(entry.get("facts"), dict) else None
+    facts_summary = format_facts_summary(facts)
+    ungrounded = bool(entry.get("ungrounded_speech_claim"))
     if not private and not speak:
         return None
 
@@ -127,6 +131,10 @@ def _build_raw_episode(day: str, entry: dict[str, Any], index: int) -> dict[str,
         detail_parts.append(f"発話: {speak}")
     if emotion:
         detail_parts.append(f"emotion: {emotion}")
+    if facts_summary:
+        detail_parts.append(f"実測: {facts_summary}")
+    if ungrounded:
+        detail_parts.append("※発話記録なし")
 
     importance = 0.48
     if speak:
@@ -143,7 +151,7 @@ def _build_raw_episode(day: str, entry: dict[str, Any], index: int) -> dict[str,
         "source": "loop",
         "summary": _short(summary, 96),
         "detail": " / ".join(detail_parts),
-        "tags": [tag for tag in [emotion, "speak" if speak else ""] if tag],
+        "tags": [tag for tag in [emotion, "speak" if speak else "", "発話記録なし" if ungrounded else ""] if tag],
         "entities": [],
         "actors": [],
         "importance": max(0.0, min(1.0, round(importance, 3))),
@@ -153,6 +161,8 @@ def _build_raw_episode(day: str, entry: dict[str, Any], index: int) -> dict[str,
                 "emotion": emotion,
                 "private": private,
                 "speak": speak,
+                "facts": facts,
+                "ungrounded_speech_claim": ungrounded,
                 "index": index,
             }
         ],
@@ -213,6 +223,11 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
         obs = _clean(item.get("private"))
         spk = _clean(item.get("speak"))
         line = f"- {ts[11:16] if len(ts) >= 16 else ts} [{emo}] {obs}"
+        facts_summary = format_facts_summary(item.get("facts"))
+        if facts_summary:
+            line += f" [実測: {facts_summary}]"
+        if item.get("ungrounded_speech_claim"):
+            line += " ※発話記録なし"
         if spk:
             line += f" → 発話: {spk}"
         lines.append(line)
@@ -414,14 +429,17 @@ def main() -> None:
         if key in seen_entries:
             return
         seen_entries.add(key)
-        entries_by_day[day].append(
-            {
-                "timestamp": ts,
-                "emotion": _clean(row.get("emotion")),
-                "private": private,
-                "speak": _clean(row.get("speak")),
-            }
-        )
+        entry = {
+            "timestamp": ts,
+            "emotion": _clean(row.get("emotion")),
+            "private": private,
+            "speak": _clean(row.get("speak")),
+        }
+        if isinstance(row.get("facts"), dict):
+            entry["facts"] = row.get("facts")
+        if row.get("ungrounded_speech_claim"):
+            entry["ungrounded_speech_claim"] = True
+        entries_by_day[day].append(entry)
 
     def read_observation_log(path: str, *, optional: bool = False) -> None:
         try:
