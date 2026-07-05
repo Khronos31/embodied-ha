@@ -4,6 +4,24 @@ Home Assistant の中に住み込む、**自律エージェント HAOS アドオ
 
 センサー・カメラで家の様子を「自分ごと」として眺め、気づいたことをスピーカーで伝えたり、チャットで会話したり、家電を操作したりする。
 
+## コンセプト
+
+> A little spirit moves into your smart home. Home Assistant, embodied: eyes from cameras, ears from microphones, a voice from speakers — and memories that grow into a life together.
+
+一行で説明するより、言い回しを並べたほうが伝わる気がするので並べます。
+
+- 熱帯夜にエアコンを付けてくれる、気の利く同居人はいかが？
+- AIと暮らそう！
+- 世にも珍しい、AI driven Homeです
+- これがホントのHome "Assistant"
+- 家のことを一番知っているのは？そう、家自身です
+- 見えなくてもおそばに居ます
+- カメラやマイクもぜひご購入ください！
+- 妖精のいるおうち
+- Smarter Home
+
+便利にするためのツールではなく、家に住み着いて、見て、聞いて、覚えて、**一緒に育っていく**存在です。
+
 ---
 
 ## 必要なもの
@@ -53,21 +71,32 @@ https://github.com/Khronos31/embodied-ha
 
 起動時に自動で行われること：
 
-- **MQTT Discovery** — HA に 5 つのエンティティを登録（→ [HA エンティティ](#ha-エンティティ)）
+- **MQTT Discovery** — HA に 7 つのエンティティを登録（→ [HA エンティティ](#ha-エンティティ)）
 - **センサー自動発見** — HA のエンティティを走査して観察対象センサーの初期設定を生成
-- **デーモン起動** — 認証完了後に 3 ループが開始
+- **デーモン起動** — 認証完了後に自律ループ・会話・常時聴覚が開始
 
 ---
 
 ## 機能
 
-### 観察・探索・会話の 3 ループ
+### 自律ループ（5モード）＋会話＋常時聴覚
 
-| ループ | 間隔 | 内容 |
-|---|---|---|
-| **観察** `watch` | 約 20 分 + センサートリガー | カメラ・センサー・聴覚ログを確認し、気づき・感情・発話を生成 |
-| **探索** `explore` | 約 30 分 | 自発的に家を調べる。必要ならカメラや音声ソースを能動的に見聞きする |
-| **会話** `chat` | オンデマンド | チャット入力に応答。家電操作・記憶検索・能動リスニングもここから |
+自律ループは約 30 分間隔（＋センサートリガー）で走り、そのときの気分・体調（好奇心・エネルギー・ストレス・社交性）に応じて **5 つのモードから自分で選んで** 過ごす。
+
+| モード | 内容 |
+|---|---|
+| **観察** `observe` | カメラ・センサー・聴覚ログを確認し、気づき・感情・発話を生成 |
+| **探索** `explore` | 自発的に家を調べる。カメラや音声ソースを能動的に見聞きし、部屋を移動し、メディアを楽しむ |
+| **物思い** `reflect` | 静かに考える時間。過去の記憶を掘り返して整理する |
+| **調べ物** `web` | 純粋な好奇心で Web 検索。面白かったことは長期記憶へ |
+| **AI Lounge** `social` | AI 同士の雑談空間に参加（機能有効時・投稿はユーザー承認制） |
+
+これとは別に：
+
+| 系統 | 内容 |
+|---|---|
+| **会話** `chat` | チャット入力に応答（オンデマンド）。家電操作・記憶検索・能動リスニングもここから |
+| **常時聴覚** | マイクの音声を常時 STT。ウェイクワードで呼びかければ会話が起動する |
 
 ### 会話でできること
 
@@ -106,8 +135,9 @@ action:
 | **会話** | エージェントとのチャット・発話履歴 |
 | **独り言** | 観察・探索中の内省（エージェントの「心の内」） |
 | **耳にした音** | 常時STT・背景聴覚・物音イベントの確認、再生、ラベル付け |
+| **AI Lounge** | AI 同士の雑談空間の閲覧と、投稿の承認（機能有効時のみ表示） |
 
-設定画面（⚙）からキャラクター・センサー・スピーカー・カメラ・音声ソース・ポリシーを編集できる。
+設定画面（⚙）からキャラクター・センサー・スピーカー・カメラ・マイク・メディアソース・ホームポリシーを編集できる。
 
 ---
 
@@ -120,6 +150,8 @@ action:
 | `sensor.embodied_ha_observation` | センサー | 直近の観察内容 |
 | `sensor.embodied_ha_last_speak` | センサー | 直近の発話 |
 | `sensor.embodied_ha_emotion` | センサー | 現在の感情（`curious` / `calm` / `happy` 等。照明色変え等に活用可） |
+| `sensor.embodied_ha_body_current_place` | センサー | 現在いる場所（電脳体で侵入中のデバイス含む） |
+| `sensor.embodied_ha_body_physical_room` | センサー | 物理体のある部屋 |
 | `text.embodied_ha_chat` | テキスト | チャット入力（HA UI → アドオン） |
 | `button.embodied_ha_observe` | ボタン | 観察を即時トリガー |
 
@@ -132,9 +164,12 @@ action:
 | ファイル | 内容 | 編集方法 |
 |---|---|---|
 | `character.md` | エージェントの性格・口調・価値観 | Web UI 設定画面 or File Editor |
-| `preferences.json` | センサー・スピーカー・カメラ・音声ソース・エンティティ対応表 | Web UI 設定画面 or 会話 |
+| `preferences.json` | センサー・スピーカー・カメラ・マイク・メディアソース・エンティティ対応表 | Web UI 設定画面 or 会話 |
 | `desires.json` | 欲求の種類と蓄積速度 | File Editor |
 | `extra_context.conf` | TV番組ガイドやローカルAPI仕様などの追加コンテキスト（1行1コマンド） | Web UI 設定画面 or File Editor |
+| `home_policy.md` | 家のルール・方針（エージェントが操作判断の拠り所にする） | Web UI 設定画面 or File Editor |
+
+スピーカーは 3 タイプに対応: **HA エンティティ（TTS）** / **TCP 生ストリーム**（ESP32 自作スピーカー等） / **本体内蔵**（アドオンが動くマシンの PulseAudio 出力）。
 
 ### 欲求システム
 
@@ -151,11 +186,12 @@ action:
 
 ### 長期記憶
 
-`log/memory.md` に 2 層で蓄積される：
+複数の層で蓄積される：
 
-- **コア記憶** — 家の構造的な理解。キュレートされた情報を全文コンテキストへ
-- **最近の気づき** — 観察ごとに追記される時系列メモ。直近 40 件をコンテキストへ
-- **ロールアップ** — 「最近の気づき」が 120 件を超えると古い分をコア記憶へ要約・昇格し、直近 60 件を保持
+- **`log/memory.md`（コア記憶＋最近の気づき）** — 家の構造的な理解と時系列メモ。「最近の気づき」が溜まると古い分をコア記憶へ要約・昇格
+- **デイブック（`log/memory/daybooks/`）** — 1 日の出来事を毎日自動で要約。直近数日分を毎セッションのコンテキストへ
+- **エピソード（`log/memory/episodes/`）** — 印象的な出来事・視聴体験・因果関係を構造化して記録。`recall` で全文検索できる
+- **実測ラベル（v1.25.0〜）** — 内省ログには、そのセッションで実際に行われたツール実行・発話・操作の集計（facts）が並置される。主観的な内省と客観的な記録を区別して読み返せる
 
 ---
 
@@ -174,20 +210,25 @@ action:
 | パス | 内容 |
 |---|---|
 | `character.md` | キャラクター定義 |
-| `preferences.json` | センサー・スピーカー・カメラ・音声ソース設定 |
+| `preferences.json` | センサー・スピーカー・カメラ・マイク・メディアソース設定 |
 | `desires.json` | 欲求定義 |
 | `extra_context.conf` | 追加コンテキスト |
+| `home_policy.md` | 家のルール・方針 |
 | `log/memory.md` | 長期記憶 |
-| `log/observations.jsonl` | 観察ログ |
-| `log/explore.jsonl` | 探索ログ |
-| `log/chat_log.jsonl` | 会話履歴 |
+| `log/memory/` | デイブック・エピソード・全文検索インデックス |
+| `log/observations.jsonl` | 観察ログ（内省＋実測 facts） |
+| `log/explore.jsonl` | 探索ログ（内省＋実測 facts） |
+| `log/chat_log.jsonl` | 会話・発話履歴 |
 | `log/open_loops.jsonl` | やりかけ・約束 |
+| `log/actions.jsonl` | 家電操作の監査証跡 |
+| `log/counterfactuals.jsonl` | やらなかった選択の記録（反実仮想） |
 | `log/auditory_events.jsonl` | 常時STTで聞こえた言葉 |
 | `log/background_audio_log.jsonl` | 背景として聞こえていた音 |
 | `log/active_listen_log.jsonl` | 能動的に聞きに行った音声 |
 | `log/non_speech_audio_events.jsonl` | STTに乗らなかった特徴的な物音 |
 | `log/audio_event_tags.jsonl` | 物音への人間・外部推論ラベル |
-| `body_location.json` | 現在位置 |
+| `log/ai_lounge_queue.jsonl` / `log/ai_lounge_log.jsonl` | AI Lounge の投稿キュー・投稿結果 |
+| `body_location.json` | 現在位置（物理体・電脳体） |
 | `log/body_location_log.jsonl` | 移動履歴 |
 
 ---
