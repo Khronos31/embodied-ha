@@ -227,7 +227,7 @@ print("\n".join(lines) if lines else "（特になし）")
 PYEOF
 )
 
-JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今回いちばん心に残ったこと（20〜40文字）（感想・解釈でよい。ただし実際にやっていない行為を完了形で書かない）\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（${RESIDENT}さんへの発話は speak / use_device_speaker ツールを使うこと。長期記憶は remember / loops_add で記録すること）"
+JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。DMやチャットのように、相手の時間を気にせず気軽に。なければ null\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（speak フィールドに書くと会話ルームにテキストで残り、${RESIDENT}さんが後で読む＝声は出ない。今すぐ声を出して呼びかけたいときだけ speak / use_device_speaker ツールを呼ぶ。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   observe)
@@ -559,7 +559,7 @@ except Exception:
     pass
 " 2>/dev/null || true
 
-SPEAK=""; SPEAK_ROOM=""; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
+SPEAK=""; SPEAK_ROOM=""; SAY=""; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
 eval "$(PARSED_FILE="$PARSED_FILE" python3 -c "
 import json, os, shlex
 try:
@@ -568,9 +568,13 @@ except Exception:
     d = {}
 private = d.get('private', '') or ''
 emotion = d.get('emotion', '') or ''
+# speak フィールド = ${RESIDENT}さんへのテキストメッセージ（会話ルームに残す。声は出さない）
+say_v = d.get('speak')
+say = str(say_v).strip() if say_v not in (None, '', 'null') else ''
 pairs = {
     'PARSE_OK': '1' if d.get('_parse_ok') else '0',
     'INTROSPECTION_EMPTY': '1' if not str(private).strip() and not str(emotion).strip() else '0',
+    'SAY': say,
 }
 for k, v in pairs.items():
     print(f'{k}={shlex.quote(str(v))}')
@@ -703,6 +707,17 @@ import json, sys
 with open('$CHAT_LOG', 'a', encoding='utf-8') as f:
     f.write(json.dumps({'timestamp':'$TIMESTAMP','source':'loop','claude':sys.argv[1],'user':None}, ensure_ascii=False) + '\n')
 " "$SPEAK" 2>/dev/null || true
+fi
+
+# speak フィールド = ${RESIDENT}さんへのテキストメッセージ。会話ルーム(chat_log)にそのまま残す。
+# 声は出さない（TTSしない）・深夜抑制やspeak_roomはかけない（メール/チャットのように非同期）。
+if [ -n "$SAY" ]; then
+  echo "[SAY:$MODE] $SAY"
+  MODE="$MODE" python3 -c "
+import json, os, sys
+with open('$CHAT_LOG', 'a', encoding='utf-8') as f:
+    f.write(json.dumps({'timestamp':'$TIMESTAMP','source':os.environ.get('MODE','loop'),'claude':sys.argv[1],'user':None}, ensure_ascii=False) + '\n')
+" "$SAY" 2>/dev/null || true
 fi
 
 LAST_DAYBOOK=""
