@@ -227,7 +227,7 @@ print("\n".join(lines) if lines else "（特になし）")
 PYEOF
 )
 
-JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。DMやチャットのように、相手の時間を気にせず気軽に。なければ null\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（speak フィールドに書くと会話ルームにテキストで残り、${RESIDENT}さんが後で読む＝声は出ない。今すぐ声を出して呼びかけたいときだけ speak / use_device_speaker ツールを呼ぶ。長期記憶は remember / loops_add で記録すること）"
+JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。ただし実際にやっていない行為を完了形で書かない。\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。声は出さず会話ルームにテキストで残り、${RESIDENT}さんが後で読む（相手の時間を奪わない）。特になければ null。実際にやっていない行為を完了形で書かない。\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（speak フィールドに書くと会話ルームにテキストで残り、${RESIDENT}さんが後で読む＝声は出ない。今すぐ声を出して呼びかけたいときだけ speak / use_device_speaker ツールを呼ぶ。長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   observe)
