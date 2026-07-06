@@ -30,6 +30,7 @@ PEM_PATH = "/config/embodied-ha/github_app.pem"
 _TOKEN_LOCK = threading.Lock()
 _QUEUE_LOCK = threading.Lock()
 _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
+_MAX_REPLY_ROOT_HOPS = 10
 
 
 def _now_iso() -> str:
@@ -310,6 +311,42 @@ def _first_discussion_id() -> str:
     return _clean(nodes[0].get("id"))
 
 
+def _root_reply_comment_id(comment_id: str) -> str:
+    original = _clean(comment_id)
+    if not original:
+        return original
+
+    query = """
+query($c: ID!) {
+  node(id: $c) {
+    ... on DiscussionComment {
+      replyTo { id }
+    }
+  }
+}
+"""
+    current = original
+    seen: set[str] = set()
+    for _ in range(_MAX_REPLY_ROOT_HOPS):
+        if current in seen:
+            log(f"[lounge] replyTo chain cycle detected while resolving root: original={original} current={current}")
+            return current
+        seen.add(current)
+
+        data = _graphql(query, {"c": current})
+        node = data.get("node") or {}
+        reply_to = node.get("replyTo") or {}
+        parent_id = _clean(reply_to.get("id")) or None
+        if not parent_id:
+            if current != original:
+                log(f"[lounge] ネスト返信を検出しルートへ付け替えた: 元ID={original}→新ID={current}")
+            return current
+        current = parent_id
+
+    log(f"[lounge] replyTo chain exceeded {_MAX_REPLY_ROOT_HOPS} hops while resolving root: original={original} current={current}")
+    return current
+
+
 def _post_to_lounge(item: dict[str, Any]) -> dict[str, Any]:
     body = _clean(item.get("body"))
     if not body:
@@ -342,6 +379,7 @@ mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) 
             raise RuntimeError("comment のとき reply_to_discussion_id は必須です")
         reply_to_comment_id = _clean(item.get("reply_to_comment_id")) or None
         if reply_to_comment_id:
+            reply_to_comment_id = _root_reply_comment_id(reply_to_comment_id)
             mutation = """
 mutation($discussionId: ID!, $body: String!, $replyToId: ID!) {
   addDiscussionComment(input: {discussionId: $discussionId, body: $body, replyToId: $replyToId}) {
