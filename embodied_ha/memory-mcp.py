@@ -38,6 +38,8 @@ from state_utils import file_lock
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 
+# MCP tool naming convention: free-form prose arguments use "text".
+
 
 def _default_log_dir() -> str:
     data_dir = " ".join(str(os.environ.get("EHA_DATA_DIR") or "").split()).strip()
@@ -141,19 +143,19 @@ def recall(args: dict[str, Any]):
 
 
 def remember(args: dict[str, Any]):
-    note = _clean(args.get("note"))
-    if not note:
-        return [text("note が空です")], True
+    memory_text = _clean(args.get("text"))
+    if not memory_text:
+        return [text("text が空です")], True
     ts = _dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        changed = _append_memory_line(f"- {ts} | {note}")
+        changed = _append_memory_line(f"- {ts} | {memory_text}")
     except Exception as e:
         return [text(f"記憶の追記に失敗: {e}")], True
     if changed:
-        log(f"[memory-mcp] remember: {note[:40]}")
+        log(f"[memory-mcp] remember: {memory_text[:40]}")
     else:
-        log(f"[memory-mcp] remember: duplicate skipped: {note[:40]}")
+        log(f"[memory-mcp] remember: duplicate skipped: {memory_text[:40]}")
     return [text("記憶に残しました")]
 
 
@@ -422,9 +424,9 @@ def main() -> None:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "note": {"type": "string", "description": "記憶に残す一文"},
+                        "text": {"type": "string", "description": "記憶に残す一文"},
                     },
-                    "required": ["note"],
+                    "required": ["text"],
                 },
             },
             "handler": remember,

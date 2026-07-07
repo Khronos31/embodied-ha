@@ -257,16 +257,16 @@ def get_narrative(args: dict[str, Any]):
 
 
 def append_narrative(args: dict[str, Any]):
-    entry = _clean(args.get("entry"))
-    if not entry:
-        return [text("entry が空です")], True
+    narrative_text = _clean(args.get("text"))
+    if not narrative_text:
+        return [text("text が空です")], True
 
     path = _narrative_path()
     content = _read_text(path).rstrip()
-    line = f"- {_now_ts()} | {entry}"
+    line = f"- {_now_ts()} | {narrative_text}"
     content = f"{content}\n{line}\n" if content else f"{line}\n"
     _write_text(path, content)
-    log(f"[sociality-mcp] narrative append: {entry[:60]}")
+    log(f"[sociality-mcp] narrative append: {narrative_text[:60]}")
     return [text("self_narrative に追記しました")]
 
 
@@ -444,12 +444,12 @@ def main() -> None:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "entry": {
+                        "text": {
                             "type": "string",
                             "description": "追記する一文",
                         },
                     },
-                    "required": ["entry"],
+                    "required": ["text"],
                 },
             },
             "handler": append_narrative,

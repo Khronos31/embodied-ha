@@ -275,7 +275,7 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertIn(episode["id"], result.stdout)
 
     def test_remember_and_recall_still_work(self):
-        self.memory_mcp.remember({"note": "猫のフードを買う"})
+        self.memory_mcp.remember({"text": "猫のフードを買う"})
         memory_md = self.log_dir / "memory.md"
         self.assertIn("猫のフードを買う", memory_md.read_text(encoding="utf-8"))
         recall = self._text(self.memory_mcp.recall({"keywords": ["フード"]}))

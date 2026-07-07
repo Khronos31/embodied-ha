@@ -52,8 +52,8 @@ class SocialityTests(unittest.TestCase):
     def test_get_narrative_returns_empty_string_when_missing(self):
         self.assertEqual(self._text(self.sociality.get_narrative({})), "")
 
-    def test_append_narrative_appends_a_bullet_entry(self):
-        self.sociality.append_narrative({"entry": "今日は会話の流れが少し落ち着いていた"})
+    def test_append_narrative_appends_a_bullet_text(self):
+        self.sociality.append_narrative({"text": "今日は会話の流れが少し落ち着いていた"})
         narrative = self._text(self.sociality.get_narrative({}))
         self.assertIn("今日は会話の流れが少し落ち着いていた", narrative)
         self.assertIn("- ", narrative)
