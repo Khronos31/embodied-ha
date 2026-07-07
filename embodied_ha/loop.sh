@@ -253,9 +253,9 @@ case "$MODE" in
     ;;
   web)
     MODE_LABEL="気になったことを調べる時間"
-    TOOLS_DESC="# 使えるツール\n-- WebSearch … Web検索\n-- WebFetch … 見つけたURLのページ本文を実際に開いて読む\n-- remember … 知って面白かったことを長期記憶に残す\n-- loops_add … 後で気にかけたいことを追加"
-    TASK="# やってほしいこと\n純粋な好奇心で調べ物をしてよい時間です。WebSearch で調べ、気になったページは WebFetch で本文まで読んでよい。面白かったことは remember に残してください。proposal は出さない。"
-    ALLOWED_TOOLS="WebSearch,WebFetch,mcp__memory__remember,mcp__memory__loops_add"
+    TOOLS_DESC="# 使えるツール\n-- WebSearch … Web検索\n-- remember … 知って面白かったことを長期記憶に残す\n-- loops_add … 後で気にかけたいことを追加"
+    TASK="# やってほしいこと\n純粋な好奇心で調べ物をしてよい時間です。WebSearch で調べ、面白かったことは remember に残してください。proposal は出さない。"
+    ALLOWED_TOOLS="WebSearch,mcp__memory__remember,mcp__memory__loops_add"
     MCP_SERVERS="memory"
     ;;
   social)
