@@ -227,7 +227,7 @@ print("\n".join(lines) if lines else "（特になし）")
 PYEOF
 )
 
-JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。ただし実際にやっていない行為を完了形で書かない。\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。声は出さず会話ルームにテキストで残り、${RESIDENT}さんが後で読む（相手の時間を奪わない）。特になければ null。実際にやっていない行為を完了形で書かない。\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（speak フィールドに書くと会話ルームにテキストで残り、${RESIDENT}さんが後で読む＝声は出ない。今すぐ声を出して呼びかけたいときだけ speak / use_device_speaker ツールを呼ぶ。長期記憶は remember / loops_add で記録すること）"
+JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。会話ルームにテキストとして残る——声には出ない。今すぐ声で呼びかけたいときは、このフィールドではなく音声ツール（speak / use_device_speaker）を使う。冒頭のキャラクター定義の口調のまま、${RESIDENT}さんに面と向かって話すときと同じように書く（privateとは違い、相手に宛てた言葉）。特になければnull。実際にやっていない行為を完了形で書かない。\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。ただし実際にやっていない行為を完了形で書かない。\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   observe)
@@ -247,7 +247,7 @@ case "$MODE" in
   reflect)
     MODE_LABEL="物思いにふける時間"
     TOOLS_DESC="# 使えるツール\n-- recall … 過去ログをキーワードで全文検索\n-- remember … 思ったこと・気づいたパターンを長期記憶に残す\n-- loops_add … 後で気にかけたいことを追加"
-    TASK="# やってほしいこと\n今は静かに考える時間です。最近の家の出来事や自分が見てきたことを思い返し、気になることがあれば recall で過去を掘り返してください。proposal は出さない。"
+    TASK="# やってほしいこと\n今は静かに考える時間です。最近の家の出来事や自分が見てきたことを思い返し、気になることがあれば recall で過去を掘り返してください。考えたこと自体はprivateに書く。${RESIDENT}さんに伝えたい・共有したいことがまとまったらspeakに書く（なければnullでよい、無理に埋めない）。proposal は出さない。"
     ALLOWED_TOOLS="mcp__memory__recall,mcp__memory__remember,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close"
     MCP_SERVERS="memory"
     ;;
