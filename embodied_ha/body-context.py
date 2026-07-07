@@ -6,23 +6,22 @@ import heapq
 import os
 from typing import Any
 
+from room_graph import (
+    data_dir,
+    initial_room,
+    load_room_graph,
+    resolve_room,
+    room_graph_path as room_graph_path,  # noqa: F401
+    rooms,
+)
 from state_utils import clean, read_json
 
-DEFAULT_DATA_DIR = "/config/embodied-ha"
-DEFAULT_ROOM_GRAPH_FILE = "/config/embodied-ha/floorplan_room_graph_draft.json"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
 DEFAULT_BODY_STATE_FILE = "/config/embodied-ha/body_state.json"
 DEFAULT_CALIB_FILE = "/config/embodied-ha/calibration/audio_calibration.json"
 
 _CALIB_INVALID_THRESHOLD = -200.0  # これ以下は音声トラックなし（-270 dB = 無音）
 
-
-def data_dir() -> str:
-    return clean(os.environ.get("EHA_DATA_DIR")) or DEFAULT_DATA_DIR
-
-
-def room_graph_path() -> str:
-    return clean(os.environ.get("EHA_ROOM_GRAPH_FILE")) or os.path.join(data_dir(), "floorplan_room_graph_draft.json") or DEFAULT_ROOM_GRAPH_FILE
 
 
 def body_location_path() -> str:
@@ -33,57 +32,17 @@ def body_state_path() -> str:
     return clean(os.environ.get("EHA_BODY_STATE_FILE")) or os.path.join(data_dir(), "body_state.json") or DEFAULT_BODY_STATE_FILE
 
 
-def load_graph() -> dict[str, Any]:
-    value = read_json(room_graph_path(), {})
-    return value if isinstance(value, dict) else {}
-
 
 def load_body_state() -> dict[str, Any]:
     value = read_json(body_state_path(), {})
     return value if isinstance(value, dict) else {}
 
 
-def rooms(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    value = graph.get("rooms")
-    if not isinstance(value, dict):
-        return {}
-    return {clean(k): v for k, v in value.items() if clean(k) and isinstance(v, dict)}
-
 
 def room_label(room_id: str, graph: dict[str, Any]) -> str:
     item = rooms(graph).get(room_id, {})
     return clean(item.get("display_name")) or room_id
 
-
-def resolve_room(value: Any, graph: dict[str, Any]) -> str | None:
-    key = clean(value)
-    if not key:
-        return None
-    room_map = rooms(graph)
-    if key in room_map:
-        return key
-    lowered = key.lower()
-    for room_id, item in room_map.items():
-        if clean(item.get("display_name")).lower() == lowered:
-            return room_id
-    aliases = graph.get("aliases_pending")
-    if isinstance(aliases, dict):
-        for room_id, values in aliases.items():
-            canonical = clean(room_id)
-            if canonical not in room_map or not isinstance(values, list):
-                continue
-            if any(clean(alias).lower() == lowered for alias in values):
-                return canonical
-    return None
-
-
-def initial_room(graph: dict[str, Any]) -> str:
-    room_map = rooms(graph)
-    if "study" in room_map:
-        return "study"
-    if "living_room" in room_map:
-        return "living_room"
-    return next(iter(room_map), "unknown")
 
 
 def load_location(graph: dict[str, Any]) -> dict[str, Any]:
@@ -183,7 +142,7 @@ def hearing_attenuation(body_room: str, graph: dict[str, Any]) -> list[tuple[str
 
 
 def format_body_context(limit: int = 5) -> str:
-    graph = load_graph()
+    graph = load_room_graph()
     room_map = rooms(graph)
     if not room_map:
         return "# 身体位置\n部屋グラフが未設定です。必要なら get_room_graph で確認してください。"
