@@ -7,7 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true
-RUN python3 -m pip install --break-system-packages --no-cache-dir pysilero-vad --quiet 2>/dev/null || true
+RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad==3.2.0" \
+    && python3 -c "from pysilero_vad import SileroVoiceActivityDetector; SileroVoiceActivityDetector()"
 
 # Claude CLI（node:22-slim に npm が入っているのでそのまま使う）
 RUN npm install -g @anthropic-ai/claude-code

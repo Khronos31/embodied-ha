@@ -30,10 +30,12 @@ from sensory_origin import area_for_entity, classify_sensory_origin, infer_room_
 from speak import play_pcm_file
 from state_utils import clean, now, parse_ts, read_json
 
+_SILERO_IMPORT_ERROR = ""
 try:
     from pysilero_vad import SileroVoiceActivityDetector
-except Exception:  # pragma: no cover - exercised through fallback path
+except Exception as exc:  # pragma: no cover - exercised through fallback path
     SileroVoiceActivityDetector = None
+    _SILERO_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 SAMPLE_RATE = 16000
@@ -2041,8 +2043,10 @@ def process_segment(
 
 def new_vad():
     if SileroVoiceActivityDetector is None:
+        reason = f" ({_SILERO_IMPORT_ERROR})" if _SILERO_IMPORT_ERROR else ""
         log(
-            "pysilero_vad unavailable; using "
+            "pysilero_vad unavailable"
+            f"{reason}; using "
             f"{FALLBACK_DB_THRESHOLD:.0f}dB fallback VAD "
             f"(speech_ratio>={FALLBACK_SEGMENT_MIN_SPEECH_RATIO}, peak>={FALLBACK_SEGMENT_MIN_PEAK_DB}dB)"
         )
