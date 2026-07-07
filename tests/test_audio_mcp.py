@@ -25,6 +25,13 @@ def load_audio_mcp_module():
 
 class AudioMcpTests(unittest.TestCase):
     def setUp(self):
+        self._body_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._body_tmp.cleanup)
+        body_path = Path(self._body_tmp.name) / "body_location.json"
+        body_path.write_text(json.dumps({"current_entity": "", "current_room": ""}), encoding="utf-8")
+        env_patch = mock.patch.dict(os.environ, {"EHA_BODY_LOCATION_FILE": str(body_path)}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.audio_mcp = load_audio_mcp_module()
 
     def _json(self, result):

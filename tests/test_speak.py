@@ -302,5 +302,67 @@ class SpeakGeneralTests(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class PlayPcmFileTests(unittest.TestCase):
+    def setUp(self):
+        self.speak = _load_speak()
+
+    def _write_prefs(self, prefs: dict) -> str:
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", encoding="utf-8", delete=False
+        )
+        json.dump(prefs, f, ensure_ascii=False)
+        f.close()
+        return f.name
+
+    def test_play_pcm_file_supports_local_speaker(self):
+        prefs = {
+            "speakers": [
+                {"room": "本体", "type": "local", "sink": "alsa_output.test"}
+            ]
+        }
+        prefs_path = self._write_prefs(prefs)
+        audio = tempfile.NamedTemporaryFile(delete=False)
+        audio.write(b"\x01\x02" * 100)
+        audio.close()
+        played = []
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak, "_play_pcm_local", side_effect=lambda pcm, sink="", **kw: played.append((pcm, sink))):
+                ok = self.speak.play_pcm_file("本体", audio.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(audio.name)
+
+        self.assertTrue(ok)
+        self.assertEqual(played, [(b"\x01\x02" * 100, "alsa_output.test")])
+
+    def test_play_pcm_file_converts_wav_before_local_playback(self):
+        prefs = {"speakers": [{"room": "本体", "type": "local"}]}
+        prefs_path = self._write_prefs(prefs)
+        wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        wav.write(b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 32)
+        wav.close()
+        converted = b"\x00\x01" * 80
+        proc = mock.Mock()
+        proc.communicate.return_value = (converted, b"")
+        proc.returncode = 0
+        played = []
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak.subprocess, "Popen", return_value=proc) as popen_mock, \
+                 mock.patch.object(self.speak, "_play_pcm_local", side_effect=lambda pcm, sink="", **kw: played.append((pcm, sink))):
+                ok = self.speak.play_pcm_file("本体", wav.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(wav.name)
+
+        self.assertTrue(ok)
+        self.assertEqual(played, [(converted, "")])
+        cmd = popen_mock.call_args.args[0]
+        self.assertEqual(cmd[:4], ["ffmpeg", "-loglevel", "error", "-i"])
+        self.assertEqual(cmd[4], wav.name)
+        self.assertIn("s16le", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

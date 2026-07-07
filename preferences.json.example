@@ -4,6 +4,7 @@
   "wake_words": ["ねえクロード", "クロード"],
 
   "tts_entity": "tts.home_assistant_cloud",
+  "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
 

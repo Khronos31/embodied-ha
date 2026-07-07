@@ -713,9 +713,10 @@ TOOL_SPEAK = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "message": {"type": "string", "description": "話す内容"},
+            "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
+            "file_path": {"type": "string", "description": "再生するraw PCMまたはWAVファイルパス。messageとは排他"},
         },
-        "required": ["message"],
+        "required": [],
     },
 }
 
@@ -728,9 +729,10 @@ TOOL_USE_DEVICE_SPEAKER = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "message": {"type": "string", "description": "話す内容"},
+            "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
+            "file_path": {"type": "string", "description": "再生するraw PCMまたはWAVファイルパス。messageとは排他"},
         },
-        "required": ["message"],
+        "required": [],
     },
 }
 
@@ -788,24 +790,40 @@ def _resolve_room_speaker(speakers: list, room: str) -> dict:
     return tcp_in_room[0] if tcp_in_room else room_speakers[0]
 
 
-def _run_speak(speak_room: str, message: str, speak_host: str = "") -> tuple[list, bool]:
-    cmd = ["python3", _SPEAK_PY, speak_room, message]
+def _run_speak(speak_room: str, message: str = "", speak_host: str = "", file_path: str = "") -> tuple[list, bool]:
+    cmd = ["python3", _SPEAK_PY, speak_room]
+    if file_path:
+        cmd += ["--file-path", file_path]
+    else:
+        cmd.append(message)
     if speak_host:
         cmd += ["--host", speak_host]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     detail = (r.stdout or "").strip() or (r.stderr or "").strip()
     if r.returncode != 0:
-        return [text(f"発話できませんでした: {detail}")], True
+        action = "再生" if file_path else "発話"
+        return [text(f"{action}できませんでした: {detail}")], True
     return [], False
 
 
-def _speak_with_entry(entry: dict, message: str, *, mode_desc: str = "") -> tuple[list, bool]:
+def _speak_payload(args: dict) -> tuple[str, str, tuple[list, bool] | None]:
+    message = clean(args.get("message"))
+    file_path = clean(args.get("file_path"))
+    if bool(message) == bool(file_path):
+        return "", "", ([text("message と file_path のどちらか一方だけが必要です")], True)
+    return message, file_path, None
+
+
+def _speak_with_entry(entry: dict, message: str = "", *, file_path: str = "", mode_desc: str = "") -> tuple[list, bool]:
     speak_room = clean(entry.get("room")) or ""
     speak_host = clean(entry.get("host")) if entry.get("type") == "tcp" else ""
     label = clean(entry.get("label")) or speak_room or speak_host
-    result, is_error = _run_speak(speak_room, message, speak_host)
+    result, is_error = _run_speak(speak_room, message, speak_host, file_path=file_path)
     if is_error:
         return result, True
+    if file_path:
+        log(f"[audio-mcp] play file [{mode_desc}] room={speak_room}: {file_path}")
+        return [text(f"再生しました（{label}）")], False
     log(f"[audio-mcp] speak [{mode_desc}] room={speak_room}: {message[:40]}")
     log_dir = os.environ.get("EHA_LOG_DIR", "")
     if log_dir:
@@ -929,9 +947,9 @@ def _audio_listen_from_source(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def speak(args: dict):
-    message = (args.get("message") or "").strip()
-    if not message:
-        return [text("message が必要です")], True
+    message, file_path, payload_error = _speak_payload(args if isinstance(args, dict) else {})
+    if payload_error:
+        return payload_error
     _, current_entity, current_room, _ = _current_body_state()
     if current_entity:
         return [text("電脳体モードでは speak は使えません。use_device_speaker を使ってください。")], True
@@ -944,13 +962,13 @@ def speak(args: dict):
             f"現在の部屋（{current_room}）にスピーカーが登録されていません。"
             "preferences.json の speakers に部屋を追加してください。"
         )], True
-    return _speak_with_entry(chosen, message, mode_desc=f"物理体@{current_room}")
+    return _speak_with_entry(chosen, message, file_path=file_path, mode_desc=f"物理体@{current_room}")
 
 
 def use_device_speaker(args: dict):
-    message = (args.get("message") or "").strip()
-    if not message:
-        return [text("message が必要です")], True
+    message, file_path, payload_error = _speak_payload(args if isinstance(args, dict) else {})
+    if payload_error:
+        return payload_error
     _, current_entity, current_room, projected_room = _current_body_state()
     broken_state = _broken_cyber_state_error(current_entity, projected_room)
     if broken_state:
@@ -962,7 +980,7 @@ def use_device_speaker(args: dict):
     speaker = caps.get("speaker")
     if not caps.get("is_speaker") or not isinstance(speaker, dict):
         return [text(f"現在侵入中のデバイス（{current_entity}）はスピーカーデバイスではありません。")], True
-    return _speak_with_entry(speaker, message, mode_desc=f"電脳体@{current_entity}")
+    return _speak_with_entry(speaker, message, file_path=file_path, mode_desc=f"電脳体@{current_entity}")
 
 
 def listen(args: dict):

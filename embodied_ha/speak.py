@@ -136,6 +136,50 @@ def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
     return pcm_bytes
 
 
+def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
+    """WAV等のヘッダ付き音声ファイルを raw mono s16le 16kHz PCM に変換する。"""
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-loglevel", "error",
+            "-i", audio_path,
+            "-ar", "16000", "-ac", "1", "-f", "s16le",
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        pcm_bytes, ffmpeg_err = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError("ffmpeg conversion timed out")
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg failed: {ffmpeg_err.decode('utf-8', errors='replace').strip()}"
+        )
+    if not pcm_bytes:
+        raise RuntimeError("ffmpeg produced empty PCM output")
+    return pcm_bytes
+
+
+def _pcm_bytes_from_file(audio_path: str) -> bytes:
+    """raw PCMはそのまま、WAV等はffmpegで再生用PCMへ正規化して返す。"""
+    try:
+        with open(audio_path, "rb") as f:
+            head = f.read(16)
+            f.seek(0)
+            raw_bytes = f.read()
+    except Exception as exc:
+        raise RuntimeError(f"audio file read failed ({audio_path}): {exc}") from exc
+
+    if not raw_bytes:
+        raise RuntimeError(f"audio file is empty ({audio_path})")
+    if head.startswith(b"RIFF") and b"WAVE" in head:
+        return _convert_audio_file_to_pcm(audio_path)
+    return raw_bytes
+
+
 def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5) -> None:
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.sendall(pcm_bytes)
@@ -182,36 +226,42 @@ def play_pcm_file(room, pcm_path, host=""):
         print(f"[speak] '{room}' は preferences.json に未登録。PCM 再生をスキップ。", file=sys.stderr)
         return False
 
-    if config.get("type") != "tcp":
-        print(f"[speak] PCM file playback is unsupported for speaker type: {config.get('type')}", file=sys.stderr)
-        return False
-
-    target_host = (config.get("host") or "").strip()
     try:
-        port = int(config.get("port") or 3334)
-    except Exception:
-        port = 3334
-    if not target_host or port <= 0:
-        print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
-        return False
-
-    try:
-        with open(pcm_path, "rb") as f:
-            pcm_bytes = f.read()
+        pcm_bytes = _pcm_bytes_from_file(pcm_path)
     except Exception as exc:
-        print(f"[speak] PCM file read failed ({pcm_path}): {exc}", file=sys.stderr)
-        return False
-    if not pcm_bytes:
-        print(f"[speak] PCM file is empty ({pcm_path})", file=sys.stderr)
+        print(f"[speak] audio file load failed ({pcm_path}): {exc}", file=sys.stderr)
         return False
 
-    try:
-        _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=3)
-        print(f"[speak] tcp:{room} PCM OK sent={len(pcm_bytes)}B ({target_host}:{port})")
-        return True
-    except Exception as exc:
-        print(f"[speak] tcp:{room} PCM 送信失敗: {exc}", file=sys.stderr)
-        return False
+    if config.get("type") == "tcp":
+        target_host = (config.get("host") or "").strip()
+        try:
+            port = int(config.get("port") or 3334)
+        except Exception:
+            port = 3334
+        if not target_host or port <= 0:
+            print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
+            return False
+
+        try:
+            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=3)
+            print(f"[speak] tcp:{room} PCM OK sent={len(pcm_bytes)}B ({target_host}:{port})")
+            return True
+        except Exception as exc:
+            print(f"[speak] tcp:{room} PCM 送信失敗: {exc}", file=sys.stderr)
+            return False
+
+    if config.get("type") == "local":
+        sink = (config.get("sink") or "").strip()
+        try:
+            _play_pcm_local(pcm_bytes, sink=sink)
+            print(f"[speak] local:{room} PCM OK played={len(pcm_bytes)}B sink={sink or '(default)'}")
+            return True
+        except Exception as exc:
+            print(f"[speak] local:{room} PCM 再生失敗: {exc}", file=sys.stderr)
+            return False
+
+    print(f"[speak] PCM file playback is unsupported for speaker type: {config.get('type')}", file=sys.stderr)
+    return False
 
 
 def speak(room, message, host=""):
@@ -350,8 +400,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("room")
-    parser.add_argument("message")
+    parser.add_argument("message", nargs="?", default="")
     parser.add_argument("--host", default="", help="TCP スピーカーをホストで直接指定（電脳体モード用）")
+    parser.add_argument("--file-path", default="", help="raw PCMまたはWAVファイルを再生する")
     a = parser.parse_args()
-    ok = speak(a.room, a.message, host=a.host)
+    if a.file_path:
+        ok = play_pcm_file(a.room, a.file_path, host=a.host)
+    else:
+        if not a.message:
+            parser.error("message or --file-path is required")
+        ok = speak(a.room, a.message, host=a.host)
     sys.exit(0 if ok else 1)

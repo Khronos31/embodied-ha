@@ -2,7 +2,7 @@
 """Embodied HA Web UI サーバー。静的ファイル配信 + JSONL 読み取り API + SSE ライブ更新。"""
 import importlib.util
 import datetime as _dt
-import json, os, subprocess, time, queue, threading, tempfile, sys, re
+import json, os, subprocess, time, queue, threading, tempfile, sys, re, platform, shutil, uuid
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -66,20 +66,77 @@ EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 
 CHIVE_DIR  = "/data/word2vec/chive-1.3-mc90_gensim"
 CHIVE_URL  = "https://sudachi.s3-ap-northeast-1.amazonaws.com/chive/chive-1.3-mc90_gensim.tar.gz"
+VOICEVOX_SONG_DIR = os.environ.get("EHA_VOICEVOX_CORE_DIR", "/data/voicevox_core")
+VOICEVOX_CORE_VERSION = "0.16.4"
+VOICEVOX_REQUIRED_FREE_BYTES = int(2.5 * 1024 * 1024 * 1024)
 
-_install_status: dict = {"status": "idle", "message": ""}
-_install_lock = threading.Lock()
+_install_status: dict[str, dict] = {
+    "chive": {"status": "idle", "message": ""},
+    "voicevox_song": {"status": "idle", "message": ""},
+}
+_install_status_lock = threading.Lock()
+_install_locks = {"chive": threading.Lock(), "voicevox_song": threading.Lock()}
+
+
+def _set_install_status(key: str, status: str, message: str) -> None:
+    with _install_status_lock:
+        _install_status[key] = {"status": status, "message": message}
+
+
+def _get_install_status(key: str) -> dict:
+    with _install_status_lock:
+        return dict(_install_status.get(key, {"status": "idle", "message": ""}))
+
+
+def _start_install_thread(key: str, target) -> bool:
+    lock = _install_locks[key]
+    with lock:
+        if _get_install_status(key).get("status") == "running":
+            return False
+        _set_install_status(key, "running", "開始中...")
+        threading.Thread(target=target, daemon=True).start()
+        return True
 
 
 def _chive_installed() -> bool:
     return os.path.exists(os.path.join(CHIVE_DIR, "chive-1.3-mc90.kv"))
 
 
+def _voicevox_song_installed() -> bool:
+    try:
+        import voicevox_song
+        return voicevox_song.is_installed(VOICEVOX_SONG_DIR)
+    except Exception:
+        return False
+
+
+def _check_data_disk_space(required_bytes: int = VOICEVOX_REQUIRED_FREE_BYTES) -> None:
+    usage = shutil.disk_usage("/data" if os.path.exists("/data") else os.path.dirname(VOICEVOX_SONG_DIR) or "/")
+    if usage.free < required_bytes:
+        free_gb = usage.free / (1024 ** 3)
+        need_gb = required_bytes / (1024 ** 3)
+        raise RuntimeError(f"ディスク空き容量が不足しています(空き:{free_gb:.1f} GB, 必要:約{need_gb:.1f}GB)")
+
+
+def _voicevox_release_artifacts() -> tuple[str, str]:
+    machine = platform.machine().lower()
+    if machine in {"x86_64", "amd64"}:
+        wheel_arch = "x86_64"
+        downloader = "download-linux-x64"
+    elif machine in {"aarch64", "arm64"}:
+        wheel_arch = "aarch64"
+        downloader = "download-linux-arm64"
+    else:
+        raise RuntimeError(f"未対応アーキテクチャです: {platform.machine()}")
+    base = f"https://github.com/VOICEVOX/voicevox_core/releases/download/{VOICEVOX_CORE_VERSION}"
+    wheel = f"{base}/voicevox_core-{VOICEVOX_CORE_VERSION}-cp310-abi3-manylinux_2_34_{wheel_arch}.whl"
+    return wheel, f"{base}/{downloader}"
+
+
 def _run_install():
-    global _install_status
     try:
         # gensim — /data/python-packages に永続インストール（コンテナ再起動後も残る）
-        _install_status = {"status": "running", "message": "gensim をインストール中..."}
+        _set_install_status("chive", "running", "gensim をインストール中...")
         pkg_dir = "/data/python-packages"
         os.makedirs(pkg_dir, exist_ok=True)
         r = subprocess.run(
@@ -88,28 +145,81 @@ def _run_install():
             capture_output=True, text=True, timeout=300,
         )
         if r.returncode != 0:
-            _install_status = {"status": "error", "message": f"gensim インストール失敗: {r.stderr[:200]}"}
+            _set_install_status("chive", "error", f"gensim インストール失敗: {r.stderr[:200]}")
             return
 
         # chiVe
-        _install_status = {"status": "running", "message": "chiVe モデルをダウンロード中（約490MB）..."}
+        _set_install_status("chive", "running", "chiVe モデルをダウンロード中（約490MB）...")
         os.makedirs("/data/word2vec", exist_ok=True)
         tar_path = "/data/word2vec/chive-1.3-mc90_gensim.tar.gz"
         urllib.request.urlretrieve(CHIVE_URL, tar_path)
 
-        _install_status = {"status": "running", "message": "展開中..."}
+        _set_install_status("chive", "running", "展開中...")
         r2 = subprocess.run(
             ["tar", "xzf", tar_path, "-C", "/data/word2vec"],
             capture_output=True, timeout=120,
         )
         os.remove(tar_path)
         if r2.returncode != 0:
-            _install_status = {"status": "error", "message": "展開失敗"}
+            _set_install_status("chive", "error", "展開失敗")
             return
 
-        _install_status = {"status": "done", "message": "インストール完了"}
+        _set_install_status("chive", "done", "インストール完了")
     except Exception as e:
-        _install_status = {"status": "error", "message": str(e)[:300]}
+        _set_install_status("chive", "error", str(e)[:300])
+
+
+def _run_voicevox_song_install():
+    tmp_dir = f"{VOICEVOX_SONG_DIR}.tmp-{uuid.uuid4().hex}"
+    try:
+        _check_data_disk_space()
+        wheel_url, downloader_url = _voicevox_release_artifacts()
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        downloads_dir = os.path.join(tmp_dir, "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+        wheel_path = os.path.join(downloads_dir, os.path.basename(wheel_url))
+        downloader_path = os.path.join(downloads_dir, "download")
+
+        _set_install_status("voicevox_song", "running", "voicevox_core wheel をダウンロード中...")
+        urllib.request.urlretrieve(wheel_url, wheel_path)
+
+        _set_install_status("voicevox_song", "running", "voicevox_core をインストール中...")
+        pkg_dir = os.path.join(tmp_dir, "python-packages")
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--target", pkg_dir, "--no-cache-dir", "-q", wheel_path],
+            capture_output=True, text=True, timeout=300,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"voicevox_core インストール失敗: {(r.stderr or r.stdout)[:300]}")
+
+        _set_install_status("voicevox_song", "running", "VOICEVOXモデル・辞書・onnxruntimeをダウンロード中（約1.7GB）...")
+        urllib.request.urlretrieve(downloader_url, downloader_path)
+        os.chmod(downloader_path, 0o755)
+        r2 = subprocess.run(
+            [downloader_path, "--only", "onnxruntime", "dict", "models", "-o", tmp_dir],
+            input="y\n", capture_output=True, text=True, timeout=1800,
+        )
+        if r2.returncode != 0:
+            raise RuntimeError(f"VOICEVOXデータ取得失敗: {(r2.stderr or r2.stdout)[:300]}")
+
+        import voicevox_song
+        if not voicevox_song.is_installed(tmp_dir):
+            raise RuntimeError("VOICEVOX Song のインストール検証に失敗しました")
+
+        if os.path.exists(VOICEVOX_SONG_DIR):
+            shutil.rmtree(VOICEVOX_SONG_DIR)
+        os.replace(tmp_dir, VOICEVOX_SONG_DIR)
+        _set_install_status("voicevox_song", "done", "インストール完了")
+    except Exception as e:
+        try:
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
+        _set_install_status("voicevox_song", "error", str(e)[:300])
 LOUNGE_QUEUE_LOG = os.path.join(LOG_DIR, "ai_lounge_queue.jsonl")
 LOUNGE_RESOLVED_LOG = os.path.join(LOG_DIR, "ai_lounge_log.jsonl")
 
@@ -1256,7 +1366,22 @@ class Handler(BaseHTTPRequestHandler):
                     g["model_installed"] = _chive_installed()
             self.send_json({"games": games})
         elif path == "/api/games/install-status":
-            self.send_json(_install_status)
+            self.send_json(_get_install_status("chive"))
+        elif path == "/api/voicevox_song/status":
+            status = _get_install_status("voicevox_song")
+            installed = _voicevox_song_installed()
+            if installed and status.get("status") == "idle":
+                status["message"] = "インストール済み"
+            self.send_json({"installed": installed, **status})
+        elif path == "/api/voicevox_song/singers":
+            if not _voicevox_song_installed():
+                self.send_json([])
+                return
+            try:
+                import voicevox_song
+                self.send_json(voicevox_song.list_singers(VOICEVOX_SONG_DIR))
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
         elif path.startswith("/api/audio-events/") and path.endswith("/wav"):
             event_id = path[len("/api/audio-events/"):-len("/wav")].strip("/")
             if not event_id or not all(c.isalnum() or c in "-_" for c in event_id):
@@ -1663,23 +1788,45 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/games/install":
-            with _install_lock:
-                if _install_status["status"] == "running":
-                    self.send_json({"ok": True, "message": "already running"})
-                    return
-            threading.Thread(target=_run_install, daemon=True).start()
+            if not _start_install_thread("chive", _run_install):
+                self.send_json({"ok": True, "message": "already running"})
+                return
             self.send_json({"ok": True})
         elif path == "/api/games/uninstall":
             try:
-                import shutil
                 if os.path.exists(CHIVE_DIR):
                     shutil.rmtree(CHIVE_DIR)
+                _set_install_status("chive", "idle", "")
                 prefs, ok = _load_prefs_for_update(PREFS_FILE)
                 if not ok:
                     self.send_json({"error": "preferences.json が読み込めないため設定変更を中止しました（ファイル破損の可能性）"}, 500)
                     return
                 prefs.setdefault("games", {}).setdefault("plugins", {})["wordvec_race"] = False
                 atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/voicevox_song/install":
+            if _voicevox_song_installed():
+                _set_install_status("voicevox_song", "done", "インストール済み")
+                self.send_json({"ok": True, "message": "already installed"})
+                return
+            try:
+                _check_data_disk_space()
+            except Exception as e:
+                msg = str(e)[:300]
+                _set_install_status("voicevox_song", "error", msg)
+                self.send_json({"error": msg}, 507)
+                return
+            if not _start_install_thread("voicevox_song", _run_voicevox_song_install):
+                self.send_json({"ok": True, "message": "already running"})
+                return
+            self.send_json({"ok": True})
+        elif path == "/api/voicevox_song/uninstall":
+            try:
+                if os.path.exists(VOICEVOX_SONG_DIR):
+                    shutil.rmtree(VOICEVOX_SONG_DIR)
+                _set_install_status("voicevox_song", "idle", "")
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

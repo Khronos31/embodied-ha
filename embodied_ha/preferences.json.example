@@ -6,6 +6,7 @@
     "クロード"
   ],
   "tts_entity": "tts.home_assistant_cloud",
+  "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
   "_cameras_doc": "カメラ（目）: 侵入して見る実デバイス。entity は侵入時の ID、source は HA エンティティ ID か go2rtc / 直接 URL。ptz は必要なカメラだけ設定する。",

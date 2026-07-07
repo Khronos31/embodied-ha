@@ -25,6 +25,28 @@ let antigravityAuthPollActive = false;
 
 // AI Lounge State
 let aiLoungeTimer = null;
+
+// --- VOICEVOX Song State ---
+let voicevoxSongStatus = {
+    installed: false,
+    status: 'idle',
+    message: ''
+};
+let voicevoxSongSingers = [];
+let voicevoxSongStatusLoaded = false;
+let voicevoxSongPollInterval = null;
+
+// Mock data for VOICEVOX Song
+const mockVoicevoxSongStatus = {
+    installed: false,
+    status: 'idle',
+    message: ''
+};
+const mockVoicevoxSongSingers = [
+    { name: "春日部つむぎ", style_name: "ノーマル", style_id: 3008, credit: "VOICEVOX:春日部つむぎ" },
+    { name: "四国めたん", style_name: "あまあま", style_id: 3002, credit: "VOICEVOX:四国めたん" }
+];
+
 const FEATURE_CATALOG = [
   {
     id: "ai_lounge",
@@ -650,15 +672,32 @@ async function checkBackendMode() {
 
             // Connect to Live update stream (SSE)
             connectSSE();
+
+            // VOICEVOX Song 関連の初期ロード
+            try {
+                await loadVoicevoxSongStatus();
+                voicevoxSongStatusLoaded = true;
+                if (voicevoxSongStatus.status === 'running') {
+                    startVoicevoxSongPolling();
+                }
+                updateSingSpeakerUI();
+                if (activeSettingsTab === 'other') {
+                    renderOtherFeaturesCatalog();
+                }
+            } catch (err) {
+                console.error("Failed to load VOICEVOX Song status on backend init:", err);
+            }
         } else {
             console.warn("[API] Messages API check returned error status. Running standalone mock.");
             initMockPreferences();
             runMockSimulations();
+            updateSingSpeakerUI();
         }
     } catch (err) {
         console.warn("[API] Backend check failed. Running standalone mock.", err);
         initMockPreferences();
         runMockSimulations();
+        updateSingSpeakerUI();
     }
 }
 
@@ -1760,6 +1799,7 @@ async function renderSettingsForm() {
     
     updateDynamicFeaturesUI();
     renderOtherFeaturesCatalog();
+    updateSingSpeakerUI();
 
     // フォームの入力変更を監視して Dirty フラグを設定
     const form = document.getElementById('settings-form');
@@ -1842,6 +1882,7 @@ async function switchSettingsTab(tabName) {
     if (actionBar) actionBar.style.display = noSaveBar.includes(tabName) ? 'none' : '';
     
     if (tabName === 'other') {
+        voicevoxSongStatusLoaded = false;
         renderOtherFeaturesCatalog();
     }
     if (tabName === 'experimental') {
@@ -2118,9 +2159,22 @@ function serializeFormToPrefs() {
     const wakeWordsRaw = document.getElementById('setting-wake-words')?.value || '';
     const wake_words = wakeWordsRaw.split(",").map(s => s.trim()).filter(Boolean);
 
-    const { audio_sources: _audioSources, ...prefsBase } = prefsData || {};
+    const singSpeakerSelect = document.getElementById('setting-sing-speaker');
+    let sing_speaker = undefined;
+    if (singSpeakerSelect && singSpeakerSelect.value) {
+        const styleId = parseInt(singSpeakerSelect.value, 10);
+        const selectedSinger = voicevoxSongSingers.find(s => s.style_id === styleId);
+        if (selectedSinger) {
+            sing_speaker = {
+                name: selectedSinger.name,
+                style_id: selectedSinger.style_id
+            };
+        }
+    }
 
-    return {
+    const { audio_sources: _audioSources, sing_speaker: _singSpeaker, ...prefsBase } = prefsData || {};
+
+    const returnObj = {
         // フォームで管理していないフィールド（tts_provider 等）を保持してから上書きする
         ...prefsBase,
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
@@ -2140,6 +2194,12 @@ function serializeFormToPrefs() {
         projection_targets,
         loop_schedule: loopSchedule
     };
+
+    if (sing_speaker) {
+        returnObj.sing_speaker = sing_speaker;
+    }
+
+    return returnObj;
 }
 
 // skipMissingFallback=true: 一覧に無い値を「未発見」として足さない。
@@ -4618,19 +4678,29 @@ function renderOtherFeaturesCatalog() {
     const container = document.getElementById('settings-tab-other');
     if (!container) return;
     
-    const enabled = prefsData?.enabled_features || [];
+    if (!voicevoxSongStatusLoaded) {
+        voicevoxSongStatusLoaded = true;
+        loadVoicevoxSongStatus().then(() => {
+            renderOtherFeaturesCatalog();
+            if (voicevoxSongStatus.status === 'running') {
+                startVoicevoxSongPolling();
+            }
+        });
+    }
     
+    const enabled = prefsData?.enabled_features || [];
+
     let html = `
         <section class="settings-section card">
             <h3>その他の機能（機能カタログ）</h3>
             <p class="section-desc">追加のアドオン機能を有効化できます。有効化すると左サイドバーにセクションが表示されます。</p>
             <div class="feature-catalog-list">
     `;
-    
+
     FEATURE_CATALOG.forEach(feature => {
         const isEnabled = enabled.includes(feature.id);
         let btnHtml = '';
-        
+
         if (feature.disabled) {
             btnHtml = `<button type="button" class="btn btn-secondary btn-sm" disabled>準備中</button>`;
         } else if (isEnabled) {
@@ -4638,7 +4708,7 @@ function renderOtherFeaturesCatalog() {
         } else {
             btnHtml = `<button type="button" class="btn btn-primary btn-sm" onclick="addFeature('${feature.id}')">追加</button>`;
         }
-        
+
         html += `
             <div class="feature-catalog-card">
                 <div class="feature-catalog-icon">${feature.icon}</div>
@@ -4652,12 +4722,46 @@ function renderOtherFeaturesCatalog() {
             </div>
         `;
     });
-    
+
+    // VOICEVOX Song は重いインストール処理を伴うため専用の状態管理だが、
+    // 見た目は他のカタログカードと同じ .feature-catalog-card に統一する
+    const isInstalled = voicevoxSongStatus.installed;
+    const status = voicevoxSongStatus.status;
+    const message = voicevoxSongStatus.message;
+
+    let voicevoxBtn = '';
+    let voicevoxDesc = `${characterName}（または選択したキャラクター）の声で歌を歌えるようにする機能です。1.7GBのモデルファイルのダウンロードが必要です。`;
+
+    if (status === 'running') {
+        voicevoxBtn = `<button type="button" class="btn btn-secondary btn-sm" disabled>インストール中...</button>`;
+        voicevoxDesc += ` <span style="color: var(--claude-accent); font-weight: 500;">進捗: ${message || ''}</span>`;
+    } else if (isInstalled) {
+        voicevoxBtn = `<button type="button" class="btn btn-secondary btn-sm" onclick="uninstallVoicevoxSong()" style="color:#dc2626;">アンインストール</button>`;
+    } else {
+        voicevoxBtn = `<button type="button" class="btn btn-primary btn-sm" onclick="installVoicevoxSong()">インストール</button>`;
+        if (status === 'error' && message) {
+            voicevoxDesc += ` <span style="color: #dc2626; font-weight: 500;">エラー: ${message}</span>`;
+        }
+    }
+
+    html += `
+            <div class="feature-catalog-card">
+                <div class="feature-catalog-icon">🎤</div>
+                <div class="feature-catalog-info">
+                    <div class="feature-catalog-name">VOICEVOX Song（歌唱合成）</div>
+                    <div class="feature-catalog-desc">${voicevoxDesc}</div>
+                </div>
+                <div class="feature-catalog-action">
+                    ${voicevoxBtn}
+                </div>
+            </div>
+    `;
+
     html += `
             </div>
         </section>
     `;
-    
+
     container.innerHTML = html;
 }
 
@@ -4690,6 +4794,197 @@ async function addFeature(featureId) {
         } catch (err) {
             console.error("Error updating preferences:", err);
         }
+    }
+}
+
+async function loadVoicevoxSongStatus() {
+    if (isStandaloneMode) {
+        voicevoxSongStatus = { ...mockVoicevoxSongStatus };
+        if (voicevoxSongStatus.installed) {
+            voicevoxSongSingers = [...mockVoicevoxSongSingers];
+        } else {
+            voicevoxSongSingers = [];
+        }
+        return;
+    }
+    try {
+        const res = await fetch(`${base}/api/voicevox_song/status`);
+        if (res.ok) {
+            voicevoxSongStatus = await res.json();
+            if (voicevoxSongStatus.installed) {
+                await loadVoicevoxSongSingers();
+            } else {
+                voicevoxSongSingers = [];
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load VOICEVOX Song status:", e);
+    }
+}
+
+async function loadVoicevoxSongSingers() {
+    if (isStandaloneMode) {
+        voicevoxSongSingers = [...mockVoicevoxSongSingers];
+        return;
+    }
+    try {
+        const res = await fetch(`${base}/api/voicevox_song/singers`);
+        if (res.ok) {
+            voicevoxSongSingers = await res.json();
+        }
+    } catch (e) {
+        console.error("Failed to load VOICEVOX Song singers:", e);
+        voicevoxSongSingers = [];
+    }
+}
+
+function startVoicevoxSongPolling() {
+    if (voicevoxSongPollInterval) return;
+    
+    voicevoxSongPollInterval = setInterval(async () => {
+        if (isStandaloneMode) {
+            if (mockVoicevoxSongStatus.status === 'running') {
+                if (!mockVoicevoxSongStatus.progress) mockVoicevoxSongStatus.progress = 0;
+                mockVoicevoxSongStatus.progress += 20;
+                mockVoicevoxSongStatus.message = `ダウンロード中... ${mockVoicevoxSongStatus.progress}% (1.7GB)`;
+                
+                if (mockVoicevoxSongStatus.progress >= 100) {
+                    mockVoicevoxSongStatus.status = 'done';
+                    mockVoicevoxSongStatus.installed = true;
+                    mockVoicevoxSongStatus.message = 'インストール完了';
+                    voicevoxSongStatus = { ...mockVoicevoxSongStatus };
+                    clearInterval(voicevoxSongPollInterval);
+                    voicevoxSongPollInterval = null;
+                    await loadVoicevoxSongSingers();
+                    renderOtherFeaturesCatalog();
+                    updateSingSpeakerUI();
+                    return;
+                }
+                voicevoxSongStatus = { ...mockVoicevoxSongStatus };
+                renderOtherFeaturesCatalog();
+            }
+            return;
+        }
+        
+        try {
+            const res = await fetch(`${base}/api/voicevox_song/status`);
+            if (res.ok) {
+                voicevoxSongStatus = await res.json();
+                renderOtherFeaturesCatalog();
+                
+                if (voicevoxSongStatus.status === 'done' || voicevoxSongStatus.status === 'error') {
+                    clearInterval(voicevoxSongPollInterval);
+                    voicevoxSongPollInterval = null;
+                    if (voicevoxSongStatus.status === 'done') {
+                        await loadVoicevoxSongSingers();
+                        renderOtherFeaturesCatalog();
+                        updateSingSpeakerUI();
+                    } else if (voicevoxSongStatus.status === 'error') {
+                        alert('VOICEVOX Song インストール失敗: ' + (voicevoxSongStatus.message || '不明なエラー'));
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Polling error:", e);
+            clearInterval(voicevoxSongPollInterval);
+            voicevoxSongPollInterval = null;
+        }
+    }, 2000);
+}
+
+async function installVoicevoxSong() {
+    if (isStandaloneMode) {
+        mockVoicevoxSongStatus.status = 'running';
+        mockVoicevoxSongStatus.progress = 0;
+        mockVoicevoxSongStatus.message = 'ダウンロード開始中...';
+        voicevoxSongStatus = { ...mockVoicevoxSongStatus };
+        renderOtherFeaturesCatalog();
+        startVoicevoxSongPolling();
+        return;
+    }
+    
+    voicevoxSongStatus.status = 'running';
+    voicevoxSongStatus.message = 'インストールを開始しています...';
+    renderOtherFeaturesCatalog();
+    
+    try {
+        const res = await fetch(`${base}/api/voicevox_song/install`, { method: 'POST' });
+        if (res.ok) {
+            startVoicevoxSongPolling();
+        } else {
+            alert('インストール開始に失敗しました');
+            await loadVoicevoxSongStatus();
+            renderOtherFeaturesCatalog();
+        }
+    } catch (e) {
+        alert('インストール開始に失敗しました');
+        await loadVoicevoxSongStatus();
+        renderOtherFeaturesCatalog();
+    }
+}
+
+async function uninstallVoicevoxSong() {
+    if (!confirm('VOICEVOX Song モデルを削除してアンインストールします。よろしいですか？')) return;
+    
+    if (isStandaloneMode) {
+        mockVoicevoxSongStatus.installed = false;
+        mockVoicevoxSongStatus.status = 'idle';
+        mockVoicevoxSongStatus.message = '';
+        voicevoxSongStatus = { ...mockVoicevoxSongStatus };
+        voicevoxSongSingers = [];
+        if (prefsData) {
+            delete prefsData.sing_speaker;
+        }
+        renderOtherFeaturesCatalog();
+        updateSingSpeakerUI();
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${base}/api/voicevox_song/uninstall`, { method: 'POST' });
+        if (res.ok) {
+            await loadVoicevoxSongStatus();
+            if (prefsData) {
+                delete prefsData.sing_speaker;
+                try {
+                    await fetch(`${base}/api/preferences`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(prefsData)
+                    });
+                } catch (err) {
+                    console.error("Failed to update preferences after uninstall:", err);
+                }
+            }
+            renderOtherFeaturesCatalog();
+            updateSingSpeakerUI();
+        } else {
+            const data = await res.json();
+            alert('アンインストール失敗: ' + (data.error || '不明なエラー'));
+        }
+    } catch (e) {
+        alert('通信エラーが発生しました');
+    }
+}
+
+function updateSingSpeakerUI() {
+    const accordion = document.getElementById('accordion-sing-speaker');
+    const select = document.getElementById('setting-sing-speaker');
+    if (!accordion || !select) return;
+
+    const isInstalled = voicevoxSongStatus && (voicevoxSongStatus.installed || voicevoxSongStatus.status === 'done');
+    if (isInstalled) {
+        accordion.style.display = 'block';
+        
+        const currentSinger = prefsData?.sing_speaker || {};
+        const optionsHtml = ['<option value="">(未選択)</option>'];
+        voicevoxSongSingers.forEach(s => {
+            const isSelected = currentSinger.style_id === s.style_id ? 'selected' : '';
+            optionsHtml.push(`<option value="${s.style_id}" ${isSelected}>${s.name} (${s.style_name}) [${s.credit}]</option>`);
+        });
+        select.innerHTML = optionsHtml.join('');
+    } else {
+        accordion.style.display = 'none';
     }
 }
 
