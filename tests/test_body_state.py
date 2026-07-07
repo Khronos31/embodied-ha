@@ -177,5 +177,84 @@ class BodyStateTests(unittest.TestCase):
         moved = body_state.apply_action_effect(state, action_mode="physical_move", action_cost=2.0, target_room="living_room", move_cost=2.0)
         self.assertEqual(moved["remote_avatar_host"], "")
 
+    def test_camera_projection_pressure_accumulates_to_half_after_90_minutes(self):
+        base = datetime.datetime(2026, 7, 7, 10, 0, tzinfo=datetime.timezone.utc)
+        state = body_state.normalize_state({
+            "updated_at": base.isoformat(),
+            "remote_avatar_host": "camera.living",
+            "return_to_body_pressure": 0.0,
+        })
+        for tick in range(1, 19):
+            state = body_state.advance_tick(
+                state,
+                loop_name="watch",
+                trigger_reason="定期実行",
+                now=base + datetime.timedelta(minutes=5 * tick),
+            )
+
+        self.assertGreaterEqual(state["return_to_body_pressure"], 0.45)
+        self.assertLessEqual(state["return_to_body_pressure"], 0.55)
+
+    def test_camera_projection_pressure_accumulates_to_high_after_5_hours(self):
+        base = datetime.datetime(2026, 7, 7, 10, 0, tzinfo=datetime.timezone.utc)
+        state = body_state.normalize_state({
+            "updated_at": base.isoformat(),
+            "remote_avatar_host": "camera.living",
+            "return_to_body_pressure": 0.0,
+        })
+        for tick in range(1, 61):
+            state = body_state.advance_tick(
+                state,
+                loop_name="watch",
+                trigger_reason="定期実行",
+                now=base + datetime.timedelta(minutes=5 * tick),
+            )
+
+        self.assertGreaterEqual(state["return_to_body_pressure"], 0.85)
+        self.assertLessEqual(state["return_to_body_pressure"], 0.93)
+
+    def test_returned_body_pressure_recovers_after_projection_ends(self):
+        base = datetime.datetime(2026, 7, 7, 10, 0, tzinfo=datetime.timezone.utc)
+        state = body_state.normalize_state({
+            "updated_at": base.isoformat(),
+            "remote_avatar_host": "camera.living",
+            "return_to_body_pressure": 0.5,
+        })
+        state = body_state.advance_tick(
+            state,
+            loop_name="watch",
+            trigger_reason="定期実行",
+            now=base + datetime.timedelta(minutes=5),
+        )
+        projected_pressure = state["return_to_body_pressure"]
+        state["remote_avatar_host"] = ""
+        recovered = body_state.advance_tick(
+            state,
+            loop_name="watch",
+            trigger_reason="定期実行",
+            now=base + datetime.timedelta(minutes=10),
+        )
+
+        self.assertLess(recovered["return_to_body_pressure"], projected_pressure)
+
+    def test_camera_projection_does_not_change_energy_drift(self):
+        base = datetime.datetime(2026, 7, 7, 10, 0, tzinfo=datetime.timezone.utc)
+        common = {"updated_at": base.isoformat(), "energy": 0.9, "return_to_body_pressure": 0.2}
+        projected = body_state.advance_tick(
+            body_state.normalize_state({**common, "remote_avatar_host": "camera.living"}),
+            loop_name="watch",
+            trigger_reason="定期実行",
+            now=base + datetime.timedelta(minutes=5),
+        )
+        non_projected = body_state.advance_tick(
+            body_state.normalize_state({**common, "remote_avatar_host": ""}),
+            loop_name="watch",
+            trigger_reason="定期実行",
+            now=base + datetime.timedelta(minutes=5),
+        )
+
+        self.assertEqual(projected["energy"], non_projected["energy"])
+
+
 if __name__ == "__main__":
     unittest.main()

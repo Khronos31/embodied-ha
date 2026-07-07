@@ -13,11 +13,13 @@ from typing import Any
 
 SPEAK_TOOLS = {"mcp__audio__speak", "mcp__audio__use_device_speaker"}
 ACTION_TOOLS = {"mcp__hacontrol__ha_call_service"}
+CAMERA_TOOL = "mcp__camera__use_device_camera"
 
 # 完了形のみマッチ。願望（〜たい）・過去願望（〜たかった）・仮定（〜たら）・並列（〜たり）は除外
 _SPEECH_CLAIM_RE = re.compile(
     r"(?:伝え(?:た(?!い|かった|ら|り)|ました)|報告(?:した(?!い|かった|ら|り)|しました)|話し(?:た(?!い|かった|ら|り)|ました)|知らせ(?:た(?!い|かった|ら|り)|ました)|言っ(?:た(?!ら|り)|ておいた)|言いました)"
 )
+_VISUAL_CLAIM_RE = re.compile(r"(?:見え|見た|見て|映っ|映り|視界|カメラに|カメラで|画像|映像)")
 
 
 def _content_blocks(event: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -159,6 +161,37 @@ def should_flag_ungrounded_speech_claim(
     if speak_ok > 0 or _has_proposal(proposal):
         return False
     return has_completed_speech_claim(f"{private}\n{topic}")
+
+
+def has_visual_claim(text: str) -> bool:
+    return bool(_VISUAL_CLAIM_RE.search(str(text or "")))
+
+
+def _tool_count(facts: Mapping[str, Any], name: str) -> int:
+    tools_used = facts.get("tools_used")
+    if not isinstance(tools_used, Mapping):
+        return 0
+    try:
+        return int(tools_used.get(name, 0))
+    except Exception:
+        return 0
+
+
+def should_flag_ungrounded_visual_claim(
+    *,
+    private: str,
+    topic: str = "",
+    speak: str = "",
+    facts: Mapping[str, Any] | None,
+    current_entity: str = "",
+) -> bool:
+    if str(current_entity or "").strip().startswith("camera."):
+        return False
+    if not isinstance(facts, Mapping):
+        return False
+    if _tool_count(facts, CAMERA_TOOL) > 0:
+        return False
+    return has_visual_claim(f"{private}\n{topic}\n{speak}")
 
 
 def format_facts_summary(facts: Mapping[str, Any] | None) -> str:

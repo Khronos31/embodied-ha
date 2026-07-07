@@ -246,6 +246,8 @@ def advance_tick(
     social_openness = current["social_openness"]
     embodiment_tension = current["embodiment_tension"]
     return_to_body_pressure = current["return_to_body_pressure"]
+    remote_host = _clean(current.get("remote_avatar_host", ""))
+    projecting_camera = remote_host.startswith("camera.")
 
     curiosity += 0.01 + min(0.06, elapsed_hours * 0.012) + min(0.03, desire_count * 0.004)
     energy += (0.66 - energy) * min(0.18, 0.04 + elapsed_hours * 0.02)
@@ -253,7 +255,10 @@ def advance_tick(
     confidence += (0.58 - confidence) * min(0.10, 0.02 + elapsed_hours * 0.01)
     social_openness += (0.50 - social_openness) * min(0.08, 0.02 + elapsed_hours * 0.01)
     embodiment_tension += (0.0 - embodiment_tension) * min(0.24, 0.06 + elapsed_hours * 0.05)
-    return_to_body_pressure += (0.0 - return_to_body_pressure) * min(0.16, 0.04 + elapsed_hours * 0.03)
+    if projecting_camera:
+        return_to_body_pressure += (1.0 - return_to_body_pressure) * min(0.25, elapsed_hours * 0.45)
+    else:
+        return_to_body_pressure += (0.0 - return_to_body_pressure) * min(0.16, 0.04 + elapsed_hours * 0.03)
 
     if current.get("remote_mode") == "remote_avatar":
         distance = max(0.0, current.get("remote_move_cost", 0.0))
@@ -267,12 +272,6 @@ def advance_tick(
         confidence -= remote_drift * 0.55
         embodiment_tension += remote_drift
         return_to_body_pressure += remote_drift * 0.8
-
-    # カメラへの投射が続くと視覚疲労が蓄積する
-    remote_host = _clean(current.get("remote_avatar_host", ""))
-    if remote_host.startswith("camera."):
-        visual_bump = min(0.015, 0.005 + elapsed_hours * 0.006)
-        return_to_body_pressure += visual_bump
 
     if reason and reason not in ("定期実行", "手動実行"):
         curiosity += 0.015

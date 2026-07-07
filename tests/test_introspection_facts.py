@@ -139,6 +139,37 @@ class IntrospectionFactsTest(unittest.TestCase):
             )
         )
 
+    def test_ungrounded_visual_claim_requires_visual_text_and_no_camera_grounding(self):
+        self.assertTrue(
+            facts.should_flag_ungrounded_visual_claim(
+                private="リビングに人が見えた。",
+                facts={"tools_used": {}},
+                current_entity="",
+            )
+        )
+        self.assertFalse(
+            facts.should_flag_ungrounded_visual_claim(
+                private="リビングに人が見えた。",
+                facts={"tools_used": {"mcp__camera__use_device_camera": 1}},
+                current_entity="",
+            )
+        )
+        self.assertFalse(
+            facts.should_flag_ungrounded_visual_claim(
+                private="リビングが気になる。",
+                facts={"tools_used": {}},
+                current_entity="",
+            )
+        )
+        self.assertFalse(
+            facts.should_flag_ungrounded_visual_claim(
+                private="視界に明かりが映っている。",
+                facts={"tools_used": {}},
+                current_entity="camera.living",
+            )
+        )
+
+
 
 if __name__ == "__main__":
     unittest.main()
