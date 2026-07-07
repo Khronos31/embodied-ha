@@ -69,7 +69,11 @@ class SongMcpTests(unittest.TestCase):
     def test_uninstalled_returns_plugin_disabled(self):
         mcp = load_song_mcp_module()
         mcp.is_installed = lambda: False
-        result, is_error = mcp.sing({"notes": []})
+        self.assertEqual(mcp.TOOL_RECORD["name"], "record")
+        self.assertIn("これ単体では音は鳴らない", mcp.TOOL_RECORD["description"])
+        self.assertIn("file_pathをspeakに渡して再生", mcp.TOOL_RECORD["description"])
+        self.assertIn("record", mcp.TOOLS)
+        result, is_error = mcp.TOOLS["record"]["handler"]({"notes": []})
         self.assertTrue(is_error)
         payload = json.loads(result[0]["text"])
         self.assertEqual(payload["error"], "plugin_disabled")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VOICEVOX Song MCP server."""
+"""VOICEVOX Song MCP server for recording WAV files."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ import json
 from mcp_lib import serve, text
 from voicevox_song import is_installed, plugin_disabled_payload, synthesize_song
 
-TOOL_SING = {
-    "name": "sing",
+TOOL_RECORD = {
+    "name": "record",
     "description": (
-        "VOICEVOX Songで短い歌声WAVを生成する。pitchはC4/D#4/Bb3等の音名またはrest、"
+        "VOICEVOX Songで短い歌声WAVを生成する。音声ファイルを生成するだけで、これ単体では音は鳴らない。"
+        "生成後に実際に鳴らしたい場合は、戻り値のfile_pathをspeakに渡して再生する。"
+        "pitchはC4/D#4/Bb3等の音名またはrest、"
         "durationはwhole/half/quarter/eighth/sixteenthで指定する。"
         "lyricは発音そのままのべた書きで、助詞の『は』を『わ』と歌わせたい場合はlyric='わ'のように書く。"
     ),
@@ -49,5 +51,8 @@ def sing(args: dict):
         return [text(json.dumps({"error": "synthesis_failed", "message": str(exc)}, ensure_ascii=False))], True
 
 
+TOOLS = {"record": {"spec": TOOL_RECORD, "handler": sing}}
+
+
 if __name__ == "__main__":
-    serve("song-mcp", "1.0", {"sing": {"spec": TOOL_SING, "handler": sing}})
+    serve("song-mcp", "1.0", TOOLS)
