@@ -88,17 +88,20 @@ def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str
             normalized = clean(item.get("entity")) or entity
             return normalized, clean(item.get("room")) or None
 
+    speakers = prefs.get("speakers", [])
+    if isinstance(speakers, dict):
+        speakers = [{**(v if isinstance(v, dict) else {}), "room": k} for k, v in speakers.items()]
+    elif not isinstance(speakers, list):
+        speakers = []
     host = _tcp_host(entity)
-    if host:
-        speakers = prefs.get("speakers", [])
-        if isinstance(speakers, dict):
-            speakers = [{**(v if isinstance(v, dict) else {}), "room": k} for k, v in speakers.items()]
-        elif not isinstance(speakers, list):
-            speakers = []
-        for item in speakers:
-            if clean(item.get("host")) == host:
-                normalized = clean(item.get("entity")) or entity
-                return normalized, clean(item.get("room")) or None
+    for item in speakers:
+        if not isinstance(item, dict):
+            continue
+        if host and clean(item.get("host")) == host:
+            normalized = clean(item.get("entity")) or entity
+            return normalized, clean(item.get("room")) or None
+        if clean(item.get("entity")) == entity:
+            return entity, clean(item.get("room")) or None
 
     for item in prefs.get("cameras", []):
         if not isinstance(item, dict):

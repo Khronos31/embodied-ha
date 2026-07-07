@@ -292,6 +292,13 @@ if [ -n "$FEATURES_MD" ]; then
   FEATURES_NOTE="\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n${_presented_note}${FEATURES_MD}\n"
 fi
 
+BEHAVIOR_POLICY_NOTE=""
+if [ -n "${POLICIES:-}" ]; then
+  BEHAVIOR_POLICY_NOTE="
+# 行動ポリシー（${RESIDENT}さんが設定した行動ルール。必ず踏まえて行動する）
+${POLICIES}"
+fi
+
 POLICY_NOTE=""
 case "$MODE" in
   observe|explore)
@@ -340,7 +347,7 @@ if ctx:
 PYEOF
 )"
 
-SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\n${POLICY_NOTE}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
+SYS_PROMPT="${COMMON_CHAR}\n\n# 内なる衝動\n${INNER_VOICE}\n\n# 身体状態\n${BODY_NARRATIVE}\n\n${PROJECTED_CAMERA_NOTE}\n\n${BODY_LOCATION_CONTEXT}\n\n${RECENT_AUDITORY_INPUT}\n\n${ANOMALY_CONTEXT}\n\n${POLICY_NOTE}\n\n${BEHAVIOR_POLICY_NOTE}\n\nいまは『${MODE_LABEL}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n${TOOLS_DESC}\n\n${TASK}\n${AUTONOMOUS_NOTE}\n${FEATURES_NOTE}\n${JSON_FORMAT}"
 
 USER_PROMPT="${MODE_LABEL}です。今は${HOUR}時台。\n\n【あなたの長期記憶】\n${LONG_MEMORY}${FACTS_PROMPT_BLOCK}\n\n【直近の探索メモ】\n${PREV_EXPLORE}\n\n【気にかけていること（やりかけ・約束）】\n${OPEN_LOOPS}\n\nでは、始めてください。"
 

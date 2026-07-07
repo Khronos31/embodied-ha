@@ -51,3 +51,20 @@ else
 fi
 export EXTRA_CONTEXT
 unset _extra_conf
+
+# --- 行動ポリシー（preferences.json の policies。会話/Web UIで追記される自由記述の行動ルール）---
+if [ -f "$EHA_PREFS_FILE" ]; then
+  POLICIES=$(EHA_PREFS_FILE="$EHA_PREFS_FILE" python3 -c '
+import json, os
+try:
+    with open(os.environ["EHA_PREFS_FILE"], encoding="utf-8") as f:
+        prefs = json.load(f)
+    lines = [f"- {p.strip()}" for p in prefs.get("policies", []) if isinstance(p, str) and p.strip()]
+    print("\n".join(lines))
+except Exception:
+    pass
+' 2>/dev/null)
+else
+  POLICIES=""
+fi
+export POLICIES
