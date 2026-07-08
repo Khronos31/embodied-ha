@@ -38,27 +38,28 @@ def ha_get(args):
     return [text(r.stdout if r.stdout else "(空のレスポンス)")]
 
 
-serve("ha-mcp", "1.0", {
-    "ha_get": {
-        "spec": {
-            "name": "ha_get",
-            "description": (
-                "Home Assistant の状態を読み取る（GET専用・操作不可）。\n"
-                "  states                         … 全エンティティの状態\n"
-                "  states/<entity_id>             … 個別エンティティの詳細\n"
-                "  history/period?filter_entity_id=<id> … 履歴\n"
-                "  services                       … 利用可能なサービス一覧\n"
-                "出力は JSON。大量になる場合があるので必要な path を絞って呼ぶ。"
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string",
-                             "description": "API パス（例: states/climate.living）"}
+if __name__ == "__main__":
+    serve("ha-mcp", "1.0", {
+        "ha_get": {
+            "spec": {
+                "name": "ha_get",
+                "description": (
+                    "Home Assistant の状態を読み取る（GET専用・操作不可）。\n"
+                    "  states                         … 全エンティティの状態\n"
+                    "  states/<entity_id>             … 個別エンティティの詳細\n"
+                    "  history/period?filter_entity_id=<id> … 履歴\n"
+                    "  services                       … 利用可能なサービス一覧\n"
+                    "出力は JSON。大量になる場合があるので必要な path を絞って呼ぶ。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string",
+                                 "description": "API パス（例: states/climate.living）"}
+                    },
+                    "required": ["path"],
                 },
-                "required": ["path"],
             },
+            "handler": ha_get,
         },
-        "handler": ha_get,
-    },
-})
+    })

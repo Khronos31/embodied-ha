@@ -32,25 +32,26 @@ def get_sensors(args):
     return [text(out if out else "（おもなデバイスは未設定です）")]
 
 
-serve("sensors-mcp", "1.0", {
-    "get_sensors": {
-        "spec": {
-            "name": "get_sensors",
-            "description": (
-                "家のおもなデバイスの現在値をまとめて取得する。\n"
-                "人感・在宅・温湿度など、preferences.json に登録された"
-                "観察用センサーの現在状態が返る。\n"
-                "おもなデバイス以外の個別エンティティは ha_get で取得できる。\n"
-                "context=loop（自律ループ向け・既定）/ chat（会話向け）でフィルタ。"
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "context": {"type": "string",
-                                "description": "loop（既定）または chat"},
+if __name__ == "__main__":
+    serve("sensors-mcp", "1.0", {
+        "get_sensors": {
+            "spec": {
+                "name": "get_sensors",
+                "description": (
+                    "家のおもなデバイスの現在値をまとめて取得する。\n"
+                    "人感・在宅・温湿度など、preferences.json に登録された"
+                    "観察用センサーの現在状態が返る。\n"
+                    "おもなデバイス以外の個別エンティティは ha_get で取得できる。\n"
+                    "context=loop（自律ループ向け・既定）/ chat（会話向け）でフィルタ。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "context": {"type": "string",
+                                    "description": "loop（既定）または chat"},
+                    },
                 },
             },
+            "handler": get_sensors,
         },
-        "handler": get_sensors,
-    },
-})
+    })
