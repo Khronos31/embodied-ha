@@ -20,6 +20,7 @@ sys.path.insert(0, SCRIPT_DIR)
 import memory_state as ms  # noqa: E402
 import counterfactual_state as cs  # noqa: E402
 from introspection_facts import format_facts_summary  # noqa: E402
+from json_schemas import daybook_schema  # noqa: E402
 from state_utils import file_lock  # noqa: E402
 
 
@@ -236,14 +237,17 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
     prompt += f"{day} の観察ログをもとに structured な日次メモを作ってください。\n\n"
     prompt += f"対象の一日は {resident} さんの暮らしを観察した記録です。\n"
     prompt += "出力は JSON のみ。前置き・後書き・コードフェンスは禁止。\n\n"
-    prompt += "JSON の形は次の通りです:\n"
-    prompt += "{\n"
-    prompt += '  "summary": "1〜3文の要約",\n'
-    prompt += '  "themes": ["主題", "主題"],\n'
-    prompt += '  "highlights": [{"summary": "...", "detail": "...", "tags": ["..."], "importance": 0.0}],\n'
-    prompt += '  "open_questions": ["..."],\n'
-    prompt += '  "episodes": [{"timestamp": "...", "kind": "observation", "source": "loop", "summary": "...", "detail": "...", "tags": ["..."], "entities": ["..."], "actors": ["..."], "importance": 0.0, "evidence": [{"timestamp": "...", "private": "..."}], "status": "canonical", "links": {"causes": [], "effects": []}}]\n'
-    prompt += "}\n\n"
+    prompt += "JSON に含める項目は次の通りです（キー名はこの通りに、値は指示に従って埋めてください）:\n"
+    prompt += "- summary: 1〜3文の要約（文字列）\n"
+    prompt += "- themes: 主題の配列（文字列のリスト）\n"
+    prompt += "- highlights: 重要な出来事の配列。各要素は summary（一言要約）・detail（詳細）・tags（文字列のリスト）・importance（0.0〜1.0の重要度）を持つ。最大5件\n"
+    prompt += "- open_questions: 未解決の疑問点の配列（文字列のリスト）\n"
+    prompt += (
+        "- episodes: 出来事単位の配列。各要素は timestamp・kind（例: observation）・source（例: loop）・"
+        "summary・detail・tags（文字列のリスト）・entities（文字列のリスト）・actors（文字列のリスト）・"
+        "importance（0.0〜1.0）・evidence（timestamp と private を持つオブジェクトの配列）・"
+        "status（例: canonical）・links（causes と effects をキーに持つオブジェクト、それぞれ配列）を持つ\n\n"
+    )
     prompt += "制約:\n"
     prompt += "- episodes は出来事単位にまとめる\n"
     prompt += "- highlights は最大5件\n"
@@ -261,7 +265,19 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
     }
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})
     proc = subprocess.run(
-        [claude, "-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"],
+        [
+            claude,
+            "-p",
+            "--model",
+            "sonnet",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--json-schema",
+            json.dumps(daybook_schema(), ensure_ascii=False),
+        ],
         input=msg,
         capture_output=True,
         text=True,
@@ -278,7 +294,12 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
         except Exception:
             continue
         if data.get("type") == "result":
-            raw = data.get("result", "").strip()
+            structured = data.get("structured_output")
+            raw = (
+                json.dumps(structured, ensure_ascii=False)
+                if structured is not None
+                else data.get("result", "")
+            ).strip()
             break
     return _parse_json_payload(raw)
 

@@ -227,7 +227,7 @@ print("\n".join(lines) if lines else "（特になし）")
 PYEOF
 )
 
-JSON_FORMAT="終わったら、最後に必ず以下のJSON形式『のみ』を出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n{\"topic\": \"今回何をしたか・何に注目したかの一言メモ\", \"speak\": \"${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。会話ルームにテキストとして残る——声には出ない。今すぐ声で呼びかけたいときは、このフィールドではなく音声ツール（speak / use_device_speaker）を使う。冒頭のキャラクター定義の口調のまま、${RESIDENT}さんに面と向かって話すときと同じように書く（privateとは違い、相手に宛てた言葉）。特になければnull。実際にやっていない行為を完了形で書かない。\", \"private\": \"今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。ただし実際にやっていない行為を完了形で書かない。\", \"emotion\": \"curious/calm/happy/concerned/amused/surprised/nostalgic等\", \"proposal\": \"操作で直せる家の問題を見つけたときの提案を一言。なければ null\", \"action\": {\"domain\": \"light\", \"service\": \"turn_off\", \"entity_id\": \"light.xxx\", \"data\": {}}, \"feature_presented\": \"紹介した機能があればその機能id。なければ null\"}\n（長期記憶は remember / loops_add で記録すること）"
+JSON_FORMAT="終わったら、最後に必ず以下の項目をJSON形式『のみ』で出力して締めくくってください（コードブロックや説明文で囲まない、JSONだけ）:\n- topic: 今回何をしたか・何に注目したかの一言メモ\n- speak: ${RESIDENT}さんへのショートメッセージ。話したいこと・共有したいこと・訊きたいことがあれば。会話ルームにテキストとして残る——声には出ない。今すぐ声で呼びかけたいときは、このフィールドではなく音声ツール（speak / use_device_speaker）を使う。冒頭のキャラクター定義の口調のまま、${RESIDENT}さんに面と向かって話すときと同じように書く（privateとは違い、相手に宛てた言葉）。特になければnull。実際にやっていない行為を完了形で書かない。\n- private: 今この瞬間に浮かんだこと。誰も見てない前提で、そのまま投稿するツイートのように。報告でもまとめでもない。20〜40文字。${RESIDENT}さんが見ることもできるが気にせず素のまま。ただし実際にやっていない行為を完了形で書かない。\n- emotion: curious/calm/happy/concerned/amused/surprised/nostalgic等のいずれか\n- proposal: 操作で直せる家の問題を見つけたときの提案を一言。なければ null\n- action: proposal に対応する家電操作があれば domain・service・entity_id・data を含む辞書（例: 照明を消す提案なら domain=light, service=turn_off, entity_id=対象のエンティティID）。なければ省略（null）。\n- feature_presented: 紹介した機能があればその機能id。なければ null\n（長期記憶は remember / loops_add で記録すること）"
 
 case "$MODE" in
   observe)
@@ -357,6 +357,7 @@ import base64, json, os, subprocess, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from antigravity_setup import extract_agy_result
 from introspection_facts import extract_facts_from_stream_text, write_facts_file
+from json_schemas import loop_schema
 from media_capture import fetch_frame
 from observe_context import build_projected_camera_blocks
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
@@ -364,9 +365,14 @@ CLAUDE_ENV = {**os.environ,
               "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
               "PATH": os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")}
 
-def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, content_blocks=None, facts_path=None, system_prompt=None):
+def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, content_blocks=None, facts_path=None, system_prompt=None, response_schema=None):
     prompt_text = text if system_prompt is None else f"{system_prompt}\n\n{text}"
     if os.path.basename(CLAUDE) == "agy":
+        # agy には --output-format/--json-schema が無いため、プロンプト内に正式スキーマを明示する。
+        if response_schema is not None:
+            prompt_text += "\n\n出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。\n"
+            prompt_text += json.dumps(response_schema, ensure_ascii=False)
+            prompt_text += "\nJSON:\n"
         cmd = [CLAUDE]
         if model:
             cmd += ["--model", model]
@@ -375,6 +381,8 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, conte
         return extract_agy_result(r.stdout)
     prompt_system = os.environ["SYS_PROMPT"] if system_prompt is None else system_prompt
     cmd = [CLAUDE, "-p", "--model", model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--append-system-prompt", prompt_system]
+    if response_schema is not None:
+        cmd += ["--json-schema", json.dumps(response_schema, ensure_ascii=False)]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
     if mcp_config:
@@ -400,7 +408,12 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, conte
         try:
             d = json.loads(line)
             if d.get("type") == "result":
-                result_text = d.get("result", "")
+                structured = d.get("structured_output")
+                result_text = (
+                    json.dumps(structured, ensure_ascii=False)
+                    if structured is not None
+                    else d.get("result", "")
+                )
         except Exception:
             pass
     return result_text
@@ -508,7 +521,7 @@ if mcp_servers and os.environ.get("SCRIPT_DIR", ""):
     if not os.path.exists(mcp_config_path):
         mcp_config_path = None
 
-response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), mcp_config=mcp_config_path, content_blocks=content, facts_path=os.environ.get("FACTS_FILE", ""))
+response = call_claude(os.environ["USER_PROMPT"], model="sonnet", allowed_tools=os.environ.get("ALLOWED_TOOLS", ""), mcp_config=mcp_config_path, content_blocks=content, facts_path=os.environ.get("FACTS_FILE", ""), response_schema=loop_schema("observe"))
 print(response)
 PYEOF
 )
@@ -519,6 +532,7 @@ import json, os, subprocess, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from antigravity_setup import extract_agy_result
 from introspection_facts import extract_facts_from_stream_text, write_facts_file
+from json_schemas import loop_schema
 CLAUDE = os.environ.get("EHA_SESSION_BIN") or os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 env = {**os.environ,
        "EHA_ACTOR": "loop",
@@ -532,7 +546,15 @@ session_model = os.environ.get("EHA_SESSION_MODEL", "sonnet")
 is_agy = os.path.basename(CLAUDE) == "agy"
 
 if is_agy:
-    full_prompt = (f"あなたへの指示:\n{sys_prompt}\n\n" if sys_prompt else "") + user_prompt + "\nJSON:\n"
+    # agy には --output-format/--json-schema が無いため、正式JSON Schemaをプロンプトに明示する。
+    schema_prompt = json.dumps(loop_schema(mode), ensure_ascii=False)
+    full_prompt = (
+        (f"あなたへの指示:\n{sys_prompt}\n\n" if sys_prompt else "")
+        + user_prompt
+        + "\n\n出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。\n"
+        + schema_prompt
+        + "\nJSON:\n"
+    )
     cmd = [CLAUDE]
     if session_model:
         cmd += ["--model", session_model]
@@ -544,6 +566,7 @@ if is_agy:
 else:
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": user_prompt}]}})
     cmd = [CLAUDE, "-p", "--model", session_model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--allowedTools", os.environ["ALLOWED_TOOLS"], "--append-system-prompt", sys_prompt]
+    cmd += ["--json-schema", json.dumps(loop_schema(mode), ensure_ascii=False)]
     mcp_servers = os.environ.get("MCP_SERVERS", "").split()
     if mcp_servers and os.environ.get("SCRIPT_DIR", ""):
         mcp_config_path = "/tmp/embodied-ha/mcp.json"
@@ -563,7 +586,8 @@ else:
         try:
             d = json.loads(line)
             if d.get("type") == "result":
-                print(d.get("result", ""))
+                structured = d.get("structured_output")
+                print(json.dumps(structured, ensure_ascii=False) if structured is not None else d.get("result", ""))
         except Exception:
             pass
 PYEOF
@@ -591,7 +615,35 @@ def extract_last_json_object(value):
 result = extract_last_json_object(text)
 parse_ok = isinstance(result, dict)
 if not parse_ok:
-    result = {}
+    # 抽出完全失敗時は内容喪失を防ぐため、生テキストを private（内面のつぶやき・非公開）
+    # のみに格納する。speak には流さない — 会話ルームに不自然な独白が残るのを防ぐため。
+    fallback_text = text.strip()[:4000]
+    result = {'private': fallback_text} if fallback_text else {}
+
+
+def _unwrap(value, key, max_depth=3):
+    # 値が {\"<key>\": ...} 形式のJSON文字列に見えたら再帰的に剥がす（二重包み対策の保険）
+    depth = 0
+    while isinstance(value, str) and depth < max_depth:
+        s = value.strip()
+        if not (s.startswith('{') and ('\"' + key + '\"') in s):
+            break
+        try:
+            obj = json.loads(s)
+        except Exception:
+            break
+        if isinstance(obj, dict) and key in obj:
+            value = obj[key]
+            depth += 1
+        else:
+            break
+    return value
+
+
+for _k in ('speak', 'private'):
+    if _k in result:
+        result[_k] = _unwrap(result[_k], _k)
+
 result['_parse_ok'] = parse_ok
 with open(os.environ['PARSED_FILE'], 'w', encoding='utf-8') as f:
     json.dump(result, f, ensure_ascii=False)
@@ -615,6 +667,9 @@ except Exception:
 " 2>/dev/null || true
 
 SPEAK=""; SPEAK_ROOM=""; SAY=""; PARSE_OK="0"; INTROSPECTION_EMPTY="1"
+# speak フィールド = 住人さんへのテキストメッセージ（会話ルームに残す。声は出さない）。
+# private/speak の二重包み対策の unwrap は抽出時（PARSED_FILE 書き込み時）に
+# 一括で適用済みのため、ここでは素直に読むだけでよい。
 eval "$(PARSED_FILE="$PARSED_FILE" python3 -c "
 import json, os, shlex
 try:
@@ -623,7 +678,6 @@ except Exception:
     d = {}
 private = d.get('private', '') or ''
 emotion = d.get('emotion', '') or ''
-# speak フィールド = ${RESIDENT}さんへのテキストメッセージ（会話ルームに残す。声は出さない）
 say_v = d.get('speak')
 say = str(say_v).strip() if say_v not in (None, '', 'null') else ''
 pairs = {
@@ -671,7 +725,9 @@ changes = d.get('scene_changes') if isinstance(d.get('scene_changes'), list) els
 if objects or people or changes:
     scene_state.ingest_scene_parse('loop_observe', {}, objects, people, changes, log_dir=os.environ.get('LOG_DIR'))
 " 2>/dev/null || true
-  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
+  # PARSE_OK=0 でも private フォールバックにより INTROSPECTION_EMPTY=0 になりうる
+  # （抽出完全失敗時の生テキストフォールバック）。この場合も内省ログへ記録する。
+  if [ "$INTROSPECTION_EMPTY" != "1" ]; then
     SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" OBSERVATION_LOG="$OBSERVATION_LOG" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" python3 << 'PYEOF'
 import json, os, sys
 sys.path.insert(0, os.environ["SCRIPT_DIR"])
@@ -704,7 +760,9 @@ with open(os.environ["OBSERVATION_LOG"], "a", encoding="utf-8") as f:
 PYEOF
   fi
 else
-  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
+  # PARSE_OK=0 でも private フォールバックにより INTROSPECTION_EMPTY=0 になりうる
+  # （抽出完全失敗時の生テキストフォールバック）。この場合も内省ログへ記録する。
+  if [ "$INTROSPECTION_EMPTY" != "1" ]; then
     SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" MODE="$MODE" EXPLORE_LOG="$EXPLORE_LOG" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" python3 << 'PYEOF'
 import json, os, sys
 sys.path.insert(0, os.environ["SCRIPT_DIR"])

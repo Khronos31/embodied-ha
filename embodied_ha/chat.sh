@@ -234,6 +234,7 @@ RESPONSE=$(USER_MSG="$USER_MSG" CHAT_SOURCE_VALUE="$CHAT_SOURCE_VALUE" RECENT_AC
 import json, os, subprocess, sys
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from json_schemas import chat_schema
 CLAUDE = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
 CLAUDE_ENV = {**os.environ,
               "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
@@ -365,20 +366,18 @@ else:
 # voice: replyなし（speak ツールで直接返すため）
 # chat: replyあり（チャットログ・Web UIに表示）
 if chat_source == "voice":
-    json_format_block = f"""{{
-  "private": "この会話中に頭をよぎったこと。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。なければ null。",
-  "proposal_resolved": false,
-  "preferences_update": {{}},
-  "feature_presented": "この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"
-}}"""
+    json_format_block = f"""含める項目:
+- private: この会話中に頭をよぎったこと。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。なければ null。
+- proposal_resolved: 保留中の提案が今回の会話で承認または却下されたら true、そうでなければ false。
+- preferences_update: 設定変更があればその内容、なければ省略（null）。
+- feature_presented: この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"""
 else:
-    json_format_block = f"""{{
-  "reply": "{resident}さんへの返事。会話として自然に、長くなりすぎない。",
-  "private": "この会話中に頭をよぎったこと。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。返事(reply)とは別。なければ null。",
-  "proposal_resolved": false,
-  "preferences_update": {{}},
-  "feature_presented": "この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"
-}}"""
+    json_format_block = f"""含める項目:
+- reply: {resident}さんへの返事。会話として自然に、長くなりすぎない。
+- private: この会話中に頭をよぎったこと。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。返事(reply)とは別。なければ null。
+- proposal_resolved: 保留中の提案が今回の会話で承認または却下されたら true、そうでなければ false。
+- preferences_update: 設定変更があればその内容、なければ省略（null）。
+- feature_presented: この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"""
 
 prompt = f"""# あなた自身について
 
@@ -518,7 +517,8 @@ msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type
 # ユーザー発話に「それ」「あれ」「これ」「さっきの」などの指示語があり、文脈上カメラや直前 scene の対象を指しそうなら resolve_reference を使う。
 # JSON は reply / private / proposal_resolved / preferences_update のみ。
 cmd = [CLAUDE, "-p", "--model", "sonnet",
-       "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+       "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+       "--json-schema", json.dumps(chat_schema(voice=(chat_source == "voice")), ensure_ascii=False)]
 _sd = os.environ.get("SCRIPT_DIR", "")
 if _sd:
     _mcp_path = "/tmp/embodied-ha/mcp_chat.json"
@@ -579,7 +579,12 @@ for line in r.stdout.splitlines():
                     detail = inp.get("path") or inp.get("keywords") or json.dumps(inp, ensure_ascii=False)[:80]
                     print(f"[chat][tool] {blk.get('name','')}: {detail}", file=sys.stderr)
         elif t == "result":
-            result_text = d.get("result", "")
+            structured = d.get("structured_output")
+            result_text = (
+                json.dumps(structured, ensure_ascii=False)
+                if structured is not None
+                else d.get("result", "")
+            )
     except: pass
 
 # 空応答時のみ claude のエラーを可視化（returncode と stderr 末尾）
@@ -598,20 +603,53 @@ if [ -n "${EHA_QUEUED_LISTEN_FILE:-}" ]; then
 fi
 
 # --- JSON抽出 ---
+# 抽出・パース完全失敗時は生テキストを reply へ格納する（内容喪失防止のフォールバック）。
+# feature_presented / proposal_resolved / preferences_update は付与しないため、
+# それらに依存する後続処理は従来通り安全に no-op になる。
 PARSED_FILE="$TMP_DIR/chat_parsed.json"
 printf '%s' "$RESPONSE" | python3 -c "
 import sys, re, json
 text = sys.stdin.read()
-text = re.sub(r'\`\`\`(?:json)?\s*|\`\`\`', '', text)
-m = re.search(r'\{.*\}', text, re.DOTALL)
+stripped = re.sub(r'\`\`\`(?:json)?\s*|\`\`\`', '', text)
+m = re.search(r'\{.*\}', stripped, re.DOTALL)
 result = {}
 if m:
     try: result = json.loads(m.group())
     except: pass
+if not result:
+    fallback_text = stripped.strip()[:4000]
+    if fallback_text:
+        result = {'reply': fallback_text}
+
+
+def _unwrap(value, key, max_depth=3):
+    # 値が {\"<key>\": ...} 形式のJSON文字列に見えたら再帰的に剥がす（二重包み対策の保険）
+    depth = 0
+    while isinstance(value, str) and depth < max_depth:
+        s = value.strip()
+        if not (s.startswith('{') and ('\"' + key + '\"') in s):
+            break
+        try:
+            obj = json.loads(s)
+        except Exception:
+            break
+        if isinstance(obj, dict) and key in obj:
+            value = obj[key]
+            depth += 1
+        else:
+            break
+    return value
+
+
+if 'reply' in result:
+    result['reply'] = _unwrap(result['reply'], 'reply')
+
 with open('$PARSED_FILE', 'w', encoding='utf-8') as f:
     json.dump(result, f, ensure_ascii=False)
 "
 
+# reply の二重包み対策の unwrap は抽出時（PARSED_FILE 書き込み時）に適用済みのため、
+# ここでは素直に読むだけでよい。
 REPLY=$(python3 -c "import json; d=json.load(open('$PARSED_FILE',encoding='utf-8')); print(d.get('reply','') or '')")
 
 if [ -z "$REPLY" ]; then
