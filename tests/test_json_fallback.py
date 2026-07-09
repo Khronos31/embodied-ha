@@ -1,110 +1,33 @@
 """JSON抽出フォールバック・防御的unwrapのロジック検証。
 
-chat.sh / loop.sh の JSON 抽出処理は bash に埋め込まれた python3 -c ワンライナー
-であり、python モジュールとして import できない。このテストは両スクリプトの
-抽出ロジックと **意図的に同一のコード** を保持し、以下を検証する:
+ロジック本体は embodied_ha/response_parse.py（chat.py移植の増分1で
+response_parse.py へ昇格済み）。以前はここに loop.sh 側と意図的に同一の
+コードを複製して保持していたが、response_parse.py が実体になったことで
+このファイルは import して検証するだけになった。
 
-- 抽出失敗時のフォールバック挙動（chat.sh: reply へ生テキスト格納 /
-  loop.sh: private のみへ生テキスト格納・speak には流さない）
+- 抽出失敗時のフォールバック挙動（chat: reply へ生テキスト格納 /
+  loop: private のみへ生テキスト格納・speak には流さない）
 - stream-json result イベントの structured_output を result 文字列より優先する処理
 - 二重包み（フィールドの値が同じキーを持つJSON文字列になっている）を
   最大3段まで再帰的に剥がす防御的unwrap
 
-chat.sh / loop.sh 側のロジックを変更した場合は、このファイルの関数も同期して
-更新すること。
+loop.sh 側（まだheredoc埋め込みのまま）のロジックを変更した場合は、
+response_parse.py の loop_extract 系関数も同期して更新すること。
 """
 import json
-import re
+import sys
 import unittest
+from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "embodied_ha"))
 
-def unwrap(value, key, max_depth=3):
-    """chat.sh / loop.sh 共通の防御的unwrapロジックと同一。"""
-    depth = 0
-    while isinstance(value, str) and depth < max_depth:
-        s = value.strip()
-        if not (s.startswith("{") and ('"' + key + '"') in s):
-            break
-        try:
-            obj = json.loads(s)
-        except Exception:
-            break
-        if isinstance(obj, dict) and key in obj:
-            value = obj[key]
-            depth += 1
-        else:
-            break
-    return value
-
-
-def stream_result_payload(stream):
-    """chat.sh / loop.sh / daybook_rollup.py の stream-json result 抽出処理と同一。"""
-    result_text = ""
-    for line in stream.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = json.loads(line)
-        except Exception:
-            continue
-        if d.get("type") == "result":
-            structured = d.get("structured_output")
-            result_text = (
-                json.dumps(structured, ensure_ascii=False)
-                if structured is not None
-                else d.get("result", "")
-            )
-    return result_text
-
-
-def chat_extract(text):
-    """chat.sh の JSON 抽出＋フォールバック＋unwrap処理と同一ロジック。"""
-    stripped = re.sub(r"```(?:json)?\s*|```", "", text)
-    m = re.search(r"\{.*\}", stripped, re.DOTALL)
-    result = {}
-    if m:
-        try:
-            result = json.loads(m.group())
-        except Exception:
-            pass
-    if not result:
-        fallback_text = stripped.strip()[:4000]
-        if fallback_text:
-            result = {"reply": fallback_text}
-    if "reply" in result:
-        result["reply"] = unwrap(result["reply"], "reply")
-    return result
-
-
-def _extract_last_json_object(value):
-    """loop.sh の extract_last_json_object() と同一ロジック。"""
-    decoder = json.JSONDecoder()
-    best = None
-    for match in re.finditer(r"\{", value):
-        try:
-            obj, end = decoder.raw_decode(value, match.start())
-        except Exception:
-            continue
-        if isinstance(obj, dict) and (
-            best is None or end > best[0] or (end == best[0] and match.start() > best[1])
-        ):
-            best = (end, match.start(), obj)
-    return best[2] if best else None
-
-
-def loop_extract(text):
-    """loop.sh の抽出＋フォールバック＋unwrap処理と同一ロジック。"""
-    result = _extract_last_json_object(text)
-    parse_ok = isinstance(result, dict)
-    if not parse_ok:
-        fallback_text = text.strip()[:4000]
-        result = {"private": fallback_text} if fallback_text else {}
-    for k in ("speak", "private"):
-        if k in result:
-            result[k] = unwrap(result[k], k)
-    result["_parse_ok"] = parse_ok
-    return result
+from response_parse import (  # type: ignore  # noqa: E402
+    chat_extract,
+    loop_extract,
+    stream_result_payload,
+    unwrap,
+)
 
 
 class StreamJsonResultTests(unittest.TestCase):
