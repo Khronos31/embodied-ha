@@ -61,6 +61,7 @@ if [ -z "${PULSE_SERVER:-}" ]; then
     echo "[run] PulseAudio: ソケット見つからず（/run ls: $(find /run -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)）"
     if [ -d /run/audio ]; then
         echo "[run] PulseAudio-diag: ls -la /run/audio"
+        # shellcheck disable=SC2012  # Diagnostic output intentionally uses ls -la format.
         ls -la /run/audio 2>&1 | sed 's/^/[run] PulseAudio-diag: /'
     else
         echo "[run] PulseAudio-diag: /run/audio not found"

@@ -366,7 +366,7 @@ else:
 # voice: replyなし（speak ツールで直接返すため）
 # chat: replyあり（チャットログ・Web UIに表示）
 if chat_source == "voice":
-    json_format_block = f"""含める項目:
+    json_format_block = """含める項目:
 - private: この会話中に頭をよぎったこと。誰も見てないでしょという感覚で、何も考えずそのまま投稿するツイートのように。なければ null。
 - proposal_resolved: 保留中の提案が今回の会話で承認または却下されたら true、そうでなければ false。
 - preferences_update: 設定変更があればその内容、なければ省略（null）。
