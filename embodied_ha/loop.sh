@@ -377,7 +377,7 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, conte
         if model:
             cmd += ["--model", model]
         cmd += ["-p", prompt_text]
-        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd="/tmp/embodied-ha", env=CLAUDE_ENV)
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"), env=CLAUDE_ENV)
         return extract_agy_result(r.stdout)
     prompt_system = os.environ["SYS_PROMPT"] if system_prompt is None else system_prompt
     cmd = [CLAUDE, "-p", "--model", model, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--append-system-prompt", prompt_system]
@@ -391,7 +391,7 @@ def call_claude(text, model="sonnet", allowed_tools=None, mcp_config=None, conte
     # （以前は json.dumps(content) を text として包んでおり、画像がbase64テキスト化して届かなかった）
     blocks = content_blocks if content_blocks is not None else [{"type": "text", "text": text}]
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": blocks}})
-    r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd="/tmp/embodied-ha", env=CLAUDE_ENV)
+    r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"), env=CLAUDE_ENV)
     if facts_path:
         try:
             write_facts_file(facts_path, extract_facts_from_stream_text(r.stdout))
@@ -559,7 +559,7 @@ if is_agy:
     if session_model:
         cmd += ["--model", session_model]
     cmd += ["-p", full_prompt]
-    r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd="/tmp/embodied-ha", env={**env, "HOME": os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/")})
+    r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"), env={**env, "HOME": os.environ.get("EHA_ANTIGRAVITY_HOME", "/data/")})
     if r.returncode != 0:
         print(f"[loop][agy] stderr: {r.stderr.strip()}", file=sys.stderr)
     print(extract_agy_result(r.stdout))
@@ -574,7 +574,7 @@ else:
         subprocess.run(["python3", gen, mcp_config_path, *mcp_servers], env=env, check=False)
         if os.path.exists(mcp_config_path):
             cmd += ["--mcp-config", mcp_config_path]
-    r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or "/tmp/embodied-ha", env=env)
+    r = subprocess.run(cmd, input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"), env=env)
     try:
         write_facts_file(os.environ.get("FACTS_FILE", ""), extract_facts_from_stream_text(r.stdout))
     except Exception as e:

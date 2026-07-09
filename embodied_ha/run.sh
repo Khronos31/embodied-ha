@@ -149,13 +149,24 @@ unset _OPT_CONFIG_DIR
 echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 
 # --- Claude の作業ディレクトリ ---
-# 空の場合はスクリプトディレクトリ（/app）。
-# /config を指定し claude_config_dir=/config/.tools/claude-home と組み合わせると
-# Studio Code Server 版の Claude Code とメモリを共有できる。
+# 空の場合は EHA_DATA_DIR/workdir（永続・監査可能・ハーネス非依存の既定パス）。
+# cwdの祖先ディレクトリにあたる /config/CLAUDE.md（SCS運用者向け・無関係な内容）が
+# Claude Codeのプロジェクトメモリとして誤って読み込まれないよう、直下に
+# .claude/settings.local.json（claudeMdExcludes）を配置する。既存ファイルは上書きしない。
 _OPT_CWD=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_cwd',''))" 2>/dev/null || echo "")
-export EHA_CLAUDE_CWD="${_OPT_CWD:-}"
+export EHA_CLAUDE_CWD="${_OPT_CWD:-$EHA_DATA_DIR/workdir}"
 unset _OPT_CWD
-[ -n "$EHA_CLAUDE_CWD" ] && echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD}"
+echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD}"
+
+mkdir -p "$EHA_CLAUDE_CWD/.claude"
+if [ ! -f "$EHA_CLAUDE_CWD/.claude/settings.local.json" ]; then
+    cat > "$EHA_CLAUDE_CWD/.claude/settings.local.json" << 'JSONEOF'
+{
+  "claudeMdExcludes": ["/config/CLAUDE.md", "/config/CLAUDE.local.md"]
+}
+JSONEOF
+    echo "[run] ${EHA_CLAUDE_CWD}/.claude/settings.local.json を初期化（/config/CLAUDE.md除外設定）"
+fi
 
 # --- preferences.json ---
 # 会話で育てる設定（スピーカー・カメラ・在宅判定・センサー（おもなデバイス）等）。

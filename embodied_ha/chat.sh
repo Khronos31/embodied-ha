@@ -563,7 +563,7 @@ if _sd:
 
 r = subprocess.run(
     cmd,
-    input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.environ.get("SCRIPT_DIR", "/app"), env=CLAUDE_ENV)
+    input=msg, capture_output=True, text=True, cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"), env=CLAUDE_ENV)
 result_text = ""
 for line in r.stdout.splitlines():
     line = line.strip()
