@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""chat.sh のPython移植（[[embodied-ha-pythonize-chat-loop-design-2026-07-09]]）。
+
+daemon.pyから起動される、ユーザー発言への応答生成スクリプト。
+環境変数 CHAT_MESSAGE にユーザーの発言、CHAT_SOURCE に発信源
+（既定 "chat"、他に "voice"）が入る。
+
+実行順序・エラー処理特性はchat.shと意図的に同一にしてある
+（増分1〜7、chat_*.py / response_parse.py / eha_config.py を参照）。
+"""
+import datetime
+import json
+import os
+import subprocess
+import sys
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+
+import chat_context  # noqa: E402
+import chat_invoke  # noqa: E402
+import chat_postprocess  # noqa: E402
+import chat_prefs_update  # noqa: E402
+import eha_config  # noqa: E402
+from response_parse import chat_extract  # noqa: E402
+
+
+def _web_ui_status(status, source, ingress_port, run=subprocess.run):
+    """Web UIへステータスをPOSTする（chat.sh:32-33/_web_idleと同一、失敗は無視）。"""
+    body = json.dumps({"status": status, "source": source}, ensure_ascii=False)
+    try:
+        run(
+            ["curl", "-sf", "-X", "POST", f"http://localhost:{ingress_port}/api/status",
+             "-H", "Content-Type: application/json", "-d", body],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def _run_subprocess_text(cmd, env=None, fallback="", timeout=None):
+    """`2>/dev/null || echo fallback`相当のsubprocess呼び出しヘルパー。"""
+    try:
+        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            return fallback
+        return result.stdout.rstrip("\n")
+    except Exception:
+        return fallback
+
+
+def _build_long_memory(memory_file, script_dir):
+    """mem-context.py経由で長期記憶の要約を取得する（chat.sh:72-77と同一）。"""
+    if not (memory_file and os.path.isfile(memory_file) and os.path.getsize(memory_file) > 0):
+        return "なし"
+    return _run_subprocess_text(
+        ["python3", os.path.join(script_dir, "mem-context.py"), memory_file, "40"], fallback="なし"
+    )
+
+
+def _build_recent_chat_context(log_dir, resident, character_name, script_dir, chat_log_file):
+    """recent_chat_context.py経由で今日の会話(直近10件より前)を取得する（chat.sh:137-141と同一）。"""
+    if not (chat_log_file and os.path.isfile(chat_log_file) and os.path.getsize(chat_log_file) > 0):
+        return ""
+    env = {**os.environ, "LOG_DIR": log_dir, "RESIDENT": resident, "EHA_CHARACTER_NAME": character_name or ""}
+    return _run_subprocess_text(
+        ["python3", os.path.join(script_dir, "recent_chat_context.py")], env=env, fallback=""
+    )
+
+
+def _build_open_loops():
+    """`loops list` CLIで開いたループ一覧を取得する（chat.sh:144と同一）。"""
+    return _run_subprocess_text(["loops", "list"], fallback="なし")
+
+
+def _build_sensors(script_dir):
+    """render-sensors.py経由で在宅・センサー状況を取得する（chat.sh:155と同一）。"""
+    return _run_subprocess_text(
+        ["python3", os.path.join(script_dir, "render-sensors.py"), "--context", "chat"], fallback="取得失敗"
+    )
+
+
+def _build_body_location_context(script_dir):
+    """body-context.py経由で身体位置の文脈を取得する（chat.sh:156と同一）。"""
+    return _run_subprocess_text(
+        ["python3", os.path.join(script_dir, "body-context.py")],
+        fallback="# 身体位置\n取得失敗",
+    )
+
+
+def _build_features_presented(script_dir):
+    """feature-flags.py get経由で提示済み機能idを取得する（chat.sh:183と同一）。"""
+    return _run_subprocess_text(["python3", os.path.join(script_dir, "feature-flags.py"), "get"], fallback="")
+
+
+def run(environ=None):
+    environ = dict(environ if environ is not None else os.environ)
+    cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
+
+    log_dir = cfg.get("EHA_LOG_DIR") or os.path.join(SCRIPT_DIR, "log")
+    log_file = os.path.join(log_dir, "observations.jsonl")
+    explore_log = os.path.join(log_dir, "explore.jsonl")
+    pending_file = os.path.join(log_dir, "pending_proposal.json")
+    memory_file = os.path.join(log_dir, "memory.md")
+    chat_log_file = os.path.join(log_dir, "chat_log.jsonl")
+    tmp_dir = "/tmp/embodied-ha"
+
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    timestamp = datetime.datetime.now().astimezone().isoformat()
+    user_msg = cfg.get("CHAT_MESSAGE") or ""
+    chat_source = cfg.get("CHAT_SOURCE") or "chat"
+    ingress_port = cfg.get("INGRESS_PORT") or "8099"
+    resident = cfg.get("RESIDENT", "ユーザー")
+
+    if not user_msg:
+        print("[chat] CHAT_MESSAGE が空。終了。")
+        return
+
+    _web_ui_status("thinking", chat_source, ingress_port)
+    try:
+        _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
+                        log_dir, log_file, explore_log, pending_file, memory_file, chat_log_file)
+    finally:
+        _web_ui_status("idle", None, ingress_port)
+
+
+def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
+                    log_dir, log_file, explore_log, pending_file, memory_file, chat_log_file):
+    body_location_file = cfg.get("EHA_BODY_LOCATION_FILE") or "/config/embodied-ha/body_location.json"
+    prefs_file = cfg.get("EHA_PREFS_FILE")
+    data_dir = cfg.get("EHA_DATA_DIR", "/config/embodied-ha")
+
+    recent_activity = chat_context.build_recent_activity(log_file, explore_log)
+    current_mood = chat_context.build_current_mood(log_file)
+    long_memory = _build_long_memory(memory_file, SCRIPT_DIR)
+    pending = chat_context.build_pending_proposal(pending_file)
+    entity_table = chat_context.build_entity_table(prefs_file)
+    chat_hist = chat_context.build_chat_history(chat_log_file, resident)
+    recent_chat_context = _build_recent_chat_context(
+        log_dir, resident, cfg.get("EHA_CHARACTER_NAME", ""), SCRIPT_DIR, chat_log_file
+    ).strip()
+    open_loops = _build_open_loops()
+    # TURN_TAKING_STATE: chat.sh元コードと同様、ガード無し（意図的。フォルトインジェクションテスト対象）
+    turn_taking_state = chat_context.build_turn_taking_state(log_dir, resident)
+    sensors = _build_sensors(SCRIPT_DIR)
+    body_location_context = _build_body_location_context(SCRIPT_DIR)
+
+    # 投射カメラのスナップショット取得(旧PROJECTED_CAMERA_B64)は、
+    # chat.sh側で取得はするがプロンプトへ一切使われない無駄なネットワーク
+    # 呼び出しだった(ゆの確認済み、chat.py移植では意図的に削除)。
+    # chat.sh側の修正は別TODO(chat.py/loop.py移植とは別スコープ)。
+    projected_camera_source = chat_context.resolve_projected_camera_entity(body_location_file)
+
+    features_md_path = os.path.join(SCRIPT_DIR, "features.md")
+    features_md = ""
+    if os.path.isfile(features_md_path):
+        with open(features_md_path, encoding="utf-8") as fh:
+            features_md = fh.read()
+    features_presented = _build_features_presented(SCRIPT_DIR)
+
+    recent_auditory_input = chat_context.build_recent_auditory_input(
+        chat_source, user_msg, prefs_file, body_location_file
+    )
+    queued_ctx = chat_context.resolve_queued_listen_context("chat")
+    if queued_ctx.get("RECENT_AUDITORY_INPUT"):
+        recent_auditory_input = queued_ctx["RECENT_AUDITORY_INPUT"]
+    queued_listen_file = queued_ctx.get("EHA_QUEUED_LISTEN_FILE")
+
+    active_desires_raw = cfg.get("ACTIVE_DESIRES", "")
+    inner_voice = chat_invoke.build_inner_voice(active_desires_raw)
+    body_narrative = chat_invoke.build_body_narrative(cfg.get("EHA_BODY_STATE", "") or "{}")
+    user_room, user_room_speaker = chat_invoke.resolve_voice_user_room(chat_source, data_dir, prefs_file)
+
+    prompt = chat_invoke.build_chat_prompt(
+        character=cfg.get("CHARACTER", ""),
+        resident=resident,
+        projected_camera_source=projected_camera_source,
+        recent_activity=recent_activity,
+        current_mood=current_mood,
+        inner_voice=inner_voice,
+        body_narrative=body_narrative,
+        body_location_context=body_location_context,
+        turn_taking_state=turn_taking_state,
+        sensors=sensors,
+        long_memory=long_memory,
+        open_loops=open_loops,
+        recent_chat_context=recent_chat_context,
+        chat_hist=chat_hist,
+        entity_table=entity_table,
+        pending=pending,
+        features_md=features_md,
+        features_presented=features_presented,
+        extra_context=cfg.get("EXTRA_CONTEXT", ""),
+        policies_raw=cfg.get("POLICIES", "").strip(),
+        chat_source=chat_source,
+        user_room=user_room,
+        user_room_speaker=user_room_speaker,
+        recent_auditory_input=recent_auditory_input,
+        user_msg=user_msg,
+    )
+    msg = chat_invoke.build_message_envelope(prompt)
+    claude_env = chat_invoke.build_claude_env(cfg)
+    cmd = chat_invoke.build_claude_command(
+        chat_source=chat_source, script_dir=SCRIPT_DIR, claude_env=claude_env,
+        claude_bin=cfg.get("CLAUDE_BIN", "claude"),
+    )
+    cwd = cfg.get("EHA_CLAUDE_CWD") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+    r = chat_invoke.invoke_claude(cmd, msg, cwd, claude_env)
+
+    chat_invoke.log_tool_use_diagnostics(r.stdout)
+    response_text = chat_invoke.extract_response_text(r.stdout, r.stderr, r.returncode)
+
+    if queued_listen_file:
+        try:
+            os.remove(queued_listen_file)
+        except OSError:
+            pass
+
+    parsed = chat_extract(response_text)
+
+    reply = parsed.get("reply", "") or ""
+    if not reply:
+        reply = "（うまく返事を作れませんでした）"
+
+    chat_postprocess.record_presented_features(parsed, SCRIPT_DIR)
+
+    print(f"[chat] {resident}さん: {user_msg}")
+    print(f"[chat] Claude: {reply}")
+
+    chat_postprocess.consume_pending_proposal(parsed, pending_file)
+    chat_prefs_update.update_preferences(parsed, prefs_file)
+
+    if chat_source != "voice":
+        append_chat_log_kwargs = dict(
+            parsed=parsed, reply=reply, user_msg=user_msg, chat_source=chat_source,
+            timestamp=timestamp, chat_log_file=chat_log_file,
+        )
+        # append_chat_log: chat.sh元コードと同様、意図的にガード無し
+        chat_postprocess.append_chat_log(**append_chat_log_kwargs)
+
+    chat_postprocess.publish_private_to_mqtt(
+        parsed, cfg.get("MQTT_HOST", ""), cfg.get("MQTT_PORT", "1883"),
+        cfg.get("MQTT_USER", ""), cfg.get("MQTT_PASS", ""),
+    )
+
+
+if __name__ == "__main__":
+    run()
