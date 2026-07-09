@@ -281,7 +281,7 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
         input=msg,
         capture_output=True,
         text=True,
-        cwd=os.environ.get("EHA_CLAUDE_CWD") or os.environ.get("SCRIPT_DIR", SCRIPT_DIR),
+        cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"),
         env=env,
     )
     raw = ""
