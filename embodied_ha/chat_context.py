@@ -2,8 +2,8 @@
 
 chat.shに埋め込まれていたコンテキスト構築ブロック（RECENT_ACTIVITY/
 CURRENT_MOOD/PENDING_PROPOSAL/ENTITY_TABLE/CHAT_HISTORY/TURN_TAKING_STATE/
-投射カメラ検出）を、importできる関数として切り出したもの
-（[[embodied-ha-pythonize-chat-loop-design-2026-07-09]] 増分2）。
+投射カメラ検出/音声専用ブロック）を、importできる関数として切り出したもの
+（[[embodied-ha-pythonize-chat-loop-design-2026-07-09]] 増分2・3）。
 
 各関数のエラー処理特性は chat.sh の元コードと意図的に同一にしてある
 （例: build_turn_taking_state はガード無しで例外を伝播させる——これは
@@ -12,6 +12,9 @@ CURRENT_MOOD/PENDING_PROPOSAL/ENTITY_TABLE/CHAT_HISTORY/TURN_TAKING_STATE/
 import json
 import os
 import datetime
+
+from auditory_context import format_recent_auditory_prompt, resolve_source_filter
+from listen_queue import prepare_queued_listen_session
 
 import sociality_state as ss
 
@@ -141,3 +144,49 @@ def resolve_projected_camera_entity(body_location_file=None):
     except Exception:
         pass
     return ""
+
+
+def build_recent_auditory_input(chat_source, user_msg, prefs_file, body_location_file=None):
+    """voiceモード時のみ、直近の聴覚イベントをprompt文脈として整形する。
+
+    非voice時は常に空文字列（chat.shの`if [ "$CHAT_SOURCE_VALUE" = "voice" ]`
+    ガードと同一）。body_location_file省略時の既定値は本番絶対パス
+    (resolve_projected_camera_entityと同じフォールバック文字列)。
+    """
+    if chat_source != "voice":
+        return ""
+
+    bl_file = body_location_file or "/config/embodied-ha/body_location.json"
+    current_entity = ""
+    try:
+        with open(bl_file, encoding="utf-8") as fh:
+            current_entity = (json.load(fh).get("current_entity") or "").strip()
+    except Exception:
+        pass
+
+    prefs = {}
+    if prefs_file:
+        try:
+            with open(prefs_file, encoding="utf-8") as fh:
+                prefs = json.load(fh)
+        except Exception:
+            prefs = {}
+
+    should_show, source_filter = resolve_source_filter(current_entity, prefs)
+    if should_show:
+        return format_recent_auditory_prompt(user_msg or "", source_filter=source_filter)
+    return ""
+
+
+def resolve_queued_listen_context(mode="chat"):
+    """予約された深聴きセッションのコンテキストを取得する。
+
+    chat.shは`eval "$(... export KEY=value ...)"`でサブプロセスの値を
+    シェル環境へ持ち込んでいたが、chat.pyはプロセス境界を跨がないため
+    listen_queue.prepare_queued_listen_sessionを直接呼ぶだけでよい。
+    chat.sh側で実際に後続処理が参照していたのは`RECENT_AUDITORY_INPUT`
+    (上書き用)と`EHA_QUEUED_LISTEN_FILE`(クリーンアップ用)の2キーのみ
+    （他のキーはchat.sh自身では未消費）。戻り値が無ければ空辞書。
+    """
+    ctx = prepare_queued_listen_session(mode)
+    return ctx or {}

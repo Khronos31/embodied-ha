@@ -214,5 +214,63 @@ class ProjectedCameraEntityTests(unittest.TestCase):
         self.assertEqual(result, "")
 
 
+class RecentAuditoryInputTests(unittest.TestCase):
+    def test_non_voice_returns_empty_without_touching_files(self):
+        # chat_source != "voice" の場合、body_location/eventsファイルには一切アクセスしない
+        with patch("builtins.open", side_effect=AssertionError("開いてはいけない")):
+            result = chat_context.build_recent_auditory_input("chat", "こんにちは", "/no/such/prefs.json")
+        self.assertEqual(result, "")
+
+    def test_voice_with_no_events_returns_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events_file = Path(tmp) / "auditory_events.jsonl"  # 存在しない
+            bl_file = Path(tmp) / "body_location.json"
+            with open(bl_file, "w", encoding="utf-8") as fh:
+                json.dump({"current_entity": ""}, fh)
+            with patch.dict("os.environ", {"EHA_AUDITORY_EVENTS_FILE": str(events_file)}):
+                result = chat_context.build_recent_auditory_input(
+                    "voice", "さっきの音は何？", None, str(bl_file)
+                )
+            self.assertEqual(result, "")
+
+    def test_voice_missing_body_location_file_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events_file = Path(tmp) / "auditory_events.jsonl"
+            missing_bl = Path(tmp) / "does_not_exist.json"
+            with patch.dict("os.environ", {"EHA_AUDITORY_EVENTS_FILE": str(events_file)}):
+                result = chat_context.build_recent_auditory_input(
+                    "voice", "さっきの音は何？", None, str(missing_bl)
+                )
+            self.assertEqual(result, "")
+
+    def test_voice_with_recent_event_includes_it_in_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events_file = Path(tmp) / "auditory_events.jsonl"
+            bl_file = Path(tmp) / "body_location.json"
+            with open(bl_file, "w", encoding="utf-8") as fh:
+                json.dump({"current_entity": ""}, fh)
+            now = datetime.datetime.now().astimezone()
+            with open(events_file, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "timestamp": now.isoformat(),
+                    "transcript": "ピンポンと鳴った",
+                    "source": "リビング",
+                }, ensure_ascii=False) + "\n")
+            with patch.dict("os.environ", {"EHA_AUDITORY_EVENTS_FILE": str(events_file)}):
+                result = chat_context.build_recent_auditory_input(
+                    "voice", "さっきの音は何？", None, str(bl_file)
+                )
+            self.assertIn("ピンポン", result)
+
+
+class QueuedListenContextTests(unittest.TestCase):
+    def test_no_pending_request_returns_empty_dict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request_file = Path(tmp) / "next_listen_request.json"  # 存在しない = 予約無し
+            with patch.dict("os.environ", {"EHA_NEXT_LISTEN_REQUEST_FILE": str(request_file)}):
+                result = chat_context.resolve_queued_listen_context("chat")
+            self.assertEqual(result, {})
+
+
 if __name__ == "__main__":
     unittest.main()
