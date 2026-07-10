@@ -1,0 +1,46 @@
+%% chat.py 処理フロー図（daemon.py からの起動〜終了まで）
+%% embodied_ha/chat.py（増分10時点、コミットf94408f）から直接起こしたもの。
+%% ⚠マーク = ガード無し。依存先が失敗すると例外がそのまま伝播しプロセス全体がクラッシュする
+%% （chat.shのset -e相当を意図的に維持している4箇所）。それ以外はフォールバック値で継続する。
+%%
+%% chat.pyの処理フローを変更したら、このファイルも合わせて更新し、
+%% docs/render_flowchart.py で再生成すること（同じ手順で生成することで、
+%% 変更前後のPNGを見た目で比較できるようにする）。
+flowchart TD
+    A["daemon.py: run_chat()\nsubprocess.run(['python3', chat.py])"] --> B["chat.py: run(environ)"]
+    B --> C{"CHAT_MESSAGEが空？"}
+    C -->|"空"| C1["ログ出力して終了\n(Web UIステータスは変更しない)"]
+    C -->|"非空"| D["Web UI: status=thinking"]
+    D --> E["try: _run_chat_turn() 開始"]
+
+    E --> F["character.md読み込み\n(失敗時は空文字列で継続)"]
+
+    F --> G1["recent_activity / current_mood\n(フォールバックあり)"]
+    G1 --> G2["⚠ long_memory取得(mem-context.py)\nガード無し=失敗で全体クラッシュ"]
+    G2 --> G3["pending_proposal / entity_table\nchat_history(フォールバックあり)"]
+    G3 --> G4["⚠ turn_taking_state取得\nガード無し=失敗で全体クラッシュ"]
+    G4 --> G5["sensors / body_location_context\n(フォールバックあり)"]
+    G5 --> G6["投射カメラ画像取得\n(失敗時は空リストで継続)"]
+    G6 --> G7["features.md / 紹介済み機能\n(フォールバックあり)"]
+    G7 --> G8{"CHAT_SOURCE == voice?"}
+    G8 -->|"はい"| G8a["⚠ recent_auditory_input取得\nガード無し=失敗で全体クラッシュ"]
+    G8 -->|"いいえ"| G8b["recent_auditory_input = 空文字列\n(依存先を呼ばない)"]
+    G8a --> G9
+    G8b --> G9["queued listen(深聴き予約)解決\n(あればenv継承)"]
+
+    G9 --> H["プロンプト構築\nbuild_chat_prompt()"]
+    H --> I["Claude CLI起動\ninvoke_claude()"]
+    I --> J["レスポンス抽出\nchat_extract()"]
+
+    J --> K1["紹介済み機能を記録"]
+    K1 --> K2["保留提案の消化"]
+    K2 --> K3["preferences.json更新\n(try/except有り・握りつぶす)"]
+    K3 --> K4{"CHAT_SOURCE == voice?"}
+    K4 -->|"いいえ"| K5["⚠ chat_log.jsonl追記\nガード無し=失敗で全体クラッシュ"]
+    K4 -->|"はい"| K6["チャットログには追記しない\n(speakツールが直接返答)"]
+    K5 --> K7
+    K6 --> K7["MQTT publish(private内省)\n(try/except有り・握りつぶす)"]
+
+    K7 --> L["finally: Web UI status=idle\n★クラッシュしても必ず実行される"]
+    C1 --> M["daemon.py: returncodeを見る"]
+    L --> M
