@@ -207,6 +207,74 @@ class ChatRunIntegrationTests(unittest.TestCase):
             chat_log = log_dir / "chat_log.jsonl"
             self.assertTrue(chat_log.exists())
 
+    def test_character_file_content_flows_into_prompt(self):
+        # Codexレビューで発見: eha_config.pyはEHA_CHARACTER_FILEのパスを解決するだけで
+        # 内容を読んでおらず、chat.py側の読み取りが欠落していた(全会話でキャラクター
+        # 定義が空文字列になる回帰)。character.mdの実内容がプロンプトに乗ることを確認する。
+        with tempfile.TemporaryDirectory() as tmp:
+            env, log_dir, prefs_file = _make_isolated_env(tmp)
+            character_file = Path(env["EHA_CHARACTER_FILE"])
+            character_file.write_text("私はテスト用のあかね。特徴的な一文。", encoding="utf-8")
+
+            captured_msgs = []
+
+            def capture_invoke_claude(cmd, msg, cwd, claude_env):
+                captured_msgs.append(msg)
+                return _fake_claude_run(cmd)
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""), \
+                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                chat.run(env)
+
+            self.assertEqual(len(captured_msgs), 1)
+            content = json.loads(captured_msgs[0])["message"]["content"]
+            prompt_text = content[-1]["text"]
+            self.assertIn("私はテスト用のあかね。特徴的な一文。", prompt_text)
+
+    def test_queued_listen_context_propagates_to_claude_env(self):
+        # Codexレビューで発見: chat.shはprepare_queued_listen_session()の戻り値を
+        # eval "$(export ...)"でシェル環境へ持ち込み、Claude呼び出しの環境にも
+        # 継承されていた。chat.py側がこの伝播を欠いていたため、深聴きセッション
+        # 限定のEHA_SESSION_BIN/EHA_SESSION_MODEL等がclaude_envに乗ることを確認する。
+        with tempfile.TemporaryDirectory() as tmp:
+            env, log_dir, prefs_file = _make_isolated_env(tmp)
+
+            captured_envs = []
+
+            def capture_invoke_claude(cmd, msg, cwd, claude_env):
+                captured_envs.append(claude_env)
+                return _fake_claude_run(cmd)
+
+            fake_queued_ctx = {
+                "RECENT_AUDITORY_INPUT": None,
+                "EHA_QUEUED_LISTEN_FILE": None,
+                "EHA_SESSION_BIN": "agy",
+                "EHA_SESSION_MODEL": "Gemini 3.5 Flash (High)",
+            }
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""), \
+                 patch.object(chat.chat_context, "resolve_queued_listen_context", return_value=fake_queued_ctx), \
+                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                chat.run(env)
+
+            self.assertEqual(len(captured_envs), 1)
+            self.assertEqual(captured_envs[0].get("EHA_SESSION_BIN"), "agy")
+            self.assertEqual(captured_envs[0].get("EHA_SESSION_MODEL"), "Gemini 3.5 Flash (High)")
+
 
 if __name__ == "__main__":
     unittest.main()

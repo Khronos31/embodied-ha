@@ -1,8 +1,8 @@
-"""chat.sh移植で意図的にガード無しのまま残した3箇所のフォルトインジェクションテスト。
+"""chat.sh移植で意図的にガード無しのまま残した4箇所のフォルトインジェクションテスト。
 
 red-team判定（[[project_embodied_ha_todo]]・
 /config/.tools/claude-home/red-team/20260710-chat-py-port-plan.md）の
-必須修正事項2への対応。以下3箇所は、chat.shの元コードにもエラー
+必須修正事項2への対応。以下4箇所は、chat.shの元コードにもエラー
 ハンドリングが無く、失敗時はスクリプト全体を中断させる設計になっている
 （意図的か見落としかは元コードからは判別できないが、chat.py移植では
 「同じように壊れる」ことを優先し、静かに握りつぶす方向へ揃えない）:
@@ -10,10 +10,13 @@ red-team判定（[[project_embodied_ha_todo]]・
 1. chat_context.build_turn_taking_state（chat.sh:146-152）
 2. chat_context.build_recent_auditory_input（chat.sh:186-213、voiceモード時のみ）
 3. chat_postprocess.append_chat_log（chat.sh:857-878）
+4. chat._build_long_memory（chat.sh:72-77、mem-context.py呼び出し。Codexレビューで
+   発見された4箇所目。当初は誤ってfallback="なし"で握りつぶしていた）
 
 各テストは、依存先を意図的に例外送出させ、対象関数がそれを握りつぶさず
 そのまま伝播させることを確認する。
 """
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,6 +26,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "embodied_ha"))
 
+import chat  # type: ignore  # noqa: E402
 import chat_context  # type: ignore  # noqa: E402
 import chat_postprocess  # type: ignore  # noqa: E402
 
@@ -80,6 +84,27 @@ class AppendChatLogFaultInjectionTests(unittest.TestCase):
             content = log_file.read_text(encoding="utf-8")
             self.assertIn("こんにちは", content)
             self.assertIn("内緒", content)
+
+
+class LongMemoryFaultInjectionTests(unittest.TestCase):
+    def test_mem_context_failure_propagates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_file = Path(tmp) / "memory.md"
+            memory_file.write_text("何か長期記憶", encoding="utf-8")
+
+            def fake_run(cmd, **kwargs):
+                raise subprocess.CalledProcessError(1, cmd)
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                chat._build_long_memory(str(memory_file), "/some/script_dir", run=fake_run)
+
+    def test_empty_or_missing_memory_file_short_circuits_without_calling_run(self):
+        # メモリファイルが無い/空のときはchat.sh同様run自体を呼ばない
+        def fake_run(cmd, **kwargs):
+            raise AssertionError("memory_fileが空/無いときはrunを呼んではいけない")
+
+        result = chat._build_long_memory("/no/such/file.md", "/some/script_dir", run=fake_run)
+        self.assertEqual(result, "なし")
 
 
 if __name__ == "__main__":

@@ -51,13 +51,35 @@ def _run_subprocess_text(cmd, env=None, fallback="", timeout=None):
         return fallback
 
 
-def _build_long_memory(memory_file, script_dir):
-    """mem-context.py経由で長期記憶の要約を取得する（chat.sh:72-77と同一）。"""
+def _build_long_memory(memory_file, script_dir, run=subprocess.run):
+    """mem-context.py経由で長期記憶の要約を取得する（chat.sh:72-77と同一）。
+
+    chat.sh側はガード無し（`set -e`下で失敗時は会話プロセス全体がクラッシュ
+    する）。ここも意図的に例外を握りつぶさない（フォルトインジェクション
+    テスト対象。Codexレビューで発見された、増分間で唯一この関数だけ
+    誤って握りつぶしていた不一致の修正）。
+    """
     if not (memory_file and os.path.isfile(memory_file) and os.path.getsize(memory_file) > 0):
         return "なし"
-    return _run_subprocess_text(
-        ["python3", os.path.join(script_dir, "mem-context.py"), memory_file, "40"], fallback="なし"
+    result = run(
+        ["python3", os.path.join(script_dir, "mem-context.py"), memory_file, "40"],
+        capture_output=True, text=True, check=True,
     )
+    return result.stdout.rstrip("\n")
+
+
+def _read_character(character_file):
+    """character.mdの内容を読む（chat.sh:12の`cat "$EHA_CHARACTER_FILE" 2>/dev/null`と同一）。
+
+    Codexレビューで発見: eha_config.pyはEHA_CHARACTER_FILEのパスを解決する
+    だけで内容を読んでおらず、chat.py側にchat.sh:12に相当する読み取りが
+    欠落していた（全会話でキャラクター定義が空文字列になる回帰）。
+    """
+    try:
+        with open(character_file, encoding="utf-8") as fh:
+            return fh.read()
+    except Exception:
+        return ""
 
 
 def _build_recent_chat_context(log_dir, resident, character_name, script_dir, chat_log_file):
@@ -158,6 +180,8 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     body_location_file = cfg.get("EHA_BODY_LOCATION_FILE") or "/config/embodied-ha/body_location.json"
     prefs_file = cfg.get("EHA_PREFS_FILE")
     data_dir = cfg.get("EHA_DATA_DIR", "/config/embodied-ha")
+    character_file = cfg.get("EHA_CHARACTER_FILE") or os.path.join(SCRIPT_DIR, "character.md")
+    character = _read_character(character_file)
 
     recent_activity = chat_context.build_recent_activity(log_file, explore_log)
     current_mood = chat_context.build_current_mood(log_file)
@@ -204,7 +228,7 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     user_room, user_room_speaker = chat_invoke.resolve_voice_user_room(chat_source, data_dir, prefs_file)
 
     prompt = chat_invoke.build_chat_prompt(
-        character=cfg.get("CHARACTER", ""),
+        character=character,
         resident=resident,
         projected_camera_source=projected_camera_source,
         recent_activity=recent_activity,
@@ -231,7 +255,17 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         user_msg=user_msg,
     )
     msg = chat_invoke.build_message_envelope(prompt, prefix_blocks=projected_camera_blocks)
-    claude_env = chat_invoke.build_claude_env(cfg)
+    # chat.shはprepare_queued_listen_session()の戻り値を`eval "$(export ...)"`で
+    # シェル環境へ持ち込み、以降のClaude呼び出しの環境にも自然に継承されていた
+    # (EHA_SESSION_BIN/EHA_SESSION_MODEL等、深聴きセッション限定のバックエンド
+    # 切替に使われる)。Codexレビューで、chat.py側がこの伝播を欠いていることが
+    # 発見された。cfgのコピーへ全キー（Noneを除く）をマージしてから
+    # build_claude_envへ渡すことで、同じ継承挙動を再現する。
+    env_with_queued_ctx = dict(cfg)
+    for key, value in queued_ctx.items():
+        if value is not None:
+            env_with_queued_ctx[key] = str(value)
+    claude_env = chat_invoke.build_claude_env(env_with_queued_ctx)
     cmd = chat_invoke.build_claude_command(
         chat_source=chat_source, script_dir=SCRIPT_DIR, claude_env=claude_env,
         claude_bin=cfg.get("CLAUDE_BIN", "claude"),
