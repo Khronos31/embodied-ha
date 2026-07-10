@@ -1,5 +1,5 @@
 name: Embodied HA
-version: "1.26.8"
+version: "1.26.9"
 slug: embodied_ha
 description: "A little spirit moves into your smart home. Home Assistant, embodied: eyes from cameras, ears from microphones, a voice from speakers — and memories that grow into a life together."
 arch:
