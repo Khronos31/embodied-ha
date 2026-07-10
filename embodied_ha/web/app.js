@@ -3676,6 +3676,8 @@ async function handleSaveSettings(e) {
         nextPrefs = serializeFormToPrefs();
     }
 
+    let jsonEditorNeedsUpdate = false;
+
     // ループ設定は専用フォームの値を常に適用する（JSON直接編集タブとは独立）
     const loopIntervalMin = parseFloat(document.getElementById('setting-loop-interval-min')?.value);
     if (!isNaN(loopIntervalMin) && loopIntervalMin > 0) {
@@ -3686,9 +3688,18 @@ async function handleSaveSettings(e) {
             night_probability: parseInt(document.getElementById('setting-loop-night-prob')?.value, 10) || 0,
             min_probability: parseInt(document.getElementById('setting-loop-min-prob')?.value, 10) || 0,
         };
-        if (activeSettingsTab === 'advanced' && jsonEditor) {
-            jsonEditor.setValue(JSON.stringify(nextPrefs, null, 2));
-        }
+        jsonEditorNeedsUpdate = true;
+    }
+
+    // HTTP POST送信設定も専用トグルの値を常に適用する
+    const httpPostEnabledEl = document.getElementById('http-post-enabled-toggle');
+    if (httpPostEnabledEl) {
+        nextPrefs.http_post_enabled = httpPostEnabledEl.checked;
+        jsonEditorNeedsUpdate = true;
+    }
+
+    if (jsonEditorNeedsUpdate && activeSettingsTab === 'advanced' && jsonEditor) {
+        jsonEditor.setValue(JSON.stringify(nextPrefs, null, 2));
     }
 
     const spk = nextPrefs.speakers;
