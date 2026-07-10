@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import itertools
 import json
 import math
 import os
+import random
 import socket
 import subprocess
 import sys
@@ -23,6 +25,7 @@ import wave
 from collections import deque
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import Enum
 from pathlib import Path
 
 from auditory_context import append_auditory_event
@@ -64,9 +67,20 @@ BACKGROUND_LOG_MIN_INTERVAL_SECONDS = 300
 NON_SPEECH_AUDIO_RETENTION_HOURS = 24
 NON_SPEECH_MAX_CLIP_SECONDS = 8.0
 BACKGROUND_LOG_RETENTION_HOURS = 24
+TCP_PULL_CONNECT_GAP_SECONDS = 2.0
+TCP_PULL_CONNECT_TIMEOUT_SECONDS = 10.0
+TCP_PULL_READ_TIMEOUT_SECONDS = 10.0
+TCP_PULL_BACKOFF_BASE_SECONDS = 1.0
+TCP_PULL_BACKOFF_MAX_SECONDS = 30.0
+TCP_PULL_BACKOFF_JITTER_RATIO = 0.25
+TCP_PULL_STABLE_SESSION_SECONDS = 30.0
+DEFAULT_AUDIO_DAEMON_LOCK_FILE = "/tmp/embodied-ha/audio-daemon.lock"
 _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
+_TCP_PULL_CONNECT_LOCK = threading.Lock()
+_tcp_pull_next_connect_at = 0.0
+_TCP_PULL_SESSION_GEN = itertools.count(1)
 _HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
 _TV_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": None}
 _TV_STATES_LOCK = threading.Lock()
@@ -122,8 +136,45 @@ class RuntimeSettings:
     stt_enabled: bool
 
 
+class TcpPullState(Enum):
+    CONNECTING = "connecting"
+    STREAMING = "streaming"
+    CLOSING = "closing"
+    RETRY_WAIT = "retry_wait"
+
+
+@dataclass(frozen=True)
+class TcpPullReservation:
+    generation: int
+    connect_at: float
+
+
+@dataclass(frozen=True)
+class TcpPullSessionResult:
+    generation: int
+    reason: str
+    stats: dict[str, int]
+    connected_seconds: float
+
+
 def log(message: str) -> None:
     print(f"[audio-daemon] {message}", file=sys.stderr, flush=True)
+
+
+def audio_daemon_lock_path() -> str:
+    return clean(os.environ.get("EHA_AUDIO_DAEMON_LOCK_FILE")) or DEFAULT_AUDIO_DAEMON_LOCK_FILE
+
+
+def acquire_audio_daemon_lock(path: str | None = None):
+    lock_path = clean(path) or audio_daemon_lock_path()
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    lock_handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_handle.close()
+        return None
+    return lock_handle
 
 
 def prefs_path() -> str:
@@ -999,6 +1050,7 @@ def load_enabled_mics(preferences: dict | None = None) -> list[AudioSourceConfig
         return []
 
     enabled: list[AudioSourceConfig] = []
+    tcp_endpoints: dict[tuple[str, int], str] = {}
     for item in raw_sources:
         if not isinstance(item, dict):
             continue
@@ -1007,6 +1059,16 @@ def load_enabled_mics(preferences: dict | None = None) -> list[AudioSourceConfig
         config = build_audio_source_config(item)
         if config is None:
             continue
+        if config.transport == "tcp_pull":
+            endpoint = (config.host.casefold(), config.port)
+            previous = tcp_endpoints.get(endpoint)
+            if previous is not None:
+                log(
+                    f"duplicate tcp_pull endpoint rejected for {config.label}: "
+                    f"{config.host}:{config.port} already owned by {previous}"
+                )
+                continue
+            tcp_endpoints[endpoint] = config.label
         enabled.append(config)
     return enabled
 
@@ -2291,49 +2353,214 @@ def audio_worker(
         time.sleep(10)
 
 
+def reserve_tcp_pull_connection(config: AudioSourceConfig) -> TcpPullReservation:
+    global _tcp_pull_next_connect_at
+
+    # Only reservation bookkeeping belongs under this lock. Sleeping and the
+    # TCP handshake remain outside so one unreachable node cannot block every
+    # other microphone.
+    with _TCP_PULL_CONNECT_LOCK:
+        now_ts = time.monotonic()
+        connect_at = max(now_ts, _tcp_pull_next_connect_at)
+        _tcp_pull_next_connect_at = connect_at + TCP_PULL_CONNECT_GAP_SECONDS
+        generation = next(_TCP_PULL_SESSION_GEN)
+
+    log(
+        f"tcp pull reserved for {config.label}: generation={generation} "
+        f"wait={max(0.0, connect_at - now_ts):.1f}s"
+    )
+    return TcpPullReservation(generation=generation, connect_at=connect_at)
+
+
+def open_tcp_pull_connection(
+    config: AudioSourceConfig,
+    reservation: TcpPullReservation,
+    *,
+    sleep_fn=None,
+    connector=None,
+) -> socket.socket:
+    sleep_fn = sleep_fn or time.sleep
+    connector = connector or socket.create_connection
+
+    wait_seconds = max(0.0, reservation.connect_at - time.monotonic())
+    if wait_seconds > 0:
+        log(
+            f"tcp pull connection queued for {config.label}: "
+            f"generation={reservation.generation} waiting={wait_seconds:.1f}s"
+        )
+        sleep_fn(wait_seconds)
+
+    # Deployment prerequisite: development/preview environments must never
+    # target a production VoiceS3R node address.
+    log(
+        f"tcp pull connecting for {config.label}: generation={reservation.generation} "
+        f"source={config.source} host={config.host} port={config.port} "
+        f"connect_timeout={TCP_PULL_CONNECT_TIMEOUT_SECONDS:.1f}s "
+        f"sample_rate={config.sample_rate} channels={config.channels} "
+        f"format={config.audio_format}"
+    )
+    return connector(
+        (config.host, config.port),
+        timeout=TCP_PULL_CONNECT_TIMEOUT_SECONDS,
+    )
+
+
+def run_tcp_pull_session(
+    config: AudioSourceConfig,
+    token: str,
+    reservation: TcpPullReservation,
+    *,
+    sleep_fn=None,
+    connector=None,
+) -> TcpPullSessionResult:
+    state = TcpPullState.CONNECTING
+    conn: socket.socket | None = None
+    connected_at: float | None = None
+    stats = {"chunks": 0, "bytes": 0}
+    reason = "unknown"
+
+    try:
+        conn = open_tcp_pull_connection(
+            config,
+            reservation,
+            sleep_fn=sleep_fn,
+            connector=connector,
+        )
+        connected_at = time.monotonic()
+        conn.settimeout(TCP_PULL_READ_TIMEOUT_SECONDS)
+        detector, vad_mode = new_vad()
+        state = TcpPullState.STREAMING
+        log(
+            f"tcp pull state={state.value} label={config.label} "
+            f"generation={reservation.generation} "
+            f"read_timeout={TCP_PULL_READ_TIMEOUT_SECONDS:.1f}s vad={vad_mode}"
+        )
+        stats = run_audio_stream_session(
+            config,
+            token,
+            lambda: read_exact_socket(conn, CHUNK_BYTES),
+            detector,
+            vad_mode,
+        )
+        reason = "eof"
+    except socket.timeout as exc:
+        reason = "connect_timeout" if state == TcpPullState.CONNECTING else "read_timeout"
+        log(
+            f"tcp pull timeout for {config.label}: generation={reservation.generation} "
+            f"state={state.value} reason={reason} error={exc}"
+        )
+    except OSError as exc:
+        reason = "connect_error" if state == TcpPullState.CONNECTING else "read_error"
+        log(
+            f"tcp pull socket error for {config.label}: generation={reservation.generation} "
+            f"state={state.value} reason={reason} errno={exc.errno} error={exc}"
+        )
+    except Exception as exc:
+        reason = "stream_error"
+        log(
+            f"tcp pull error for {config.label}: generation={reservation.generation} "
+            f"state={state.value} reason={reason} error={type(exc).__name__}: {exc}"
+        )
+    finally:
+        state = TcpPullState.CLOSING
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as exc:
+                log(
+                    f"tcp pull close error for {config.label}: "
+                    f"generation={reservation.generation} error={exc}"
+                )
+
+    connected_seconds = (
+        max(0.0, time.monotonic() - connected_at)
+        if connected_at is not None
+        else 0.0
+    )
+    log(
+        f"tcp pull state={state.value} label={config.label} "
+        f"generation={reservation.generation} reason={reason} "
+        f"connected_seconds={connected_seconds:.1f} "
+        f"chunks={stats['chunks']} bytes={stats['bytes']}"
+    )
+    return TcpPullSessionResult(
+        generation=reservation.generation,
+        reason=reason,
+        stats=stats,
+        connected_seconds=connected_seconds,
+    )
+
+
+def tcp_pull_retry_delay(
+    failure_streak: int,
+    *,
+    random_value: float | None = None,
+) -> float:
+    streak = max(1, int(failure_streak))
+    base = min(
+        TCP_PULL_BACKOFF_MAX_SECONDS,
+        TCP_PULL_BACKOFF_BASE_SECONDS * (2 ** (streak - 1)),
+    )
+    sample = random.random() if random_value is None else float(random_value)
+    sample = min(1.0, max(0.0, sample))
+    jitter = (sample * 2.0 - 1.0) * TCP_PULL_BACKOFF_JITTER_RATIO * base
+    return max(0.0, base + jitter)
+
+
 def tcp_pull_worker(
     config: AudioSourceConfig,
     token: str,
+    *,
+    max_sessions: int | None = None,
+    sleep_fn=None,
 ) -> None:
-    while True:
-        conn: socket.socket | None = None
-        detector, vad_mode = new_vad()
-        try:
-            log(
-                f"tcp pull connecting for {config.label}: source={config.source} host={config.host} port={config.port} "
-                f"sample_rate={config.sample_rate} channels={config.channels} format={config.audio_format}"
-            )
-            conn = socket.create_connection((config.host, config.port), timeout=10)
-            conn.settimeout(10)
-            stats = run_audio_stream_session(
-                config,
-                token,
-                lambda: read_exact_socket(conn, CHUNK_BYTES),
-                detector,
-                vad_mode,
-            )
-            log(
-                f"tcp pull disconnected for {config.label}: source={config.source} host={config.host} port={config.port} "
-                f"chunks={stats['chunks']} bytes={stats['bytes']}; retrying in 3s"
-            )
-            time.sleep(3)
-        except Exception as exc:
-            log(f"tcp pull error for {config.label}: {exc}; retrying in 10s")
-            time.sleep(10)
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+    sleep_fn = sleep_fn or time.sleep
+    failure_streak = 0
+    completed_sessions = 0
+
+    while max_sessions is None or completed_sessions < max_sessions:
+        reservation = reserve_tcp_pull_connection(config)
+        result = run_tcp_pull_session(
+            config,
+            token,
+            reservation,
+            sleep_fn=sleep_fn,
+        )
+        stable = (
+            result.connected_seconds >= TCP_PULL_STABLE_SESSION_SECONDS
+            and result.stats["bytes"] > 0
+        )
+        failure_streak = 0 if stable else failure_streak + 1
+        retry_delay = tcp_pull_retry_delay(max(1, failure_streak))
+        completed_sessions += 1
+
+        log(
+            f"tcp pull state={TcpPullState.RETRY_WAIT.value} label={config.label} "
+            f"generation={result.generation} reason={result.reason} "
+            f"stable={'yes' if stable else 'no'} failure_streak={failure_streak} "
+            f"retry_in={retry_delay:.2f}s"
+        )
+        # run_tcp_pull_session owns and closes the socket before returning.
+        sleep_fn(retry_delay)
 
 
 def main() -> int:
+    lock_handle = acquire_audio_daemon_lock()
+    if lock_handle is None:
+        log("another audio daemon instance already holds the lock; exiting")
+        return 1
+
     preferences = load_preferences()
     sources = load_enabled_mics(preferences)
     if not sources:
         log("no STT/background audio sources; exiting")
         return 0
+
+    if any(config.transport == "tcp_pull" for config in sources):
+        log(
+            "deployment prerequisite: development/preview environments must not "
+            "target production VoiceS3R node IPs"
+        )
 
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
     start_tv_states_refresh_thread(preferences)

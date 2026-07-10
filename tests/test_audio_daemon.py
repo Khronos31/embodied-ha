@@ -33,6 +33,8 @@ class AudioDaemonTests(unittest.TestCase):
         self.audio_daemon._WAKE_ARMED.clear()
         self.audio_daemon._TV_STATES_CACHE["expires_at"] = 0.0
         self.audio_daemon._TV_STATES_CACHE["states"] = None
+        self.audio_daemon._tcp_pull_next_connect_at = 0.0
+        self.audio_daemon._TCP_PULL_SESSION_GEN = self.audio_daemon.itertools.count(1)
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):
@@ -246,6 +248,30 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(sources[0].channels, 1)
         self.assertEqual(sources[0].audio_format, "s16le")
 
+    def test_load_enabled_mics_rejects_duplicate_tcp_endpoint(self):
+        prefs = {
+            "mics": [
+                {
+                    "source": "tcp://voice-node.local:3333",
+                    "label": "Voice node A",
+                    "room": "study",
+                    "stt_enabled": True,
+                },
+                {
+                    "source": "tcp://VOICE-NODE.local:3333",
+                    "label": "Voice node duplicate",
+                    "room": "study",
+                    "stt_enabled": True,
+                },
+            ]
+        }
+
+        with mock.patch.object(self.audio_daemon, "log") as log_mock:
+            sources = self.audio_daemon.load_enabled_mics(prefs)
+
+        self.assertEqual([source.label for source in sources], ["Voice node A"])
+        self.assertIn("duplicate tcp_pull endpoint rejected", log_mock.call_args.args[0])
+
     def test_load_enabled_mics_rejects_invalid_tcp_pull_source(self):
         prefs = {
             "mics": [
@@ -281,6 +307,179 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(self.audio_daemon.parse_tcp_port("65535"), 65535)
         self.assertIsNone(self.audio_daemon.parse_tcp_port(0))
         self.assertIsNone(self.audio_daemon.parse_tcp_port(65536))
+
+    def _tcp_config(self):
+        return self.audio_daemon.AudioSourceConfig(
+            "tcp://voice-node.local:3333",
+            "Voice node",
+            24,
+            True,
+            room="study",
+            transport="tcp_pull",
+            host="voice-node.local",
+            port=3333,
+        )
+
+    def test_tcp_connect_sleep_and_handshake_are_outside_reservation_lock(self):
+        module = self.audio_daemon
+        config = self._tcp_config()
+        events = []
+
+        class TrackingLock:
+            held = False
+
+            def __enter__(self):
+                self.held = True
+                events.append("lock_enter")
+                return self
+
+            def __exit__(self, *_args):
+                self.held = False
+                events.append("lock_exit")
+
+        lock = TrackingLock()
+        module._tcp_pull_next_connect_at = 12.0
+
+        def sleep_fn(seconds):
+            self.assertFalse(lock.held)
+            events.append(("sleep", seconds))
+
+        def connector(address, timeout):
+            self.assertFalse(lock.held)
+            events.append(("connect", address, timeout))
+            return mock.Mock()
+
+        with mock.patch.object(module, "_TCP_PULL_CONNECT_LOCK", lock), \
+             mock.patch.object(module.time, "monotonic", return_value=10.0):
+            reservation = module.reserve_tcp_pull_connection(config)
+            module.open_tcp_pull_connection(
+                config,
+                reservation,
+                sleep_fn=sleep_fn,
+                connector=connector,
+            )
+
+        self.assertEqual(events[:2], ["lock_enter", "lock_exit"])
+        self.assertEqual(events[2], ("sleep", 2.0))
+        self.assertEqual(
+            events[3],
+            (
+                "connect",
+                ("voice-node.local", 3333),
+                module.TCP_PULL_CONNECT_TIMEOUT_SECONDS,
+            ),
+        )
+
+    def test_tcp_session_generation_increments_per_reservation(self):
+        config = self._tcp_config()
+        with mock.patch.object(self.audio_daemon.time, "monotonic", return_value=10.0):
+            first = self.audio_daemon.reserve_tcp_pull_connection(config)
+            second = self.audio_daemon.reserve_tcp_pull_connection(config)
+
+        self.assertEqual(first.generation, 1)
+        self.assertEqual(second.generation, 2)
+        self.assertGreaterEqual(second.connect_at, first.connect_at + 2.0)
+
+    def test_tcp_session_closes_before_retry_sleep(self):
+        module = self.audio_daemon
+        config = self._tcp_config()
+        events = []
+
+        class FakeSocket:
+            def settimeout(self, value):
+                events.append(("settimeout", value))
+
+            def close(self):
+                events.append("close")
+
+        def connector(_address, timeout):
+            events.append(("connect_timeout", timeout))
+            return FakeSocket()
+
+        def sleep_fn(seconds):
+            events.append(("sleep", seconds))
+
+        with mock.patch.object(
+            module.socket,
+            "create_connection",
+            side_effect=connector,
+        ), mock.patch.object(
+            module,
+            "new_vad",
+            return_value=(None, "fallback"),
+        ), mock.patch.object(
+            module,
+            "run_audio_stream_session",
+            return_value={"chunks": 1, "bytes": module.CHUNK_BYTES},
+        ), mock.patch.object(
+            module.time,
+            "monotonic",
+            return_value=100.0,
+        ), mock.patch.object(
+            module.random,
+            "random",
+            return_value=0.5,
+        ):
+            module.tcp_pull_worker(
+                config,
+                "token",
+                max_sessions=1,
+                sleep_fn=sleep_fn,
+            )
+
+        self.assertIn("close", events)
+        retry_sleep_index = max(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, tuple) and event[0] == "sleep"
+        )
+        self.assertLess(events.index("close"), retry_sleep_index)
+
+    def test_tcp_session_classifies_connect_timeout(self):
+        module = self.audio_daemon
+        config = self._tcp_config()
+        reservation = module.TcpPullReservation(generation=7, connect_at=0.0)
+
+        result = module.run_tcp_pull_session(
+            config,
+            "token",
+            reservation,
+            connector=mock.Mock(side_effect=module.socket.timeout("timed out")),
+        )
+
+        self.assertEqual(result.generation, 7)
+        self.assertEqual(result.reason, "connect_timeout")
+        self.assertEqual(result.stats, {"chunks": 0, "bytes": 0})
+
+    def test_tcp_retry_delay_is_exponential_capped_and_jittered(self):
+        module = self.audio_daemon
+        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=0.5), 1.0)
+        self.assertEqual(module.tcp_pull_retry_delay(2, random_value=0.5), 2.0)
+        self.assertEqual(module.tcp_pull_retry_delay(20, random_value=0.5), 30.0)
+        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=0.0), 0.75)
+        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=1.0), 1.25)
+
+    def test_audio_daemon_flock_rejects_second_instance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "audio-daemon.lock")
+            first = self.audio_daemon.acquire_audio_daemon_lock(path)
+            self.assertIsNotNone(first)
+            try:
+                second = self.audio_daemon.acquire_audio_daemon_lock(path)
+                self.assertIsNone(second)
+            finally:
+                first.close()
+
+    def test_main_exits_when_audio_daemon_lock_is_held(self):
+        with mock.patch.object(
+            self.audio_daemon,
+            "acquire_audio_daemon_lock",
+            return_value=None,
+        ), mock.patch.object(self.audio_daemon, "load_preferences") as load_mock:
+            result = self.audio_daemon.main()
+
+        self.assertEqual(result, 1)
+        load_mock.assert_not_called()
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
