@@ -1781,6 +1781,9 @@ async function renderSettingsForm() {
     const loopMinProbEl = document.getElementById('setting-loop-min-prob');
     if (loopMinProbEl) loopMinProbEl.value = loopSchedule.min_probability ?? 0;
 
+    const httpPostEnabledEl = document.getElementById('http-post-enabled-toggle');
+    if (httpPostEnabledEl) httpPostEnabledEl.checked = !!prefsData.http_post_enabled;
+
     const policiesList = document.getElementById('policies-list');
     policiesList.innerHTML = '';
     if (prefsData.policies && Array.isArray(prefsData.policies)) {
@@ -4671,6 +4674,32 @@ async function handleToggleAutoApprove(checkbox) {
         });
     } catch (err) {
         console.warn("Failed to patch preferences for auto_approve", err);
+    }
+}
+
+async function handleToggleHttpPostEnabled(checkbox) {
+    const httpPostEnabled = checkbox.checked;
+    const oldVal = !!prefsData.http_post_enabled;
+    prefsData.http_post_enabled = httpPostEnabled;
+    
+    if (isStandaloneMode) {
+        console.log(`[Mock] Toggled http_post_enabled: ${httpPostEnabled}`);
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${base}/api/preferences`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(prefsData)
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+    } catch (err) {
+        console.warn("Failed to patch preferences for http_post_enabled", err);
+        checkbox.checked = oldVal;
+        prefsData.http_post_enabled = oldVal;
     }
 }
 

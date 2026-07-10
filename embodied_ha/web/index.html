@@ -592,6 +592,24 @@
                             </div>
                         </section>
                         <section class="settings-section card">
+                            <h3>ローカルネットワークへのHTTP送信 (http_post)</h3>
+                            <p class="section-desc">
+                                有効にすると、うちのローカルネットワーク上の機器（例: 自宅にしかない電子ピアノ演奏サーバー等）へ
+                                HTTP POSTでコマンドを送れるようになります。
+                                <strong>注意: この許可は特定の機器だけに絞れません。</strong>
+                                localhost / 127.x.x.x / 10.x.x.x / 172.16-31.x.x / 192.168.x.x / homeassistant.local
+                                の範囲であれば、どのホストへでもPOSTできてしまいます（外部インターネットへは送れません）。
+                                特定の外部デバイスと連携したい場合だけオンにしてください。
+                            </p>
+                            <div class="toggle-container">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="http-post-enabled-toggle" onchange="handleToggleHttpPostEnabled(this)">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="toggle-label">http_postを許可する</span>
+                            </div>
+                        </section>
+                        <section class="settings-section card">
                             <h3>preferences.json の直接編集</h3>
                             <p class="section-desc">アドオンの設定JSONを直接編集できます。保存前に文法チェックが行われます。</p>
                             <div class="form-group">

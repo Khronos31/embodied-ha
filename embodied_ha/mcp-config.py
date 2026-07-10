@@ -68,7 +68,14 @@ REGISTRY = {
     ]),
     "ha":        lambda: _server("ha-mcp.py"),          # 読み取り専用（ha_get）
     "hacontrol": lambda: _server("ha-control-mcp.py"),  # 家電操作（ha_call_service）
-    "http":    lambda: _server("http-mcp.py"),
+    # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
+    # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
+    # --allowedTools ではMCPツール単位の絞り込みができないため、tools/listに載せるかどうかが
+    # 唯一の制御点(http-mcp.py側のコメント参照)。うちだけの外部デバイス連携用の抜け道であり、
+    # デフォルトは無効。
+    "http":    lambda: _server("http-mcp.py", extra_env={
+        "EHA_HTTP_ALLOW_POST": "1" if prefs.get("http_post_enabled") else None,
+    }),
     "lounge": lambda: _server("lounge-mcp.py", extra_env={
         "LOUNGE_APP_ID": prefs.get("ai_lounge", {}).get("app_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
         "LOUNGE_INSTALLATION_ID": prefs.get("ai_lounge", {}).get("installation_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
