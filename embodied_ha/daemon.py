@@ -21,7 +21,8 @@ import desire_state
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
-CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")
+CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")  # 巻き戻し用に残置。増分9でCHAT_PYへ切替
+CHAT_PY = os.path.join(_SCRIPT_DIR, "chat.py")
 LOOP_SH = os.path.join(_SCRIPT_DIR, "loop.sh")
 AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")
 WEB_SERVER = os.path.join(_SCRIPT_DIR, "web", "server.py")
@@ -344,7 +345,7 @@ def run_chat(message, source="chat"):
         if active_desires:
             env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
-            proc = subprocess.run(["bash", CHAT_SH], env=env, timeout=CHAT_TIMEOUT)
+            proc = subprocess.run(["python3", CHAT_PY], env=env, timeout=CHAT_TIMEOUT)
             success = proc.returncode == 0
             print("[daemon] chat done", flush=True)
         except subprocess.TimeoutExpired:
