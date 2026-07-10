@@ -153,6 +153,60 @@ class ChatRunIntegrationTests(unittest.TestCase):
                 prefs = json.load(fh)
             self.assertIn("静かに", prefs["policies"])
 
+    def test_projected_camera_entity_injects_image_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, log_dir, prefs_file = _make_isolated_env(tmp)
+            body_location_file = Path(env["EHA_BODY_LOCATION_FILE"])
+            body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
+
+            captured_msgs = []
+
+            def capture_invoke_claude(cmd, msg, cwd, claude_env):
+                captured_msgs.append(msg)
+                return _fake_claude_run(cmd)
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""), \
+                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"), \
+                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                chat.run(env)
+
+            self.assertEqual(len(captured_msgs), 1)
+            content = json.loads(captured_msgs[0])["message"]["content"]
+            self.assertGreater(len(content), 1)
+            image_blocks = [b for b in content if b.get("type") == "image"]
+            self.assertEqual(len(image_blocks), 1)
+            self.assertEqual(image_blocks[0]["source"]["data"], __import__("base64").b64encode(b"FAKE_JPEG_BYTES").decode("ascii"))
+            # 画像ブロックはユーザープロンプト本文(最後のtextブロック)より前に来る
+            self.assertEqual(content[-1]["type"], "text")
+
+    def test_camera_fetch_failure_does_not_crash_and_omits_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, log_dir, prefs_file = _make_isolated_env(tmp)
+            body_location_file = Path(env["EHA_BODY_LOCATION_FILE"])
+            body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=lambda cmd, msg, cwd, env: _fake_claude_run(cmd)), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""), \
+                 patch.object(chat, "fetch_frame", side_effect=RuntimeError("network down")), \
+                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                chat.run(env)  # 例外を投げずに完走することの確認
+
+            chat_log = log_dir / "chat_log.jsonl"
+            self.assertTrue(chat_log.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

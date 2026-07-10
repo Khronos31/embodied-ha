@@ -257,6 +257,23 @@ class BuildClaudeCommandTests(unittest.TestCase):
             self.assertIn("mcp__audio__speak", cmd[idx + 1])
 
 
+class BuildMessageEnvelopeTests(unittest.TestCase):
+    def test_no_prefix_blocks_yields_single_text_block(self):
+        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは"))
+        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
+
+    def test_prefix_blocks_come_before_prompt_text(self):
+        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
+        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[image_block]))
+        content = envelope["message"]["content"]
+        self.assertEqual(content[0], image_block)
+        self.assertEqual(content[-1], {"type": "text", "text": "こんにちは"})
+
+    def test_empty_prefix_blocks_list_behaves_like_none(self):
+        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[]))
+        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
+
+
 class InvokeClaudeTests(unittest.TestCase):
     def test_delegates_to_run_with_expected_kwargs(self):
         captured = {}
