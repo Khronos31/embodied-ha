@@ -338,5 +338,14 @@ class ExtractResponseTextTests(unittest.TestCase):
         self.assertEqual(len(printed), 1)
 
 
+class AllowedToolsHttpPostTests(unittest.TestCase):
+    def test_http_post_is_present_in_allowed_tools(self):
+        # http_post自体の有効/無効はmcp-config.py(preferences.jsonのhttp_post_enabled)
+        # 側のMCPサーバー側ゲートで制御する。ここではClaude CLI側の--allowedToolsに
+        # 名前が載っていること(=許可リスト不足による「権限が無い」エラーにならないこと)
+        # だけを確認する。
+        self.assertIn("mcp__http__http_post", chat_invoke._COMMON_TOOLS)
+
+
 if __name__ == "__main__":
     unittest.main()
