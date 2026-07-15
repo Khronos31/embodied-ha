@@ -725,9 +725,9 @@ changes = d.get('scene_changes') if isinstance(d.get('scene_changes'), list) els
 if objects or people or changes:
     scene_state.ingest_scene_parse('loop_observe', {}, objects, people, changes, log_dir=os.environ.get('LOG_DIR'))
 " 2>/dev/null || true
-  # PARSE_OK=0 でも private フォールバックにより INTROSPECTION_EMPTY=0 になりうる
-  # （抽出完全失敗時の生テキストフォールバック）。この場合も内省ログへ記録する。
-  if [ "$INTROSPECTION_EMPTY" != "1" ]; then
+  # 抽出フォールバックは raw を private に残すが、通常の内省ログには混ぜない。
+  # parse 失敗時の raw は loop_parse_errors.jsonl にだけ保存する。
+  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
     SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" OBSERVATION_LOG="$OBSERVATION_LOG" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" python3 << 'PYEOF'
 import json, os, sys
 sys.path.insert(0, os.environ["SCRIPT_DIR"])
@@ -760,9 +760,9 @@ with open(os.environ["OBSERVATION_LOG"], "a", encoding="utf-8") as f:
 PYEOF
   fi
 else
-  # PARSE_OK=0 でも private フォールバックにより INTROSPECTION_EMPTY=0 になりうる
-  # （抽出完全失敗時の生テキストフォールバック）。この場合も内省ログへ記録する。
-  if [ "$INTROSPECTION_EMPTY" != "1" ]; then
+  # 抽出フォールバックは raw を private に残すが、通常の内省ログには混ぜない。
+  # parse 失敗時の raw は loop_parse_errors.jsonl にだけ保存する。
+  if [ "$PARSE_OK" = "1" ] && [ "$INTROSPECTION_EMPTY" != "1" ]; then
     SCRIPT_DIR="$SCRIPT_DIR" PARSED_FILE="$PARSED_FILE" FACTS_FILE="$FACTS_FILE" TIMESTAMP="$TIMESTAMP" MODE="$MODE" EXPLORE_LOG="$EXPLORE_LOG" PROJECTED_CAMERA_SOURCE="$PROJECTED_CAMERA_SOURCE" python3 << 'PYEOF'
 import json, os, sys
 sys.path.insert(0, os.environ["SCRIPT_DIR"])
