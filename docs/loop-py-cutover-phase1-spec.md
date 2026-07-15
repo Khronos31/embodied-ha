@@ -254,3 +254,9 @@ Phase1完了後のred-teamで挙がった必須3件(shadow parityの実配線比
   ロールバック用に保持、という状態へ更新。
 
 `embodied_ha/loop.sh`および`embodied_ha/loop.py`本体はこの切替では変更していない。
+
+### 本番稼働確認(2026-07-16)
+
+`v1.27.0`デプロイ後、ユーザーが本番環境で手動ループ実行を行い、正常動作を確認した
+(daemon.py cutover red-teamで指摘された「loop.pyの本番/実運用実行履歴がゼロ、
+テスト環境でのsubprocess実行のみ」というリスクへの実地での解消)。
