@@ -8,10 +8,19 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+BASE_MODE_WEIGHTS = {
+    "observe": 30,
+    "explore": 35,
+    "reflect": 20,
+    "web": 15,
+    "social": 10,
+}
 
 import introspection_facts  # noqa: E402
 from response_parse import loop_extract  # noqa: E402
@@ -20,6 +29,69 @@ from response_parse import loop_extract  # noqa: E402
 def parse_loop_response(text: str) -> dict[str, Any]:
     """loop.sh の抽出 heredoc と同じく、失敗時は raw を private fallback に残す。"""
     return loop_extract(text)
+
+
+def _json_dict(raw: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _num(mapping: dict[str, Any], key: str, default: float = 0.5) -> float:
+    try:
+        return float(mapping.get(key, default))
+    except Exception:
+        return default
+
+
+def compute_mode_weights(
+    body_state: dict[str, Any],
+    *,
+    anomaly_urgency: float = 0.0,
+    github_app_exists: bool = False,
+) -> dict[str, int]:
+    """loop.sh のモード抽選重みをPythonへ移植する。
+
+    `ANOMALY_URGENCY` は body_state ではなく独立した入力として扱う。
+    """
+    curiosity = _num(body_state, "curiosity")
+    social_openness = _num(body_state, "social_openness")
+    energy = _num(body_state, "energy")
+    stress = _num(body_state, "stress")
+
+    weights = dict(BASE_MODE_WEIGHTS)
+    weights["observe"] += int((curiosity - 0.5) * 24 + (energy - 0.5) * 10 - stress * 10)
+    weights["explore"] += int((curiosity - 0.5) * 34 + (energy - 0.5) * 15 - stress * 12)
+    weights["reflect"] += int(stress * 22 + max(0.0, 0.5 - energy) * 26)
+    weights["web"] += int(max(0.0, curiosity - 0.45) * 10)
+    weights["social"] += int((social_openness - 0.5) * 20)
+    if anomaly_urgency > 0:
+        weights["observe"] += int(anomaly_urgency * 0.8)
+        weights["explore"] += int(anomaly_urgency * 1.2)
+    for key in list(weights):
+        weights[key] = max(5, weights[key])
+    if not github_app_exists:
+        weights["social"] = 0
+    return weights
+
+
+def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices) -> str:
+    """MODE env があれば尊重し、無ければ身体状態から自律ループのモードを抽選する。"""
+    env = dict(environ if environ is not None else os.environ)
+    if env.get("MODE"):
+        return str(env["MODE"])
+    body_state = _json_dict(env.get("EHA_BODY_STATE"))
+    anomaly_urgency = _num({"ANOMALY_URGENCY": env.get("ANOMALY_URGENCY")}, "ANOMALY_URGENCY", 0.0)
+    github_app_path = env.get("EHA_GITHUB_APP_PEM") or "/config/embodied-ha/github_app.pem"
+    weights = compute_mode_weights(
+        body_state,
+        anomaly_urgency=anomaly_urgency,
+        github_app_exists=os.path.exists(github_app_path),
+    )
+    modes = list(weights.keys())
+    return choices(modes, weights=[weights[key] for key in modes], k=1)[0]
 
 
 def loop_introspection_state(parsed: dict[str, Any]) -> dict[str, str]:

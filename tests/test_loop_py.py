@@ -11,6 +11,45 @@ sys.path.insert(0, str(ROOT / "embodied_ha"))
 import loop  # noqa: E402
 
 
+class LoopPyModeSelectionTests(unittest.TestCase):
+    def test_choose_mode_respects_explicit_mode(self):
+        self.assertEqual(loop.choose_mode({"MODE": "reflect"}), "reflect")
+
+    def test_compute_mode_weights_applies_anomaly_urgency(self):
+        normal = loop.compute_mode_weights({}, anomaly_urgency=0, github_app_exists=True)
+        urgent = loop.compute_mode_weights({}, anomaly_urgency=10, github_app_exists=True)
+
+        self.assertGreater(urgent["observe"], normal["observe"])
+        self.assertGreater(urgent["explore"], normal["explore"])
+        self.assertEqual(urgent["reflect"], normal["reflect"])
+
+    def test_choose_mode_uses_env_anomaly_urgency_and_disables_social_without_github_app(self):
+        captured = {}
+
+        def fake_choices(modes, weights, k):
+            captured["modes"] = modes
+            captured["weights"] = weights
+            captured["k"] = k
+            return ["explore"]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mode = loop.choose_mode(
+                {
+                    "EHA_BODY_STATE": json.dumps({"curiosity": 0.5, "energy": 0.5, "stress": 0.0}),
+                    "ANOMALY_URGENCY": "10",
+                    "EHA_GITHUB_APP_PEM": str(Path(tmpdir) / "missing.pem"),
+                },
+                choices=fake_choices,
+            )
+
+        self.assertEqual(mode, "explore")
+        weights = dict(zip(captured["modes"], captured["weights"]))
+        self.assertEqual(captured["k"], 1)
+        self.assertEqual(weights["social"], 0)
+        self.assertEqual(weights["observe"], 38)
+        self.assertEqual(weights["explore"], 47)
+
+
 class LoopPyPersistenceTests(unittest.TestCase):
     def read_jsonl(self, path: Path) -> list[dict]:
         if not path.exists():
