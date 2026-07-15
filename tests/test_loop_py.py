@@ -271,5 +271,125 @@ class LoopPyPersistenceTests(unittest.TestCase):
             self.assertEqual(errors[0]["reason"], "empty_introspection")
 
 
+class LoopPyStandaloneRunTests(unittest.TestCase):
+    class Result:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def read_jsonl(self, path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def fake_run_factory(self, calls):
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if cmd[:2] == ["loops", "list"]:
+                return self.Result("なし\n")
+            if cmd[:2] == ["loops", "list-json"]:
+                return self.Result("[]\n")
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("render-sensors.py"):
+                return self.Result("# sensors\n異常なし\n")
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("body-context.py"):
+                return self.Result("# 身体位置\nリビング\n")
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("boundary.py"):
+                return self.Result('{"allowed": false}\n')
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("feature-flags.py"):
+                return self.Result("\n")
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("mcp-config.py"):
+                Path(cmd[2]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[2]).write_text("{}", encoding="utf-8")
+                return self.Result()
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("speak.py"):
+                return self.Result()
+            if len(cmd) >= 2 and cmd[0] == "python3" and cmd[1].endswith("daybook_rollup.py"):
+                return self.Result()
+            if cmd and cmd[0] == "curl":
+                return self.Result()
+            if cmd and cmd[0] == "/bin/claude":
+                payload = {
+                    "type": "result",
+                    "structured_output": {
+                        "topic": "fixture",
+                        "private": "静かに確認している",
+                        "emotion": "calm",
+                        "speak": "あとで見ます",
+                        "proposal": None,
+                        "feature_presented": None,
+                    },
+                }
+                return self.Result(json.dumps(payload, ensure_ascii=False) + "\n")
+            return self.Result()
+        return fake_run
+
+    def make_env(self, tmp: Path, mode: str) -> dict[str, str]:
+        prefs = tmp / "preferences.json"
+        prefs.write_text(json.dumps({"speakers": [{"room": "living"}], "cameras": []}), encoding="utf-8")
+        character = tmp / "character.md"
+        character.write_text("# character\n", encoding="utf-8")
+        body_location = tmp / "body_location.json"
+        body_location.write_text(json.dumps({"current_entity": ""}), encoding="utf-8")
+        workdir = tmp / "workdir"
+        workdir.mkdir()
+        return {
+            "MODE": mode,
+            "CLAUDE_BIN": "/bin/claude",
+            "EHA_LOG_DIR": str(tmp / "log"),
+            "EHA_TMP_DIR": str(tmp / "tmp"),
+            "EHA_PREFS_FILE": str(prefs),
+            "EHA_CHARACTER_FILE": str(character),
+            "EHA_BODY_LOCATION_FILE": str(body_location),
+            "EHA_DATA_DIR": str(tmp),
+            "EHA_CLAUDE_CWD": str(workdir),
+            "EHA_TEST_TIMESTAMP": "2026-07-15T12:00:00+09:00",
+            "EHA_TEST_HOUR": "12",
+        }
+
+    def test_run_all_modes_with_mocked_external_commands(self):
+        for mode in ["observe", "explore", "reflect", "web", "social"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                calls = []
+                result = loop.run(self.make_env(tmp, mode), run_subprocess=self.fake_run_factory(calls))
+
+                self.assertEqual(result["mode"], mode)
+                self.assertTrue(result["parsed"].get("_parse_ok"))
+                claude_calls = [call for call in calls if call[0] and call[0][0] == "/bin/claude"]
+                self.assertTrue(claude_calls)
+                claude_cmd, claude_kwargs = claude_calls[-1]
+                self.assertIn("--allowedTools", claude_cmd)
+                self.assertIn(result["context"]["allowed_tools"], claude_cmd)
+                self.assertIn("--append-system-prompt", claude_cmd)
+                self.assertIn(result["context"]["sys_prompt"], claude_cmd)
+                envelope = json.loads(claude_kwargs["input"])
+                self.assertEqual(envelope["message"]["content"][-1]["text"], result["context"]["user_prompt"])
+                mcp_calls = [call for call in calls if len(call[0]) >= 2 and call[0][0] == "python3" and call[0][1].endswith("mcp-config.py")]
+                self.assertTrue(mcp_calls)
+                self.assertEqual(tuple(mcp_calls[-1][0][3:]), tuple(result["context"]["mcp_servers"]))
+                rows = self.read_jsonl(tmp / "log" / ("observations.jsonl" if mode == "observe" else "explore.jsonl"))
+                self.assertEqual(rows[0]["private"], "静かに確認している")
+                chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
+                self.assertEqual(chat_rows[-1]["source"], mode)
+
+    def test_mode_config_matches_loop_sh_mcp_and_allowed_tools(self):
+        text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
+        for mode in ["observe", "explore", "reflect", "web", "social"]:
+            with self.subTest(mode=mode):
+                start = text.index(f"  {mode})")
+                end = text.index("    ;;", start)
+                block = text[start:end]
+                cfg = loop.mode_config(mode)
+                def shell_literal(value):
+                    return str(value).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+
+                self.assertIn(f'MODE_LABEL="{shell_literal(cfg.label)}"', block)
+                self.assertIn(f'TOOLS_DESC="{shell_literal(cfg.tools_desc)}"', block)
+                self.assertIn(f'TASK="{shell_literal(cfg.task)}"', block)
+                self.assertIn(f'ALLOWED_TOOLS="{cfg.allowed_tools}"', block)
+                self.assertIn(f'MCP_SERVERS="{" ".join(cfg.mcp_servers)}"', block)
+
+
 if __name__ == "__main__":
     unittest.main()

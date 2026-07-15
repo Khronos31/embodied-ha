@@ -20,12 +20,20 @@ class LoopMigrationSafetyTests(unittest.TestCase):
         self.assertIn('LOOP_SH = os.path.join(_SCRIPT_DIR, "loop.sh")', daemon)
         self.assertIn('subprocess.run(["bash", LOOP_SH]', daemon)
 
-    def test_loop_py_main_remains_guarded(self):
-        with self.assertRaises(SystemExit) as caught:
-            loop.main()
+    def test_loop_py_main_accepts_forced_mode_without_daemon_wiring(self):
+        calls = []
+        original_run = loop.run
+        try:
+            def fake_run(env):
+                calls.append(env)
+                return {"mode": env.get("MODE")}
 
-        self.assertIn("migration is not wired yet", str(caught.exception))
-        self.assertIn("daemon.py still runs loop.sh", str(caught.exception))
+            loop.run = fake_run
+            loop.main(["--mode", "reflect"])
+        finally:
+            loop.run = original_run
+
+        self.assertEqual(calls[0]["MODE"], "reflect")
 
     def test_runtime_contract_doc_covers_shadow_files_and_cutover_blocker(self):
         doc = (ROOT / "docs" / "loop-runtime-contracts.md").read_text(encoding="utf-8")
@@ -35,6 +43,13 @@ class LoopMigrationSafetyTests(unittest.TestCase):
         self.assertIn("EHA_SESSION_BIN", doc)
         self.assertIn("invoke-agent.sh", doc)
         self.assertIn("not cutover-ready", doc)
+
+    def test_loop_py_blocks_agy_until_invoke_agent_cutover(self):
+        with self.assertRaises(SystemExit) as caught:
+            loop.run({"EHA_SESSION_BIN": "/data/bin/agy"})
+
+        self.assertIn("EHA_SESSION_BIN=agy", str(caught.exception))
+        self.assertIn("invoke-agent.sh", str(caught.exception))
 
     def test_side_effect_snapshot_normalizes_runtime_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
