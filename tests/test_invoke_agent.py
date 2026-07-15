@@ -146,7 +146,7 @@ class InvokeAgentTests(unittest.TestCase):
             payload = json.loads(record.read_text(encoding="utf-8"))
             args = payload["args"]
             self.assertEqual(args[:2], ["exec", "--skip-git-repo-check"])
-            self.assertEqual(args[args.index("--model") + 1], "gpt-5.4-mini")
+            self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-luna")
             self.assertEqual(args[args.index("--config") + 1], "model_reasoning_effort=low")
             self.assertEqual(payload["schema"], schema)
             self.assertEqual(payload["prompt"], "SYS\n\nhello")

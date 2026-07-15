@@ -143,11 +143,11 @@ case "$harness:$logical_model" in
     effort="${EHA_CLAUDE_EFFORT_LITE:-low}"
     ;;
   codex:default)
-    model="${EHA_CODEX_MODEL_DEFAULT:-gpt-5.4}"
+    model="${EHA_CODEX_MODEL_DEFAULT:-gpt-5.6-terra}"
     effort="${EHA_CODEX_REASONING_EFFORT_DEFAULT:-medium}"
     ;;
   codex:lite)
-    model="${EHA_CODEX_MODEL_LITE:-gpt-5.4-mini}"
+    model="${EHA_CODEX_MODEL_LITE:-gpt-5.6-luna}"
     effort="${EHA_CODEX_REASONING_EFFORT_LITE:-low}"
     ;;
   agy:default)
