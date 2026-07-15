@@ -21,11 +21,11 @@ import loop  # noqa: E402
 
 
 class LoopMigrationSafetyTests(unittest.TestCase):
-    def test_daemon_still_invokes_loop_sh(self):
+    def test_daemon_now_invokes_loop_py(self):
         daemon = (ROOT / "embodied_ha" / "daemon.py").read_text(encoding="utf-8")
 
-        self.assertIn('LOOP_SH = os.path.join(_SCRIPT_DIR, "loop.sh")', daemon)
-        self.assertIn('subprocess.run(["bash", LOOP_SH]', daemon)
+        self.assertIn('LOOP_PY = os.path.join(_SCRIPT_DIR, "loop.py")', daemon)
+        self.assertIn('subprocess.run(["python3", LOOP_PY]', daemon)
 
     def test_loop_py_main_accepts_forced_mode_without_daemon_wiring(self):
         calls = []

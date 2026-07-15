@@ -238,3 +238,19 @@ red-team(`/config/.tools/claude-home/red-team/20260716-loop-py-phase1.md`)では
    (`web/server.py`の`set_agent_status()`)で、ユーザーがリアルタイム性を重視するのは
    `chat.py`側の投稿でありloop側の投稿タイミング精度は優先度が低い。既存テストの
    AC(受け入れ条件2、fresh anomaly urgencyの反映)は満たしたままで良い。
+
+## 実切替完了記録(2026-07-16)
+
+Phase1完了後のred-teamで挙がった必須3件(shadow parityの実配線比較拡張、
+`EHA_SESSION_BIN`監査、本番相当環境でのsmoke test)が完了したため、`daemon.py`の
+実行系を`loop.sh`から`loop.py`へ切り替えた。
+
+- `embodied_ha/daemon.py`: `LOOP_SH`定数を`LOOP_PY`へ置き換え、`run_loop()`の起動コマンドを
+  `bash loop.sh`から`python3 loop.py`へ変更。
+- `tests/test_loop_shadow_harness.py`: cutover前ガードだった
+  `test_daemon_still_invokes_loop_sh`を、`daemon.py`が`loop.py`を呼ぶことを確認する
+  `test_daemon_now_invokes_loop_py`へ反転。
+- `docs/loop-runtime-contracts.md`: Cutover Blockers節を、cutover完了済み・`loop.sh`は
+  ロールバック用に保持、という状態へ更新。
+
+`embodied_ha/loop.sh`および`embodied_ha/loop.py`本体はこの切替では変更していない。

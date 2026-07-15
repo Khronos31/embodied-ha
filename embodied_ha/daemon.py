@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Embodied HA デーモン
-自律ループ(loop.sh)と会話(chat.sh)をHAエンティティ経由でトリガーする常駐プロセス。
+自律ループ(loop.py)と会話(chat.sh)をHAエンティティ経由でトリガーする常駐プロセス。
 起動はアドオン(addon/run.sh)から exec で呼ばれる。直接起動する場合:
 
 トリガー方法（MQTT。config.yaml の services: mqtt:need で MQTT は必須）:
   - embodied_ha/chat/set        … 会話(chat.sh)を起動。ペイロードがユーザーの発言
-  - embodied_ha/loop/trigger … 自律ループ(loop.sh)を手動起動
+  - embodied_ha/loop/trigger … 自律ループ(loop.py)を手動起動
 """
 import os
 import subprocess
@@ -23,11 +23,11 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
 CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")  # 巻き戻し用に残置。増分9でCHAT_PYへ切替
 CHAT_PY = os.path.join(_SCRIPT_DIR, "chat.py")
-LOOP_SH = os.path.join(_SCRIPT_DIR, "loop.sh")
+LOOP_PY = os.path.join(_SCRIPT_DIR, "loop.py")
 AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")
 WEB_SERVER = os.path.join(_SCRIPT_DIR, "web", "server.py")
 HA_URL = os.environ["HA_URL"]
-LOOP_INTERVAL = 1800   # 自律ループ(loop.sh)の定期実行間隔（秒）= 30分
+LOOP_INTERVAL = 1800   # 自律ループ(loop.py)の定期実行間隔（秒）= 30分
 SENSOR_COOLDOWN = 300     # センサートリガーのクールダウン（秒）= 5分
 DESIRES_FILE = os.environ.get("EHA_DESIRES_FILE", os.path.join(_SCRIPT_DIR, "desires.json"))
 DESIRE_STATE_FILE = os.path.join(_LOG_DIR, "desire_state.json")
@@ -293,7 +293,7 @@ def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snap
         if active_desires:
             env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
-            proc = subprocess.run(["bash", LOOP_SH], env=env, timeout=LOOP_TIMEOUT)
+            proc = subprocess.run(["python3", LOOP_PY], env=env, timeout=LOOP_TIMEOUT)
             success = proc.returncode == 0
             print(f"[daemon] loop done: {trigger_reason}", flush=True)
         except subprocess.TimeoutExpired:

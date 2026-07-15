@@ -1,30 +1,34 @@
 # loop.py Migration Runtime Contracts
 
-`loop.py` migration keeps `loop.sh` as the production path until a separate
-cutover conductor/red-team pass approves switching `daemon.py`.
+`loop.py` migration switched the production daemon path from `loop.sh` to
+`loop.py` on 2026-07-16 after the separate cutover red-team pass and follow-up
+verification were completed. `loop.sh` remains in the repository for rollback.
 
 This document tracks runtime files whose shape must remain compatible while the
 Python port is shadow-tested against the shell loop.
 
 ## Cutover Blockers
 
-- `daemon.py` must keep invoking `loop.sh` during this migration.
-- `loop.py` must remain explicitly not cutover-ready until all five modes pass
-  end-to-end shadow parity tests.
-- `EHA_SESSION_BIN=agy` is not reimplemented in `loop.py`. Before any future
-  daemon cutover, operator/runtime use of `EHA_SESSION_BIN` must be audited or
-  an `invoke-agent.sh` abstraction must be wired and tested.
+- Cutover completed on 2026-07-16: `daemon.py` now invokes `loop.py` with
+  `python3`.
+- `loop.sh` is intentionally retained and must not be deleted yet; it is the
+  rollback path if the cutover has to be reverted.
+- Historical blockers are closed. `loop.py` was previously marked
+  not cutover-ready until all five modes passed end-to-end shadow parity tests.
+- `EHA_SESSION_BIN=agy` is not reimplemented in `loop.py`. The daemon cutover
+  required operator/runtime use of `EHA_SESSION_BIN` to be audited or an
+  `invoke-agent.sh` abstraction to be wired and tested.
   Phase1 audit on 2026-07-16 found no `EHA_SESSION_BIN` assignment in the main
   loop startup path: `embodied_ha/run.sh` sets `EHA_AUDIO_SESSION_BIN` and
   `EHA_ANTIGRAVITY_BIN` for audio/Antigravity support but not `EHA_SESSION_BIN`,
   `embodied_ha/config.yaml` has no `EHA_SESSION_BIN`, production
   `/config/embodied-ha/preferences.json` has no `EHA_SESSION_BIN`/`session_bin`
   entry, and the current Studio Code Server environment has no
-  `EHA_SESSION_BIN`. Because `daemon.py` inherits its process environment,
-  re-check the running add-on/container environment immediately before any
-  future daemon cutover; an externally injected `EHA_SESSION_BIN=agy` would
-  still hit the explicit `loop.py` cutover guard.
-- Before cutover, re-verify that `agy --project <uuid>` / `agy --new-project`
+  `EHA_SESSION_BIN`. Because `daemon.py` inherits its process environment, the
+  running add-on/container environment was re-checked before cutover; an
+  externally injected `EHA_SESSION_BIN=agy` would still hit the explicit
+  `loop.py` cutover guard.
+- After cutover, keep re-verifying that `agy --project <uuid>` / `agy --new-project`
   still behave as documented in the `invoke-agent.sh` MCP allow-list design
   (workspace-local `.agents/mcp_config.json` resolution, `--project`
   idempotency), and that Antigravity's `includeTools` actually restricts tool
