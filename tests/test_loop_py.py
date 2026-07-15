@@ -50,6 +50,70 @@ class LoopPyModeSelectionTests(unittest.TestCase):
         self.assertEqual(weights["explore"], 47)
 
 
+class LoopPyInvocationTests(unittest.TestCase):
+    def test_build_loop_claude_command_uses_schema_and_mcp_config(self):
+        cmd = loop.build_loop_claude_command(
+            claude_bin="/bin/claude",
+            model="sonnet",
+            mode="reflect",
+            allowed_tools="mcp__memory__recall",
+            system_prompt="system",
+            mcp_config="/tmp/mcp.json",
+        )
+
+        self.assertEqual(cmd[:4], ["/bin/claude", "-p", "--model", "sonnet"])
+        self.assertIn("--json-schema", cmd)
+        self.assertIn("--mcp-config", cmd)
+        self.assertIn("/tmp/mcp.json", cmd)
+        self.assertIn("mcp__memory__recall", cmd)
+
+    def test_invoke_loop_claude_is_claude_only_and_returns_structured_output(self):
+        calls = []
+
+        class Result:
+            def __init__(self, stdout=""):
+                self.stdout = stdout
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if cmd[0] == "python3":
+                Path(cmd[2]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[2]).write_text("{}", encoding="utf-8")
+                return Result()
+            payload = {
+                "type": "result",
+                "structured_output": {"private": "静かに考えた", "emotion": "calm", "speak": None},
+            }
+            return Result(json.dumps(payload, ensure_ascii=False))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            response = loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="reflect",
+                allowed_tools="mcp__memory__recall",
+                mcp_servers=["memory"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "CLAUDE_BIN": "/bin/claude",
+                    "EHA_SESSION_BIN": "agy",
+                    "EHA_DATA_DIR": tmpdir,
+                },
+                run=fake_run,
+            )
+
+        self.assertEqual(json.loads(response)["private"], "静かに考えた")
+        claude_calls = [call for call in calls if call[0][0] == "/bin/claude"]
+        self.assertEqual(len(claude_calls), 1)
+        claude_cmd, claude_kwargs = claude_calls[0]
+        self.assertNotIn("agy", claude_cmd)
+        self.assertIn("--mcp-config", claude_cmd)
+        self.assertEqual(claude_kwargs["cwd"], str(Path(tmpdir) / "workdir"))
+        envelope = json.loads(claude_kwargs["input"])
+        self.assertEqual(envelope["type"], "user")
+        self.assertEqual(envelope["message"]["content"][0]["text"], "user")
+
+
 class LoopPyPersistenceTests(unittest.TestCase):
     def read_jsonl(self, path: Path) -> list[dict]:
         if not path.exists():

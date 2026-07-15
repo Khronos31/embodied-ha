@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,9 @@ BASE_MODE_WEIGHTS = {
 }
 
 import introspection_facts  # noqa: E402
-from response_parse import loop_extract  # noqa: E402
+from introspection_facts import extract_facts_from_stream_text, write_facts_file  # noqa: E402
+from json_schemas import loop_schema  # noqa: E402
+from response_parse import loop_extract, stream_result_payload  # noqa: E402
 
 
 def parse_loop_response(text: str) -> dict[str, Any]:
@@ -92,6 +95,113 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
     )
     modes = list(weights.keys())
     return choices(modes, weights=[weights[key] for key in modes], k=1)[0]
+
+
+def build_loop_claude_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """loop.sh の Claude 環境構築をPythonへ移す。"""
+    env = dict(environ if environ is not None else os.environ)
+    return {
+        **env,
+        "EHA_ACTOR": "loop",
+        "CLAUDE_CONFIG_DIR": env.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
+        "PATH": env.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin")
+        + ":" + env.get("PATH", "/usr/bin:/bin"),
+    }
+
+
+def build_mcp_config(
+    *,
+    script_dir: str,
+    mcp_servers: list[str],
+    env: dict[str, str],
+    tmp_dir: str = "/tmp/embodied-ha",
+    run=subprocess.run,
+) -> str | None:
+    """mcp-config.py を呼び、生成できた場合だけconfig pathを返す。"""
+    if not mcp_servers or not script_dir:
+        return None
+    path = os.path.join(tmp_dir, "mcp.json")
+    os.makedirs(tmp_dir, exist_ok=True)
+    gen = os.path.join(script_dir, "mcp-config.py")
+    run(["python3", gen, path, *mcp_servers], env=env, check=False)
+    return path if os.path.exists(path) else None
+
+
+def build_message_envelope(user_prompt: str, content_blocks: list[dict[str, Any]] | None = None) -> str:
+    blocks = content_blocks if content_blocks is not None else [{"type": "text", "text": user_prompt}]
+    return json.dumps({"type": "user", "message": {"role": "user", "content": blocks}})
+
+
+def build_loop_claude_command(
+    *,
+    claude_bin: str,
+    model: str,
+    mode: str,
+    allowed_tools: str,
+    system_prompt: str,
+    mcp_config: str | None = None,
+) -> list[str]:
+    """loop.pyではClaude Code専用コマンドだけを組み立てる。agy分岐はinvoke-agent層へ委ねる。"""
+    cmd = [
+        claude_bin,
+        "-p",
+        "--model",
+        model,
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--allowedTools",
+        allowed_tools,
+        "--append-system-prompt",
+        system_prompt,
+        "--json-schema",
+        json.dumps(loop_schema(mode), ensure_ascii=False),
+    ]
+    if mcp_config:
+        cmd += ["--mcp-config", mcp_config]
+    return cmd
+
+
+def invoke_loop_claude(
+    *,
+    user_prompt: str,
+    system_prompt: str,
+    mode: str,
+    allowed_tools: str,
+    mcp_servers: list[str],
+    environ: dict[str, str] | None = None,
+    content_blocks: list[dict[str, Any]] | None = None,
+    facts_file: str | None = None,
+    run=subprocess.run,
+) -> str:
+    """Claude Codeをstream-jsonで呼び、最後のresult payloadを返す。"""
+    env = build_loop_claude_env(environ)
+    script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
+    claude_bin = env.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
+    model = env.get("EHA_SESSION_MODEL") or "sonnet"
+    mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
+    cmd = build_loop_claude_command(
+        claude_bin=claude_bin,
+        model=model,
+        mode=mode,
+        allowed_tools=allowed_tools,
+        system_prompt=system_prompt,
+        mcp_config=mcp_config,
+    )
+    cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+    result = run(
+        cmd,
+        input=build_message_envelope(user_prompt, content_blocks),
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=env,
+    )
+    if facts_file:
+        write_facts_file(facts_file, extract_facts_from_stream_text(result.stdout))
+    return stream_result_payload(result.stdout)
 
 
 def loop_introspection_state(parsed: dict[str, Any]) -> dict[str, str]:
