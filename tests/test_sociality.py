@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +50,19 @@ class SocialityTests(unittest.TestCase):
         self.assertEqual(payload["interaction_count"], 1)
         self.assertTrue(payload["last_seen"])
 
+    def test_update_relationship_logs_invalid_args_preview(self):
+        with mock.patch.object(self.sociality, "log") as log_mock:
+            result, is_error = self.sociality.update_relationship({"person": "alice", "text": "古い引数名"})
+
+        self.assertTrue(is_error)
+        self.assertEqual(result[0]["text"], "note が空です")
+        log_line = log_mock.call_args.args[0]
+        self.assertIn("update_relationship invalid args", log_line)
+        self.assertIn("missing_note", log_line)
+        self.assertIn("person", log_line)
+        self.assertIn("text", log_line)
+        self.assertIn("古い引数名", log_line)
+
     def test_get_narrative_returns_empty_string_when_missing(self):
         self.assertEqual(self._text(self.sociality.get_narrative({})), "")
 
@@ -65,6 +79,18 @@ class SocialityTests(unittest.TestCase):
         self.assertEqual(payload["last_event_ts"], "")
         self.assertEqual(payload["last_interaction_ts"], "")
         self.assertIsNone(payload["elapsed_since_last_interaction_seconds"])
+
+    def test_update_social_state_logs_invalid_args_preview(self):
+        with mock.patch.object(self.sociality, "log") as log_mock:
+            result, is_error = self.sociality.update_social_state({"text": "古い引数名"})
+
+        self.assertTrue(is_error)
+        self.assertEqual(result[0]["text"], "event が空です")
+        log_line = log_mock.call_args.args[0]
+        self.assertIn("update_social_state invalid args", log_line)
+        self.assertIn("missing_event", log_line)
+        self.assertIn("text", log_line)
+        self.assertIn("古い引数名", log_line)
 
     def test_set_shared_focus_is_read_back_by_get_shared_focus(self):
         self.sociality.set_shared_focus({

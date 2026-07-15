@@ -51,6 +51,25 @@ def _clean(text_value: Any) -> str:
     return " ".join(str(text_value or "").split()).strip()
 
 
+def _args_preview(args: dict[str, Any], *, max_value_len: int = 80) -> dict[str, Any]:
+    preview: dict[str, Any] = {}
+    for key in sorted(args):
+        value = args.get(key)
+        if isinstance(value, (dict, list)):
+            value_text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        else:
+            value_text = str(value)
+        if len(value_text) > max_value_len:
+            value_text = value_text[:max_value_len] + "..."
+        preview[key] = value_text
+    return preview
+
+
+def _log_invalid_args(tool_name: str, args: dict[str, Any], reason: str) -> None:
+    keys = sorted(str(key) for key in args)
+    log(f"[sociality-mcp] {tool_name} invalid args: reason={reason} keys={keys} preview={_args_preview(args)}")
+
+
 def _load_json(path: str, default: Any) -> Any:
     try:
         with open(path, encoding="utf-8") as f:
@@ -233,8 +252,10 @@ def update_relationship(args: dict[str, Any]):
     person = _clean(args.get("person"))
     note = _clean(args.get("note"))
     if not person:
+        _log_invalid_args("update_relationship", args, "missing_person")
         return [text("person が空です")], True
     if not note:
+        _log_invalid_args("update_relationship", args, "missing_note")
         return [text("note が空です")], True
 
     data = _load_relationships()
@@ -277,6 +298,7 @@ def get_social_state(args: dict[str, Any]):
 def update_social_state(args: dict[str, Any]):
     event = _clean(args.get("event"))
     if not event:
+        _log_invalid_args("update_social_state", args, "missing_event")
         return [text("event が空です")], True
 
     state = _load_social_state()
