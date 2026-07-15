@@ -11,7 +11,15 @@ Options:
   --sound-file PATH          Force Antigravity audio fallback and inject PATH into the prompt
   --append-system-prompt TXT System prompt text
   --allowed-tools TOOLS      Claude Code allowed tools list
+  --allowed-builtins CSV     Built-in tool allow-list for Claude Code only
+  --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; Claude receives this via
+                             --allowedTools but MCP per-tool filtering is not a
+                             safety boundary for Claude Code
   --mcp-config PATH          Claude Code MCP config path
+  --mcp-servers "NAMES"      Space-separated MCP server names; for hacontrol and
+                             other single-tool servers, this server-list is the
+                             safety boundary, not --allowed-mcp-tools
+  --agent-site SITE          Antigravity site: observe/explore/reflect/web/social/chat/game
   --content-json JSON        Claude Code stream-json content blocks
   -h, --help                 Show this help
 
@@ -24,8 +32,29 @@ die() {
   exit 2
 }
 
+TEMP_FILES=()
+cleanup_temp_files() {
+  local path
+  for path in "${TEMP_FILES[@]}"; do
+    [[ -n "$path" ]] && rm -f "$path"
+  done
+}
+trap cleanup_temp_files EXIT
+
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+append_csv() {
+  local base="$1"
+  local extra="$2"
+  if [[ -z "$extra" ]]; then
+    printf '%s' "$base"
+  elif [[ -z "$base" ]]; then
+    printf '%s' "$extra"
+  else
+    printf '%s,%s' "$base" "$extra"
+  fi
 }
 
 json_schema=""
@@ -33,7 +62,11 @@ logical_model="default"
 sound_file=""
 system_prompt=""
 allowed_tools=""
+allowed_builtins=""
+allowed_mcp_tools=""
 mcp_config=""
+mcp_servers=""
+agent_site=""
 content_json=""
 prompt_parts=()
 
@@ -64,9 +97,29 @@ while (($#)); do
       allowed_tools="$2"
       shift 2
       ;;
+    --allowed-builtins)
+      (($# >= 2)) || die "--allowed-builtins requires a value"
+      allowed_builtins="$2"
+      shift 2
+      ;;
+    --allowed-mcp-tools)
+      (($# >= 2)) || die "--allowed-mcp-tools requires a value"
+      allowed_mcp_tools="$2"
+      shift 2
+      ;;
     --mcp-config)
       (($# >= 2)) || die "--mcp-config requires a value"
       mcp_config="$2"
+      shift 2
+      ;;
+    --mcp-servers)
+      (($# >= 2)) || die "--mcp-servers requires a value"
+      mcp_servers="$2"
+      shift 2
+      ;;
+    --agent-site)
+      (($# >= 2)) || die "--agent-site requires a value"
+      agent_site="$2"
       shift 2
       ;;
     --content-json)
@@ -92,6 +145,13 @@ while (($#)); do
       ;;
   esac
 done
+
+if [[ -n "$mcp_config" && -n "$mcp_servers" ]]; then
+  die "--mcp-config and --mcp-servers cannot be used together"
+fi
+if [[ -n "$allowed_mcp_tools" && -z "$mcp_servers" ]]; then
+  die "--allowed-mcp-tools requires --mcp-servers"
+fi
 
 case "$logical_model" in
   default|lite) ;;
@@ -184,6 +244,43 @@ print(result, end="")
 '
 }
 
+detect_new_agy_project_id() {
+  local projects_dir="$1"
+  local before_file="$2"
+  local site_dir="$3"
+  PROJECTS_DIR="$projects_dir" BEFORE_FILE="$before_file" SITE_DIR="$site_dir" python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+projects_dir = Path(os.environ["PROJECTS_DIR"])
+before_file = Path(os.environ["BEFORE_FILE"])
+site_dir = str(Path(os.environ["SITE_DIR"]))
+before = set(before_file.read_text(encoding="utf-8").splitlines()) if before_file.exists() else set()
+candidates = []
+new_files = []
+for path in projects_dir.iterdir() if projects_dir.exists() else []:
+    if path.name in before or path.name == ".eha-registration.lock" or not path.is_file():
+        continue
+    new_files.append(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    folder = data.get("folderUri") or data.get("folderPath") or data.get("path")
+    if folder == site_dir:
+        candidates.append(path.stem if path.suffix == ".json" else path.name)
+if not candidates and len(new_files) == 1:
+    only = new_files[0]
+    candidates.append(only.stem if only.suffix == ".json" else only.name)
+if len(candidates) != 1:
+    print(f"expected exactly one new agy project for {site_dir}, got {candidates}", file=sys.stderr)
+    sys.exit(1)
+print(candidates[0], end="")
+PY
+}
+
 claude_message() {
   PROMPT_TEXT="$prompt" CONTENT_JSON="$content_json" python3 -c '
 import json, os, sys
@@ -201,6 +298,22 @@ print(json.dumps({"type": "user", "message": {"role": "user", "content": content
 run_claude() {
   local bin="${EHA_CLAUDE_BIN:-${CLAUDE_BIN:-claude}}"
   local stdout
+  local mcp_config_arg="$mcp_config"
+  local effective_allowed_tools="$allowed_tools"
+  effective_allowed_tools="$(append_csv "$effective_allowed_tools" "$allowed_builtins")"
+  effective_allowed_tools="$(append_csv "$effective_allowed_tools" "$allowed_mcp_tools")"
+  if [[ -n "$mcp_servers" ]]; then
+    mcp_config_arg="$(mktemp "${TMPDIR:-/tmp}/eha-claude-mcp.XXXXXX.json")"
+    TEMP_FILES+=("$mcp_config_arg")
+    local server_args=()
+    read -r -a server_args <<< "$mcp_servers"
+    local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format claude)
+    if [[ -n "$allowed_mcp_tools" ]]; then
+      gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
+    fi
+    gen_cmd+=("$mcp_config_arg" "${server_args[@]}")
+    "${gen_cmd[@]}"
+  fi
   local cmd=("$bin" "-p" "--model" "$model" "--effort" "$effort"
              "--input-format" "stream-json" "--output-format" "stream-json" "--verbose")
   if [[ -n "$system_prompt" ]]; then
@@ -209,11 +322,11 @@ run_claude() {
   if [[ -n "$json_schema" ]]; then
     cmd+=("--json-schema" "$json_schema")
   fi
-  if [[ -n "$allowed_tools" ]]; then
-    cmd+=("--allowedTools" "$allowed_tools")
+  if [[ -n "$effective_allowed_tools" ]]; then
+    cmd+=("--allowedTools" "$effective_allowed_tools")
   fi
-  if [[ -n "$mcp_config" ]]; then
-    cmd+=("--mcp-config" "$mcp_config")
+  if [[ -n "$mcp_config_arg" ]]; then
+    cmd+=("--mcp-config" "$mcp_config_arg")
   fi
   stdout="$(claude_message | "${cmd[@]}")"
   printf '%s' "$stdout" | extract_result_json
@@ -221,18 +334,36 @@ run_claude() {
 
 run_codex() {
   [[ -z "$allowed_tools" ]] || die "--allowed-tools is not supported for codex in invoke-agent.sh yet"
-  [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh yet"
+  [[ -z "$allowed_builtins" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
+  [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
   [[ -z "$content_json" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
   local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-codex}}"
   local cwd="${EHA_AGENT_CWD:-${EHA_CODEX_CWD:-$PWD}}"
   local full_prompt="$prompt"
+  local profile_name=""
   if [[ -n "$system_prompt" ]]; then
     full_prompt="${system_prompt}"$'\n\n'"${full_prompt}"
   fi
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  if [[ -n "$mcp_servers" ]]; then
+    local codex_home="${CODEX_HOME:-${HOME:-/data}/.codex}"
+    mkdir -p "$codex_home"
+    profile_name="eha-mcp-$RANDOM-$$-$(date +%s%N)"
+    local profile_path="$codex_home/$profile_name.config.toml"
+    local server_args=()
+    read -r -a server_args <<< "$mcp_servers"
+    local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format codex)
+    if [[ -n "$allowed_mcp_tools" ]]; then
+      gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
+    fi
+    gen_cmd+=("$profile_path" "${server_args[@]}")
+    "${gen_cmd[@]}"
+    TEMP_FILES+=("$profile_path")
+    cmd+=("--profile" "$profile_name")
+  fi
   if [[ -n "$json_schema" ]]; then
     # Keep process substitution here intentionally: this is the contract the
     # wrapper exists to hide from callers, and it was verified from a Bash file.
@@ -244,10 +375,36 @@ run_codex() {
 
 run_agy() {
   [[ -z "$allowed_tools" ]] || die "--allowed-tools is not supported for agy in invoke-agent.sh yet"
+  [[ -z "$allowed_builtins" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   [[ -z "$content_json" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
 
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
+  local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
+  local site_dir=""
+  local project_arg=()
+  if [[ -n "$mcp_servers" && -z "$agent_site" ]]; then
+    die "--agent-site is required for agy MCP config"
+  fi
+  if [[ -n "$agent_site" ]]; then
+    case "$agent_site" in
+      observe|explore|reflect|web|social|chat|game) ;;
+      *) die "--agent-site must be one of observe/explore/reflect/web/social/chat/game" ;;
+    esac
+    local base_cwd="${EHA_CLAUDE_CWD:-${EHA_AGENT_CWD:-$PWD}}"
+    site_dir="$base_cwd/$agent_site"
+    mkdir -p "$site_dir/.agents"
+  fi
+  if [[ -n "$mcp_servers" ]]; then
+    local server_args=()
+    read -r -a server_args <<< "$mcp_servers"
+    local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format agy)
+    if [[ -n "$allowed_mcp_tools" ]]; then
+      gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
+    fi
+    gen_cmd+=("$site_dir/.agents/mcp_config.json" "${server_args[@]}")
+    "${gen_cmd[@]}"
+  fi
   local full_prompt="$prompt"
   local stdout
   if [[ -n "$system_prompt" ]]; then
@@ -256,7 +413,41 @@ run_agy() {
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi
-  stdout="$(HOME="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}" "$bin" --model "$model" -p "$full_prompt")"
+  if [[ -n "$mcp_servers" ]]; then
+    local project_id_file="$site_dir/.eha_project_id"
+    local project_id=""
+    if [[ -s "$project_id_file" ]]; then
+      project_id="$(head -n 1 "$project_id_file" | tr -d '[:space:]')"
+      project_arg=(--project "$project_id")
+      stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" "${project_arg[@]}" --model "$model" -p "$full_prompt")"
+    else
+      local projects_dir="$agy_home/.gemini/config/projects"
+      mkdir -p "$projects_dir"
+      local before_file
+      before_file="$(mktemp "${TMPDIR:-/tmp}/eha-agy-projects-before.XXXXXX")"
+      TEMP_FILES+=("$before_file")
+      local lock_file="$projects_dir/.eha-registration.lock"
+      stdout="$(
+        (
+          flock -x 200
+          if [[ -s "$project_id_file" ]]; then
+            project_id="$(head -n 1 "$project_id_file" | tr -d '[:space:]')"
+            cd "$site_dir" && HOME="$agy_home" "$bin" --project "$project_id" --model "$model" -p "$full_prompt"
+          else
+            find "$projects_dir" -maxdepth 1 -type f -printf '%f\n' | sort > "$before_file"
+            cd "$site_dir" && HOME="$agy_home" "$bin" --new-project --model "$model" -p "$full_prompt"
+            project_id="$(detect_new_agy_project_id "$projects_dir" "$before_file" "$site_dir")"
+            printf '%s\n' "$project_id" > "$project_id_file.tmp.$$"
+            mv "$project_id_file.tmp.$$" "$project_id_file"
+          fi
+        ) 200>"$lock_file"
+      )"
+    fi
+  elif [[ -n "$site_dir" ]]; then
+    stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" --model "$model" -p "$full_prompt")"
+  else
+    stdout="$(HOME="$agy_home" "$bin" --model "$model" -p "$full_prompt")"
+  fi
   printf '%s' "$stdout" | extract_result_json
 }
 

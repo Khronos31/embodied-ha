@@ -159,6 +159,10 @@ unset _OPT_CWD
 echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD}"
 
 mkdir -p "$EHA_CLAUDE_CWD/.claude"
+for _eha_agent_site in observe explore reflect web social chat game; do
+    mkdir -p "$EHA_CLAUDE_CWD/$_eha_agent_site"
+done
+unset _eha_agent_site
 if [ ! -f "$EHA_CLAUDE_CWD/.claude/settings.local.json" ]; then
     cat > "$EHA_CLAUDE_CWD/.claude/settings.local.json" << 'JSONEOF'
 {

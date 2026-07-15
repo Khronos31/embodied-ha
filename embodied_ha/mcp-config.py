@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""mcp-config.py <output_path> <server>...  — claude の --mcp-config 用 JSON を生成。
+"""mcp-config.py [--format claude|codex|agy] <output_path> <server>...
 
 各ループ（loop/chat）が必要なMCPサーバーだけを指定して設定を書き出す。
-サーバーは claude の子プロセスとして起動されるため、必要な環境変数を
-明示的に env ブロックへ注入する（env継承に依存しない）。
+サーバーはエージェントハーネスの子プロセスとして起動されるため、必要な
+環境変数を明示的に env ブロックへ注入する（env継承に依存しない）。
+
+--mcp-servers に hacontrol などの単一tool serverを含めるかどうかが、
+そのserverの安全性境界である。--allowed-mcp-tools は多tool server内の
+補助的な絞り込みであり、hacontrol のような単一tool serverの安全性は
+tool allow-listではなく server-list 接続可否と boundary.py 側ゲートに依存する。
 
 サーバー名: audio / body / camera / ha / hacontrol / http / lounge / memory / sensors / sociality / song
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
@@ -14,9 +19,10 @@ env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_ROOM_GRAPH_FILE, EHA_BODY_LOCATION_FILE, EHA_BODY_LOCATION_LOG_FILE, EHA_ANOMALY_STATE_FILE,
      EHA_TOOLS_PATH, PATH, LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
 """
-import sys
-import os
+import argparse
 import json
+import os
+import sys
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -88,12 +94,68 @@ REGISTRY = {
 }
 
 
+def _parse_allowed_mcp_tools(csv):
+    allowed = {}
+    for item in (csv or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if not item.startswith("mcp__") or "__" not in item[5:]:
+            continue
+        server, tool = item[5:].split("__", 1)
+        if server and tool:
+            allowed.setdefault(server, []).append(tool)
+    return allowed
+
+
+def _json_config(servers, allowed_tools=None, *, include_tools=False):
+    config = {"mcpServers": servers}
+    if include_tools and allowed_tools:
+        for name, tools in allowed_tools.items():
+            if name in servers and tools:
+                servers[name]["includeTools"] = tools
+    return config
+
+
+def _toml_string(value):
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _toml_array(values):
+    return "[" + ", ".join(_toml_string(v) for v in values) + "]"
+
+
+def _write_codex_profile(path, servers, allowed_tools):
+    lines = []
+    for name, server in servers.items():
+        lines.append(f"[mcp_servers.{name}]")
+        lines.append(f"command = {_toml_string(server['command'])}")
+        if server.get("args"):
+            lines.append(f"args = {_toml_array(server['args'])}")
+        if allowed_tools.get(name):
+            lines.append(f"enabled_tools = {_toml_array(allowed_tools[name])}")
+        env = server.get("env") or {}
+        if env:
+            lines.append("")
+            lines.append(f"[mcp_servers.{name}.env]")
+            for key in sorted(env):
+                lines.append(f"{key} = {_toml_string(env[key])}")
+        lines.append("")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("usage: mcp-config.py <output_path> <server>...", file=sys.stderr)
-        sys.exit(1)
-    out = sys.argv[1]
-    names = sys.argv[2:]
+    parser = argparse.ArgumentParser(
+        description="Generate MCP server config for Claude, Codex, or Antigravity.",
+    )
+    parser.add_argument("--format", choices=("claude", "codex", "agy"), default="claude")
+    parser.add_argument("--allowed-mcp-tools", default="")
+    parser.add_argument("output_path")
+    parser.add_argument("servers", nargs="*")
+    args = parser.parse_args()
+    out = args.output_path
+    names = args.servers
 
     servers = {}
     for n in names:
@@ -103,8 +165,13 @@ def main():
             print(f"[mcp-config] 未知のサーバー: {n}（スキップ）", file=sys.stderr)
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump({"mcpServers": servers}, f, ensure_ascii=False)
+    allowed_tools = _parse_allowed_mcp_tools(args.allowed_mcp_tools)
+    if args.format == "codex":
+        _write_codex_profile(out, servers, allowed_tools)
+    else:
+        config = _json_config(servers, allowed_tools, include_tools=args.format == "agy")
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False)
 
 
 if __name__ == "__main__":

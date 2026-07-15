@@ -33,6 +33,84 @@ class InvokeAgentTests(unittest.TestCase):
             check=False,
         )
 
+    def write_project_fake_agy(self, tmpdir: Path) -> Path:
+        fake = tmpdir / "agy"
+        record_dir = tmpdir / "agy-records"
+        record_dir.mkdir()
+        write_executable(
+            fake,
+            f"""
+            #!/usr/bin/env python3
+            import fcntl
+            import json
+            import os
+            import sys
+            import time
+            from pathlib import Path
+
+            record_dir = Path({record_dir.as_posix()!r})
+            args = sys.argv[1:]
+            cwd = Path.cwd()
+            site = cwd.name
+            home = Path(os.environ["HOME"])
+            projects_dir = home / ".gemini" / "config" / "projects"
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            concurrency_path = record_dir / "concurrency.json"
+            counter_lock = record_dir / "counter.lock"
+
+            def update_counter(delta):
+                counter_lock.touch()
+                with counter_lock.open("r+") as fh:
+                    fcntl.flock(fh, fcntl.LOCK_EX)
+                    try:
+                        if concurrency_path.exists():
+                            data = json.loads(concurrency_path.read_text(encoding="utf-8"))
+                        else:
+                            data = {{"active": 0, "max": 0}}
+                        data["active"] += delta
+                        data["max"] = max(data.get("max", 0), data["active"])
+                        concurrency_path.write_text(json.dumps(data), encoding="utf-8")
+                    finally:
+                        fcntl.flock(fh, fcntl.LOCK_UN)
+
+            project_id = None
+            if "--new-project" in args:
+                update_counter(1)
+                try:
+                    time.sleep(0.2)
+                    project_id = f"{{site}}-{{os.getpid()}}"
+                    (projects_dir / f"{{project_id}}.json").write_text(
+                        json.dumps({{"folderUri": str(cwd)}}, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                finally:
+                    update_counter(-1)
+            elif "--project" in args:
+                project_id = args[args.index("--project") + 1]
+
+            record = {{
+                "args": args,
+                "cwd": str(cwd),
+                "home": str(home),
+                "project_id": project_id,
+            }}
+            (record_dir / f"{{site}}-{{os.getpid()}}.json").write_text(
+                json.dumps(record, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            print('{{"ok":true}}')
+            """,
+        )
+        return fake
+
+    def read_agy_records(self, tmpdir: Path):
+        record_dir = tmpdir / "agy-records"
+        return [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(record_dir.glob("*.json"))
+            if path.name != "concurrency.json"
+        ]
+
     def test_claude_lite_maps_model_effort_schema_tools_mcp_and_content_blocks(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -262,6 +340,362 @@ class InvokeAgentTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--allowed-tools is not supported for codex", result.stderr)
+
+    def test_codex_mcp_servers_use_temp_profile_and_delete_after_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "codex_profile.json"
+            codex_home = tmpdir / "codex-home"
+            codex_home.mkdir()
+            fake = tmpdir / "codex"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                import tomllib
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                profile_name = args[args.index("--profile") + 1]
+                profile_path = Path({codex_home.as_posix()!r}) / f"{{profile_name}}.config.toml"
+                with profile_path.open("rb") as fh:
+                    profile = tomllib.load(fh)
+                out_path = args[args.index("-o") + 1]
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{
+                        "args": args,
+                        "profile_name": profile_name,
+                        "profile_exists_during_call": profile_path.exists(),
+                        "profile": profile,
+                    }}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                """,
+            )
+
+            result = self.run_wrapper(
+                [
+                    "--mcp-servers",
+                    "ha",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": "/tmp",
+                    "CODEX_HOME": codex_home.as_posix(),
+                    "SUPERVISOR_TOKEN": "secret-token",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, '{"ok":true}')
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            self.assertIn("--profile", args)
+            self.assertTrue(payload["profile_exists_during_call"])
+            profile_name = payload["profile_name"]
+            self.assertFalse((codex_home / f"{profile_name}.config.toml").exists())
+            ha_config = payload["profile"]["mcp_servers"]["ha"]
+            self.assertEqual(ha_config["enabled_tools"], ["ha_get"])
+            self.assertEqual(ha_config["env"]["SUPERVISOR_TOKEN"], "secret-token")
+
+    def test_claude_mcp_servers_generate_config_and_combine_allowed_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "claude_mcp.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                mcp_config_path = Path(args[args.index("--mcp-config") + 1])
+                config = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+                stdin = sys.stdin.read()
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{
+                        "args": args,
+                        "stdin": stdin,
+                        "mcp_config_path": str(mcp_config_path),
+                        "mcp_config_exists_during_call": mcp_config_path.exists(),
+                        "mcp_config": config,
+                    }}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{"type": "result", "structured_output": {{"ok": True}}}}, ensure_ascii=False))
+                """,
+            )
+
+            result = self.run_wrapper(
+                [
+                    "--mcp-servers",
+                    "ha memory",
+                    "--allowed-builtins",
+                    "Read,WebSearch",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "SUPERVISOR_TOKEN": "secret-token",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            self.assertEqual(args[args.index("--allowedTools") + 1], "Read,WebSearch,mcp__ha__ha_get")
+            self.assertTrue(payload["mcp_config_exists_during_call"])
+            self.assertFalse(Path(payload["mcp_config_path"]).exists())
+            config = payload["mcp_config"]["mcpServers"]
+            self.assertIn("ha", config)
+            self.assertIn("memory", config)
+            self.assertNotIn("includeTools", config["ha"])
+            self.assertEqual(config["ha"]["env"]["SUPERVISOR_TOKEN"], "secret-token")
+
+    def test_mcp_config_and_mcp_servers_are_mutually_exclusive(self):
+        result = self.run_wrapper(
+            ["--mcp-config", "/tmp/x.json", "--mcp-servers", "ha", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--mcp-config and --mcp-servers cannot be used together", result.stderr)
+
+    def test_allowed_mcp_tools_requires_mcp_servers(self):
+        result = self.run_wrapper(
+            ["--allowed-mcp-tools", "mcp__ha__ha_get", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--allowed-mcp-tools requires --mcp-servers", result.stderr)
+
+    def test_help_documents_hacontrol_server_list_safety_boundary(self):
+        result = self.run_wrapper(["--help"], {})
+
+        self.assertEqual(result.returncode, 0)
+        help_text = result.stderr
+        self.assertIn("--allowed-builtins", help_text)
+        self.assertIn("--allowed-mcp-tools", help_text)
+        self.assertIn("--mcp-servers", help_text)
+        self.assertIn("hacontrol", help_text)
+        self.assertIn("server-list is the", help_text)
+        self.assertIn("not --allowed-mcp-tools", help_text)
+
+    def test_codex_rejects_allowed_builtins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "codex"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env bash
+                echo "codex must not be called" >&2
+                exit 99
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--allowed-builtins is not supported for codex", result.stderr)
+
+    def test_agy_first_use_writes_site_config_and_registers_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            workdir = tmpdir / "workdir"
+            agy_home = tmpdir / "agy-home"
+            global_config = agy_home / ".gemini" / "config" / "mcp_config.json"
+            global_config.parent.mkdir(parents=True)
+            global_config.write_text('{"global":true}', encoding="utf-8")
+            fake = self.write_project_fake_agy(tmpdir)
+
+            result = self.run_wrapper(
+                [
+                    "--agent-site",
+                    "explore",
+                    "--mcp-servers",
+                    "ha",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                    "EHA_CLAUDE_CWD": workdir.as_posix(),
+                    "SUPERVISOR_TOKEN": "secret-token",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            site_dir = workdir / "explore"
+            config = json.loads((site_dir / ".agents" / "mcp_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(config["mcpServers"]["ha"]["includeTools"], ["ha_get"])
+            self.assertEqual(config["mcpServers"]["ha"]["env"]["SUPERVISOR_TOKEN"], "secret-token")
+            project_id = (site_dir / ".eha_project_id").read_text(encoding="utf-8").strip()
+            self.assertTrue(project_id.startswith("explore-"))
+            self.assertEqual(global_config.read_text(encoding="utf-8"), '{"global":true}')
+            records = self.read_agy_records(tmpdir)
+            self.assertEqual(len(records), 1)
+            self.assertIn("--new-project", records[0]["args"])
+            self.assertEqual(records[0]["cwd"], str(site_dir))
+
+    def test_agy_reuses_existing_project_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            workdir = tmpdir / "workdir"
+            site_dir = workdir / "chat"
+            site_dir.mkdir(parents=True)
+            (site_dir / ".eha_project_id").write_text("saved-project-123\n", encoding="utf-8")
+            agy_home = tmpdir / "agy-home"
+            fake = self.write_project_fake_agy(tmpdir)
+
+            result = self.run_wrapper(
+                [
+                    "--agent-site",
+                    "chat",
+                    "--mcp-servers",
+                    "ha",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                    "EHA_CLAUDE_CWD": workdir.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            records = self.read_agy_records(tmpdir)
+            self.assertEqual(len(records), 1)
+            self.assertNotIn("--new-project", records[0]["args"])
+            self.assertEqual(records[0]["args"][records[0]["args"].index("--project") + 1], "saved-project-123")
+
+    def test_agy_mcp_requires_agent_site_and_rejects_allowed_builtins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self.write_project_fake_agy(Path(tmp))
+
+            missing_site = self.run_wrapper(
+                ["--mcp-servers", "ha", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                },
+            )
+            bad_builtins = self.run_wrapper(
+                ["--agent-site", "chat", "--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertNotEqual(missing_site.returncode, 0)
+            self.assertIn("--agent-site is required for agy MCP config", missing_site.stderr)
+            self.assertNotEqual(bad_builtins.returncode, 0)
+            self.assertIn("--allowed-builtins is not supported for agy", bad_builtins.stderr)
+
+    def test_agent_site_is_ignored_by_codex_cwd_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "codex.json"
+            fake = tmpdir / "codex"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                out_path = args[args.index("-o") + 1]
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": args}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--agent-site", "chat", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": "/tmp/codex-cwd",
+                    "EHA_CLAUDE_CWD": "/tmp/claude-sites",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertEqual(args[args.index("-C") + 1], "/tmp/codex-cwd")
+
+    def test_agy_parallel_first_registration_is_serialized_by_global_flock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            workdir = tmpdir / "workdir"
+            agy_home = tmpdir / "agy-home"
+            fake = self.write_project_fake_agy(tmpdir)
+            base_env = {
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": os.environ.get("HOME", ""),
+                "EHA_AGENT_HARNESS": "agy",
+                "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                "EHA_CLAUDE_CWD": workdir.as_posix(),
+            }
+            commands = [
+                [SCRIPT.as_posix(), "--agent-site", "explore", "--mcp-servers", "ha", "hello"],
+                [SCRIPT.as_posix(), "--agent-site", "chat", "--mcp-servers", "ha", "hello"],
+            ]
+            procs = [
+                subprocess.Popen(
+                    cmd,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=ROOT,
+                    env=base_env,
+                )
+                for cmd in commands
+            ]
+            results = [proc.communicate(timeout=10) + (proc.returncode,) for proc in procs]
+
+            for stdout, stderr, returncode in results:
+                self.assertEqual(returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout), {"ok": True})
+            explore_id = (workdir / "explore" / ".eha_project_id").read_text(encoding="utf-8").strip()
+            chat_id = (workdir / "chat" / ".eha_project_id").read_text(encoding="utf-8").strip()
+            self.assertNotEqual(explore_id, chat_id)
+            self.assertTrue(explore_id.startswith("explore-"))
+            self.assertTrue(chat_id.startswith("chat-"))
+            concurrency = json.loads((tmpdir / "agy-records" / "concurrency.json").read_text(encoding="utf-8"))
+            self.assertEqual(concurrency["max"], 1)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,13 @@ Python port is shadow-tested against the shell loop.
 - `EHA_SESSION_BIN=agy` is not reimplemented in `loop.py`. Before any future
   daemon cutover, operator/runtime use of `EHA_SESSION_BIN` must be audited or
   an `invoke-agent.sh` abstraction must be wired and tested.
+- Before cutover, re-verify that `agy --project <uuid>` / `agy --new-project`
+  still behave as documented in the `invoke-agent.sh` MCP allow-list design
+  (workspace-local `.agents/mcp_config.json` resolution, `--project`
+  idempotency), and that Antigravity's `includeTools` actually restricts tool
+  visibility in a live test. These behaviors were confirmed by empirical
+  testing against a specific Antigravity CLI version, not from official
+  documentation, and may have changed.
 
 ## Consumer Inventory
 
@@ -36,4 +43,3 @@ same fixture inputs:
 - MCP config generator inputs.
 - Runtime side effects in the files listed above.
 - Absence of normal persistence when parsing fails or introspection is empty.
-
