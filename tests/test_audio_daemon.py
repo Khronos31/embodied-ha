@@ -459,6 +459,55 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(module.tcp_pull_retry_delay(1, random_value=0.0), 0.75)
         self.assertEqual(module.tcp_pull_retry_delay(1, random_value=1.0), 1.25)
 
+    def test_stream_session_finalizes_active_listen_on_exception(self):
+        # run_audio_stream_session が読み取りループ中の例外で終了しても、
+        # 未完了の active_listen capture を error 付きで finalize してから re-raise すること。
+        module = self.audio_daemon
+        config = self._tcp_config()
+
+        seeded = {
+            "request_id": "req1",
+            "source": "tcp://x",
+            "output_path": "/tmp/eha_test_o.wav",
+            "response_path": "/tmp/eha_test_r.json",
+            "request_path": "/tmp/eha_test_q.json",
+            "expected_bytes": 10 ** 9,
+            "buffer": bytearray(),
+        }
+
+        def fake_service(cfg, chunk, active_requests, last_scan_at):
+            active_requests.setdefault("req1", seeded)
+            return last_scan_at
+
+        calls = []
+
+        def fake_finalize(request, audio_bytes, error=None):
+            calls.append((request.get("request_id"), error))
+
+        reads = [b"\x00" * module.CHUNK_BYTES]
+
+        def read_chunk():
+            if reads:
+                return reads.pop(0)
+            raise RuntimeError("tcp read timeout")
+
+        with mock.patch.object(
+            module, "_service_active_listen_requests", side_effect=fake_service
+        ), mock.patch.object(
+            module, "_finalize_active_listen_capture", side_effect=fake_finalize
+        ), mock.patch.object(
+            module, "detect_voice", return_value=0.0
+        ):
+            with self.assertRaises(RuntimeError):
+                module.run_audio_stream_session(
+                    config, "token", read_chunk, None, "fallback"
+                )
+
+        self.assertTrue(
+            any(cid == "req1" and err is not None for cid, err in calls),
+            "active_listen capture should be finalized with error on exception",
+        )
+
     def test_audio_daemon_flock_rejects_second_instance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = str(Path(tmpdir) / "audio-daemon.lock")

@@ -2188,52 +2188,70 @@ def run_audio_stream_session(
     active = False
     stats = {"chunks": 0, "bytes": 0}
 
-    while True:
-        chunk = read_chunk()
-        if len(chunk) < CHUNK_BYTES:
-            break
-        stats["chunks"] += 1
-        stats["bytes"] += len(chunk)
-        last_request_scan_at = _service_active_listen_requests(
-            config,
-            chunk,
-            active_listen_requests,
-            last_request_scan_at,
-        )
+    try:
+        while True:
+            chunk = read_chunk()
+            if len(chunk) < CHUNK_BYTES:
+                break
+            stats["chunks"] += 1
+            stats["bytes"] += len(chunk)
+            last_request_scan_at = _service_active_listen_requests(
+                config,
+                chunk,
+                active_listen_requests,
+                last_request_scan_at,
+            )
 
-        voice_prob = detect_voice(chunk, detector)
-        is_speech = voice_prob > VAD_THRESHOLD
-        level_db = chunk_db(chunk)
+            voice_prob = detect_voice(chunk, detector)
+            is_speech = voice_prob > VAD_THRESHOLD
+            level_db = chunk_db(chunk)
 
-        if active:
-            segment_chunks.append(chunk)
-            segment_levels.append(level_db)
-            if is_speech:
-                segment_speech_chunks += 1
-            silence_chunks = 0 if is_speech else silence_chunks + 1
-            if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
-                peak_db, mean_db = summarize_chunk_levels(segment_levels)
-                speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
-                settings = load_runtime_settings(config)
-                signature = _runtime_signature(settings)
-                if signature != last_settings_signature:
-                    last_settings_signature = signature
-                    log_runtime_settings(config, settings)
-                diagnostics = {
-                    "vad_mode": vad_mode,
-                    "speech_ratio": speech_ratio,
-                    "peak_db": peak_db,
-                    "mean_db": mean_db,
-                }
-                if not settings.stt_enabled:
-                    if settings.config.background_only:
-                        last_background_log_at = maybe_record_background_audio(
-                            settings.config,
-                            b"".join(segment_chunks),
-                            vad_mode,
-                            diagnostics,
-                            last_background_log_at,
-                        )
+            if active:
+                segment_chunks.append(chunk)
+                segment_levels.append(level_db)
+                if is_speech:
+                    segment_speech_chunks += 1
+                silence_chunks = 0 if is_speech else silence_chunks + 1
+                if len(segment_chunks) >= max_segment_chunks or silence_chunks >= max_silence_chunks:
+                    peak_db, mean_db = summarize_chunk_levels(segment_levels)
+                    speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
+                    settings = load_runtime_settings(config)
+                    signature = _runtime_signature(settings)
+                    if signature != last_settings_signature:
+                        last_settings_signature = signature
+                        log_runtime_settings(config, settings)
+                    diagnostics = {
+                        "vad_mode": vad_mode,
+                        "speech_ratio": speech_ratio,
+                        "peak_db": peak_db,
+                        "mean_db": mean_db,
+                    }
+                    if not settings.stt_enabled:
+                        if settings.config.background_only:
+                            last_background_log_at = maybe_record_background_audio(
+                                settings.config,
+                                b"".join(segment_chunks),
+                                vad_mode,
+                                diagnostics,
+                                last_background_log_at,
+                            )
+                        segment_chunks = []
+                        segment_levels = []
+                        segment_speech_chunks = 0
+                        silence_chunks = 0
+                        active = False
+                        prebuffer.clear()
+                        reset_vad(detector)
+                        continue
+                    process_segment(
+                        settings.config,
+                        b"".join(segment_chunks),
+                        settings.provider,
+                        settings.language,
+                        token,
+                        settings.wake_words,
+                        diagnostics=diagnostics,
+                    )
                     segment_chunks = []
                     segment_levels = []
                     segment_speech_chunks = 0
@@ -2241,7 +2259,33 @@ def run_audio_stream_session(
                     active = False
                     prebuffer.clear()
                     reset_vad(detector)
-                    continue
+            elif is_speech:
+                segment_chunks = list(prebuffer)
+                segment_chunks.append(chunk)
+                segment_levels = [chunk_db(buffered) for buffered in prebuffer]
+                segment_levels.append(level_db)
+                segment_speech_chunks = 1
+                silence_chunks = 0
+                active = True
+                prebuffer.clear()
+            else:
+                prebuffer.append(chunk)
+
+        if active and segment_chunks:
+            peak_db, mean_db = summarize_chunk_levels(segment_levels)
+            speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
+            settings = load_runtime_settings(config)
+            signature = _runtime_signature(settings)
+            if signature != last_settings_signature:
+                last_settings_signature = signature
+                log_runtime_settings(config, settings)
+            diagnostics = {
+                "vad_mode": vad_mode,
+                "speech_ratio": speech_ratio,
+                "peak_db": peak_db,
+                "mean_db": mean_db,
+            }
+            if settings.stt_enabled:
                 process_segment(
                     settings.config,
                     b"".join(segment_chunks),
@@ -2251,60 +2295,18 @@ def run_audio_stream_session(
                     settings.wake_words,
                     diagnostics=diagnostics,
                 )
-                segment_chunks = []
-                segment_levels = []
-                segment_speech_chunks = 0
-                silence_chunks = 0
-                active = False
-                prebuffer.clear()
-                reset_vad(detector)
-        elif is_speech:
-            segment_chunks = list(prebuffer)
-            segment_chunks.append(chunk)
-            segment_levels = [chunk_db(buffered) for buffered in prebuffer]
-            segment_levels.append(level_db)
-            segment_speech_chunks = 1
-            silence_chunks = 0
-            active = True
-            prebuffer.clear()
-        else:
-            prebuffer.append(chunk)
+            elif settings.config.background_only:
+                maybe_record_background_audio(
+                    settings.config,
+                    b"".join(segment_chunks),
+                    vad_mode,
+                    diagnostics,
+                    last_background_log_at,
+                )
 
-    if active and segment_chunks:
-        peak_db, mean_db = summarize_chunk_levels(segment_levels)
-        speech_ratio = round(segment_speech_chunks / max(1, len(segment_chunks)), 3)
-        settings = load_runtime_settings(config)
-        signature = _runtime_signature(settings)
-        if signature != last_settings_signature:
-            last_settings_signature = signature
-            log_runtime_settings(config, settings)
-        diagnostics = {
-            "vad_mode": vad_mode,
-            "speech_ratio": speech_ratio,
-            "peak_db": peak_db,
-            "mean_db": mean_db,
-        }
-        if settings.stt_enabled:
-            process_segment(
-                settings.config,
-                b"".join(segment_chunks),
-                settings.provider,
-                settings.language,
-                token,
-                settings.wake_words,
-                diagnostics=diagnostics,
-            )
-        elif settings.config.background_only:
-            maybe_record_background_audio(
-                settings.config,
-                b"".join(segment_chunks),
-                vad_mode,
-                diagnostics,
-                last_background_log_at,
-            )
-
-    for request in list(active_listen_requests.values()):
-        _finalize_active_listen_capture(request, bytes(request.get('buffer') or b''), error='stream ended before capture completed')
+    finally:
+        for request in list(active_listen_requests.values()):
+            _finalize_active_listen_capture(request, bytes(request.get('buffer') or b''), error='stream ended before capture completed')
     return stats
 
 
