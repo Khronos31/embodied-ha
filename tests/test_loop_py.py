@@ -113,6 +113,119 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(envelope["type"], "user")
         self.assertEqual(envelope["message"]["content"][0]["text"], "user")
 
+    def test_build_loop_claude_command_omits_empty_allowed_tools_and_absent_schema(self):
+        cmd = loop.build_loop_claude_command(
+            claude_bin="/bin/claude",
+            model="haiku",
+            mode="observe",
+            allowed_tools="",
+            system_prompt="watch",
+            response_schema=None,
+        )
+
+        self.assertNotIn("--allowedTools", cmd)
+        self.assertNotIn("--json-schema", cmd)
+
+    def test_observe_invocation_uses_sonnet_and_does_not_set_actor(self):
+        calls = []
+
+        class Result:
+            def __init__(self, stdout=""):
+                self.stdout = stdout
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if cmd[0] == "python3":
+                Path(cmd[2]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[2]).write_text("{}", encoding="utf-8")
+                return Result()
+            payload = {
+                "type": "result",
+                "structured_output": {"private": "見守った", "emotion": "calm", "speak": None},
+            }
+            return Result(json.dumps(payload, ensure_ascii=False))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            response = loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "CLAUDE_BIN": "/bin/claude",
+                    "EHA_SESSION_MODEL": "opus",
+                    "EHA_DATA_DIR": tmpdir,
+                },
+                model="sonnet",
+                run=fake_run,
+            )
+
+        self.assertEqual(json.loads(response)["private"], "見守った")
+        claude_cmd, claude_kwargs = [call for call in calls if call[0][0] == "/bin/claude"][0]
+        self.assertEqual(claude_cmd[claude_cmd.index("--model") + 1], "sonnet")
+        self.assertNotIn("EHA_ACTOR", claude_kwargs["env"])
+
+    def test_watch_summary_invocation_uses_haiku_without_tools_or_schema(self):
+        calls = []
+
+        class Result:
+            def __init__(self, stdout="", returncode=0):
+                self.stdout = stdout
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if cmd[0] == "/bin/claude":
+                return Result(json.dumps({"type": "result", "result": "Fixture: clear"}, ensure_ascii=False))
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            prefs = tmp / "preferences.json"
+            prefs.write_text(
+                json.dumps({"cameras": [{"ha_entity": "camera.fixture", "label": "Fixture"}]}),
+                encoding="utf-8",
+            )
+            context = {
+                "cfg": {
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "CLAUDE_BIN": "/bin/claude",
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_SESSION_MODEL": "opus",
+                    "EHA_DATA_DIR": tmpdir,
+                },
+                "projected_camera_source": "",
+                "user_prompt": "observe prompt",
+            }
+            original_fetch_frame = loop.fetch_frame
+            try:
+                loop.fetch_frame = lambda *_args, **_kwargs: b"JPEGFIXTURE" * 20
+                blocks = loop.build_observe_content_blocks(
+                    context,
+                    loop.LoopPaths(
+                        log_dir=str(tmp),
+                        observation_log=str(tmp / "observations.jsonl"),
+                        explore_log=str(tmp / "explore.jsonl"),
+                        chat_log=str(tmp / "chat_log.jsonl"),
+                        memory_file=str(tmp / "memory.md"),
+                        pending_file=str(tmp / "pending_proposal.json"),
+                        daybook_marker=str(tmp / ".last_daybook"),
+                        tmp_dir=str(tmp / "tmp"),
+                    ),
+                    run=fake_run,
+                )
+            finally:
+                loop.fetch_frame = original_fetch_frame
+
+        self.assertIn("Fixture: clear", blocks[0]["text"])
+        claude_cmd, claude_kwargs = [call for call in calls if call[0][0] == "/bin/claude"][0]
+        self.assertEqual(claude_cmd[claude_cmd.index("--model") + 1], "haiku")
+        self.assertNotIn("--allowedTools", claude_cmd)
+        self.assertNotIn("--json-schema", claude_cmd)
+        self.assertNotIn("EHA_ACTOR", claude_kwargs["env"])
+
 
 class LoopPyPostprocessTests(unittest.TestCase):
     def test_pending_proposal_requires_action_triplet(self):

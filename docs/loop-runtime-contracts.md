@@ -14,6 +14,16 @@ Python port is shadow-tested against the shell loop.
 - `EHA_SESSION_BIN=agy` is not reimplemented in `loop.py`. Before any future
   daemon cutover, operator/runtime use of `EHA_SESSION_BIN` must be audited or
   an `invoke-agent.sh` abstraction must be wired and tested.
+  Phase1 audit on 2026-07-16 found no `EHA_SESSION_BIN` assignment in the main
+  loop startup path: `embodied_ha/run.sh` sets `EHA_AUDIO_SESSION_BIN` and
+  `EHA_ANTIGRAVITY_BIN` for audio/Antigravity support but not `EHA_SESSION_BIN`,
+  `embodied_ha/config.yaml` has no `EHA_SESSION_BIN`, production
+  `/config/embodied-ha/preferences.json` has no `EHA_SESSION_BIN`/`session_bin`
+  entry, and the current Studio Code Server environment has no
+  `EHA_SESSION_BIN`. Because `daemon.py` inherits its process environment,
+  re-check the running add-on/container environment immediately before any
+  future daemon cutover; an externally injected `EHA_SESSION_BIN=agy` would
+  still hit the explicit `loop.py` cutover guard.
 - Before cutover, re-verify that `agy --project <uuid>` / `agy --new-project`
   still behave as documented in the `invoke-agent.sh` MCP allow-list design
   (workspace-local `.agents/mcp_config.json` resolution, `--project`

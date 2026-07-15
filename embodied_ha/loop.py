@@ -131,16 +131,21 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
     return choices(modes, weights=[weights[key] for key in modes], k=1)[0]
 
 
-def build_loop_claude_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+_DEFAULT_RESPONSE_SCHEMA = object()
+
+
+def build_loop_claude_env(environ: dict[str, str] | None = None, *, actor: str | None = "loop") -> dict[str, str]:
     """loop.sh の Claude 環境構築をPythonへ移す。"""
     env = dict(environ if environ is not None else os.environ)
-    return {
+    result = {
         **env,
-        "EHA_ACTOR": "loop",
         "CLAUDE_CONFIG_DIR": env.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
         "PATH": env.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin")
         + ":" + env.get("PATH", "/usr/bin:/bin"),
     }
+    if actor is not None:
+        result["EHA_ACTOR"] = actor
+    return result
 
 
 def build_mcp_config(
@@ -174,8 +179,10 @@ def build_loop_claude_command(
     allowed_tools: str,
     system_prompt: str,
     mcp_config: str | None = None,
+    response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
 ) -> list[str]:
     """loop.pyではClaude Code専用コマンドだけを組み立てる。agy分岐はinvoke-agent層へ委ねる。"""
+    schema = loop_schema(mode) if response_schema is _DEFAULT_RESPONSE_SCHEMA else response_schema
     cmd = [
         claude_bin,
         "-p",
@@ -186,13 +193,13 @@ def build_loop_claude_command(
         "--output-format",
         "stream-json",
         "--verbose",
-        "--allowedTools",
-        allowed_tools,
         "--append-system-prompt",
         system_prompt,
-        "--json-schema",
-        json.dumps(loop_schema(mode), ensure_ascii=False),
     ]
+    if allowed_tools:
+        cmd += ["--allowedTools", allowed_tools]
+    if schema is not None:
+        cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
     if mcp_config:
         cmd += ["--mcp-config", mcp_config]
     return cmd
@@ -208,21 +215,24 @@ def invoke_loop_claude(
     environ: dict[str, str] | None = None,
     content_blocks: list[dict[str, Any]] | None = None,
     facts_file: str | None = None,
+    model: str | None = None,
+    response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
     run=subprocess.run,
 ) -> str:
     """Claude Codeをstream-jsonで呼び、最後のresult payloadを返す。"""
-    env = build_loop_claude_env(environ)
+    env = build_loop_claude_env(environ, actor=None if mode == "observe" else "loop")
     script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
     claude_bin = env.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
-    model = env.get("EHA_SESSION_MODEL") or "sonnet"
+    selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
     mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
     cmd = build_loop_claude_command(
         claude_bin=claude_bin,
-        model=model,
+        model=selected_model,
         mode=mode,
         allowed_tools=allowed_tools,
         system_prompt=system_prompt,
         mcp_config=mcp_config,
+        response_schema=response_schema,
     )
     cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
     result = run(
@@ -716,7 +726,9 @@ def build_observe_content_blocks(context: dict[str, Any], paths: LoopPaths, *, r
             mode="observe",
             allowed_tools="",
             mcp_servers=[],
-            environ={**cfg, "EHA_SESSION_MODEL": "haiku"},
+            environ=cfg,
+            model="haiku",
+            response_schema=None,
             content_blocks=blocks,
             run=run,
         ).strip()
@@ -784,13 +796,13 @@ def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=
 
 def postprocess_loop_response(parsed: dict[str, Any], response: str, context: dict[str, Any], paths: LoopPaths, timestamp: str, *, run=subprocess.run) -> None:
     mode = context["mode"]
-    record_presented_features(parsed, run=run)
     queued_file = context.get("queued_listen_file")
     if queued_file:
         try:
             os.remove(str(queued_file))
         except OSError:
             pass
+    record_presented_features(parsed, run=run)
     record_parse_skip_if_needed(parsed=parsed, response=response, log_dir=paths.log_dir, timestamp=timestamp, mode=mode)
     if mode == "observe":
         ingest_observe_scene(parsed, paths.log_dir)
@@ -827,13 +839,13 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
     paths = resolve_paths(cfg)
     Path(paths.log_dir).mkdir(parents=True, exist_ok=True)
     Path(paths.tmp_dir).mkdir(parents=True, exist_ok=True)
-    mode = choose_mode(cfg)
+    requested_mode = cfg.get("MODE", "")
     timestamp = cfg.get("EHA_TEST_TIMESTAMP") or datetime.now().astimezone().isoformat()
-    source = "private" if mode == "reflect" else "loop"
     ingress_port = cfg.get("INGRESS_PORT") or "8099"
-    web_ui_status("thinking", source, ingress_port, run=run_subprocess)
     try:
-        context = build_loop_prompt_context(cfg, mode, paths, run=run_subprocess)
+        context = build_loop_prompt_context(cfg, requested_mode, paths, run=run_subprocess)
+        source = "private" if context["mode"] == "reflect" else "loop"
+        web_ui_status("thinking", source, ingress_port, run=run_subprocess)
         facts_file = os.path.join(paths.tmp_dir, f"{context['mode']}_facts.json")
         try:
             os.remove(facts_file)
@@ -849,6 +861,8 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             environ=context["cfg"],
             content_blocks=content_blocks,
             facts_file=facts_file,
+            model="sonnet" if context["mode"] == "observe" else None,
+            response_schema=loop_schema(context["mode"]),
             run=run_subprocess,
         )
         parsed = parse_loop_response(response)
