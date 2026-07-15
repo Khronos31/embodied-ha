@@ -114,6 +114,52 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(envelope["message"]["content"][0]["text"], "user")
 
 
+class LoopPyPostprocessTests(unittest.TestCase):
+    def test_pending_proposal_requires_action_triplet(self):
+        payload = loop.pending_proposal_payload(
+            {
+                "proposal": "電気を消しましょうか",
+                "action": {"domain": "light", "service": "turn_off", "entity_id": "light.living"},
+            },
+            timestamp="2026-07-15T12:00:00+09:00",
+        )
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["proposal"], "電気を消しましょうか")
+
+        self.assertIsNone(loop.pending_proposal_payload({"proposal": "x", "action": {"domain": "light"}}, timestamp="t"))
+
+    def test_write_pending_proposal_and_speak_plan(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "pending_proposal.json"
+            payload = {
+                "timestamp": "t",
+                "proposal": "電気を消しましょうか",
+                "action": {"domain": "light", "service": "turn_off", "entity_id": "light.living"},
+            }
+            self.assertTrue(loop.write_pending_proposal(path, payload))
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["proposal"], "電気を消しましょうか")
+
+        plan = loop.loop_speak_plan({"_parse_ok": True, "speak": "あとで見ます"}, payload)
+        self.assertEqual(plan["tts"], "電気を消しましょうか")
+        self.assertEqual(plan["say"], "あとで見ます")
+
+    def test_first_speaker_room_supports_list_and_dict_shapes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            prefs.write_text(json.dumps({"speakers": [{"room": "study"}]}), encoding="utf-8")
+            self.assertEqual(loop.first_speaker_room(prefs), "study")
+            prefs.write_text(json.dumps({"speakers": {"living": {"type": "tcp"}}}), encoding="utf-8")
+            self.assertEqual(loop.first_speaker_room(prefs), "living")
+
+    def test_append_loop_chat_log_uses_loop_jsonl_shape(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "chat_log.jsonl"
+            loop.append_loop_chat_log(path, timestamp="t", source="reflect", claude="考えています")
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(rows, [{"timestamp": "t", "source": "reflect", "claude": "考えています", "user": None}])
+
+
 class LoopPyPersistenceTests(unittest.TestCase):
     def read_jsonl(self, path: Path) -> list[dict]:
         if not path.exists():

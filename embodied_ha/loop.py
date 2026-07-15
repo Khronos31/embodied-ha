@@ -333,6 +333,65 @@ def persist_loop_introspection(
     return True
 
 
+def pending_proposal_payload(parsed: dict[str, Any], *, timestamp: str) -> dict[str, Any] | None:
+    proposal = parsed.get("proposal")
+    action = parsed.get("action") or {}
+    if proposal and isinstance(action, dict) and action.get("domain") and action.get("service") and action.get("entity_id"):
+        return {"timestamp": timestamp, "proposal": proposal, "action": action}
+    return None
+
+
+def write_pending_proposal(path: str | os.PathLike[str], payload: dict[str, Any] | None) -> bool:
+    if not payload:
+        return False
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+    return True
+
+
+def first_speaker_room(prefs_file: str | os.PathLike[str]) -> str:
+    try:
+        with open(prefs_file, encoding="utf-8") as fh:
+            prefs = json.load(fh)
+    except Exception:
+        return ""
+    speakers = prefs.get("speakers", []) if isinstance(prefs, dict) else []
+    if isinstance(speakers, list):
+        for speaker in speakers:
+            if isinstance(speaker, dict) and speaker.get("room"):
+                return str(speaker.get("room") or "")
+        return ""
+    if isinstance(speakers, dict):
+        for key in speakers:
+            return str(key)
+    return ""
+
+
+def loop_speak_plan(parsed: dict[str, Any], pending_payload: dict[str, Any] | None) -> dict[str, str]:
+    state = loop_introspection_state(parsed)
+    proposal = str(pending_payload.get("proposal") or "") if pending_payload else ""
+    return {
+        "tts": proposal,
+        "say": state["SAY"],
+    }
+
+
+def append_loop_chat_log(
+    path: str | os.PathLike[str],
+    *,
+    timestamp: str,
+    source: str,
+    claude: str,
+) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    row = {"timestamp": timestamp, "source": source, "claude": claude, "user": None}
+    with out.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def main() -> None:
     raise SystemExit("loop.py migration is not wired yet; daemon.py still runs loop.sh")
 
