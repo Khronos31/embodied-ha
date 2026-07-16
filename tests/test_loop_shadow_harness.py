@@ -1,6 +1,4 @@
-import copy
 import fcntl
-import hashlib
 import json
 import os
 import shutil
@@ -15,7 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "embodied_ha"))
 
-from loop_shadow_harness import RUNTIME_FILES, assert_same_side_effects, capture_runtime_side_effects  # noqa: E402
+from loop_shadow_harness import (  # noqa: E402
+    RUNTIME_FILES,
+    assert_same_side_effects,
+    capture_runtime_side_effects,
+    comparable_wiring_trace,
+    make_runtime,
+    normalize_known_wiring_differences,
+    run_shadow_command,
+    summarize_wiring_delta,
+)
 
 import loop  # noqa: E402
 
@@ -102,512 +109,6 @@ class LoopShadowProcessParityTests(unittest.TestCase):
         *(f"{mode}_parsed.json" for mode in modes),
     )
 
-    def write_executable(self, path: Path, text: str) -> None:
-        path.write_text(text, encoding="utf-8")
-        path.chmod(0o755)
-
-    def install_fixture_bins(self, bin_dir: Path) -> None:
-        self.write_executable(
-            bin_dir / "python3",
-            """#!__REAL_PYTHON__
-import json
-import os
-import subprocess
-import sys
-
-REAL_PYTHON = __REAL_PYTHON_JSON__
-
-
-def append_trace(name, row):
-    trace_dir = os.environ.get("EHA_SHADOW_TRACE_DIR", "")
-    if not trace_dir:
-        return
-    os.makedirs(trace_dir, exist_ok=True)
-    with open(os.path.join(trace_dir, name), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\\n")
-
-
-args = sys.argv[1:]
-is_mcp_config = bool(args and args[0].endswith("mcp-config.py"))
-result = subprocess.run([REAL_PYTHON, *args])
-
-if is_mcp_config:
-    output_path = args[1] if len(args) > 1 else ""
-    generated_config = None
-    generated_config_text = None
-    if output_path and os.path.exists(output_path):
-        try:
-            with open(output_path, encoding="utf-8") as fh:
-                generated_config_text = fh.read()
-            try:
-                generated_config = json.loads(generated_config_text)
-            except Exception:
-                generated_config = None
-        except Exception as exc:
-            generated_config_text = f"<read failed: {exc}>"
-    append_trace(
-        "mcp_config_calls.jsonl",
-        {
-            "argv": ["python3", *args],
-            "output_path": output_path,
-            "servers": args[2:],
-            "returncode": result.returncode,
-            "generated_config": generated_config,
-            "generated_config_text": generated_config_text,
-        },
-    )
-
-sys.exit(result.returncode)
-""".replace("__REAL_PYTHON_JSON__", json.dumps(sys.executable)).replace("__REAL_PYTHON__", sys.executable),
-        )
-        self.write_executable(
-            bin_dir / "date",
-            """#!/usr/bin/env python3
-import sys
-arg = sys.argv[1] if len(sys.argv) > 1 else ""
-if arg == "-Iseconds":
-    print("2026-07-15T12:00:00+09:00")
-elif arg == "+%-H":
-    print("12")
-elif arg == "+%Y-%m-%d":
-    print("2026-07-15")
-else:
-    print("2026-07-15T12:00:00+09:00")
-""",
-        )
-        self.write_executable(
-            bin_dir / "loops",
-            """#!/usr/bin/env python3
-import sys
-if len(sys.argv) > 1 and sys.argv[1] == "list-json":
-    print("[]")
-else:
-    print("なし")
-""",
-        )
-        self.write_executable(
-            bin_dir / "curl",
-            """#!/usr/bin/env python3
-import os
-import sys
-args = sys.argv[1:]
-target = args[-1] if args else ""
-if "/api/status" in target:
-    sys.exit(0)
-if "/api/camera_proxy/" in target or "/api/frame.jpeg" in target:
-    os.write(1, b"JPEGFIXTURE" * 20)
-    sys.exit(0)
-if target.endswith("/template"):
-    print("# sensors\\nfixture sensor: on")
-    sys.exit(0)
-sys.exit(0)
-""",
-        )
-        self.write_executable(
-            bin_dir / "claude-fixture",
-            """#!/usr/bin/env python3
-import json
-import os
-import sys
-
-argv = sys.argv[1:]
-stdin = sys.stdin.read()
-
-def append_trace(name, row):
-    trace_dir = os.environ.get("EHA_SHADOW_TRACE_DIR", "")
-    if not trace_dir:
-        return
-    os.makedirs(trace_dir, exist_ok=True)
-    with open(os.path.join(trace_dir, name), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\\n")
-
-def value_after(flag, default=""):
-    try:
-        return argv[argv.index(flag) + 1]
-    except Exception:
-        return default
-
-model = value_after("--model", "")
-has_schema = "--json-schema" in argv
-has_tools = "--allowedTools" in argv
-allowed_tools = value_after("--allowedTools", "")
-mcp_config_path = value_after("--mcp-config", "")
-mcp_config = None
-mcp_config_text = None
-if mcp_config_path and os.path.exists(mcp_config_path):
-    try:
-        with open(mcp_config_path, encoding="utf-8") as fh:
-            mcp_config_text = fh.read()
-        try:
-            mcp_config = json.loads(mcp_config_text)
-        except Exception:
-            mcp_config = None
-    except Exception as exc:
-        mcp_config_text = f"<read failed: {exc}>"
-actor = os.environ.get("EHA_ACTOR", "")
-mode = os.environ.get("MODE", "")
-if has_schema:
-    try:
-        schema = json.loads(value_after("--json-schema", "{}"))
-        mode = schema.get("title", mode).replace("loop_", "").replace("_response", "") or mode
-    except Exception:
-        pass
-
-append_trace(
-    "claude_calls.jsonl",
-    {
-        "argv": sys.argv,
-        "allowed_tools": allowed_tools,
-        "mcp_config_path": mcp_config_path,
-        "mcp_config": mcp_config,
-        "mcp_config_text": mcp_config_text,
-        "model": model,
-        "mode": mode,
-        "has_schema": has_schema,
-        "actor": actor,
-        "cwd": os.getcwd(),
-    },
-)
-
-if model == "haiku":
-    text = f"watch model={model};schema={int(has_schema)};tools={int(has_tools)};actor={actor or 'unset'}"
-    print(json.dumps({"type": "result", "result": text}, ensure_ascii=False))
-    sys.exit(0)
-
-watch = ""
-try:
-    envelope = json.loads(stdin or "{}")
-    blocks = envelope.get("message", {}).get("content", [])
-    texts = [str(block.get("text", "")) for block in blocks if isinstance(block, dict)]
-    joined = "\\n".join(texts)
-    marker = "watch model="
-    if marker in joined:
-        watch = joined[joined.index(marker):].splitlines()[0]
-except Exception:
-    pass
-
-private = (
-    f"mode={mode};model={model};actor={actor or 'unset'};"
-    f"schema={int(has_schema)};tools={int(has_tools)};watch={watch or 'none'}"
-)
-payload = {
-    "type": "result",
-    "structured_output": {
-        "topic": "fixture",
-        "private": private,
-        "emotion": "calm",
-        "speak": f"say {mode}",
-        "proposal": None,
-        "feature_presented": None,
-    },
-}
-print(json.dumps(payload, ensure_ascii=False))
-""",
-        )
-
-    def make_runtime(self, root: Path, name: str) -> tuple[Path, dict[str, str]]:
-        run_root = root / name
-        data_dir = run_root / "data"
-        log_dir = run_root / "log"
-        tmp_dir = run_root / "tmp"
-        workdir = run_root / "workdir"
-        home = run_root / "home"
-        bin_dir = run_root / "bin"
-        trace_dir = run_root / "trace"
-        for path in (data_dir, log_dir, tmp_dir, workdir, home, bin_dir, trace_dir):
-            path.mkdir(parents=True, exist_ok=True)
-        self.install_fixture_bins(bin_dir)
-
-        prefs = data_dir / "preferences.json"
-        prefs.write_text(
-            json.dumps(
-                {
-                    "speakers": [{"room": "living"}],
-                    "cameras": [{"ha_entity": "camera.fixture", "label": "Fixture"}],
-                    "sensors": {"groups": []},
-                    "policies": [],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        character = data_dir / "character.md"
-        character.write_text("# character\n", encoding="utf-8")
-        body_location = data_dir / "body_location.json"
-        body_location.write_text(json.dumps({"current_entity": ""}), encoding="utf-8")
-        (log_dir / ".last_daybook").write_text(self.today, encoding="utf-8")
-
-        path = f"{bin_dir}:{os.environ.get('PATH', '')}"
-        env = {
-            **os.environ,
-            "PATH": path,
-            "HOME": str(home),
-            "EHA_TOOLS_PATH": str(bin_dir),
-            "CLAUDE_BIN": str(bin_dir / "claude-fixture"),
-            "CLAUDE_CONFIG_DIR": str(home / "claude"),
-            "EHA_DATA_DIR": str(data_dir),
-            "EHA_LOG_DIR": str(log_dir),
-            "EHA_TMP_DIR": str(tmp_dir),
-            "EHA_ANOMALY_STATE_FILE": str(log_dir / "anomaly_state.json"),
-            "EHA_PREFS_FILE": str(prefs),
-            "EHA_CHARACTER_FILE": str(character),
-            "EHA_BODY_LOCATION_FILE": str(body_location),
-            "EHA_CLAUDE_CWD": str(workdir),
-            "EHA_SHADOW_RUN_ROOT": str(run_root),
-            "EHA_SHADOW_TRACE_DIR": str(trace_dir),
-            "EHA_NEXT_LISTEN_REQUEST_FILE": str(data_dir / "runtime" / "next_listen_request.json"),
-            "EHA_NEXT_LISTEN_LOG_FILE": str(log_dir / "next_listen_log.jsonl"),
-            "EHA_ACTIVE_LISTEN_LOG_FILE": str(log_dir / "active_listen_log.jsonl"),
-            "EHA_TEST_TIMESTAMP": self.timestamp,
-            "EHA_TEST_HOUR": "12",
-            "EHA_SESSION_MODEL": "opus",
-            "HA_URL": "http://fixture.local/api",
-            "SUPERVISOR_TOKEN": "fixture-token",
-            "INGRESS_PORT": "18099",
-            "RESIDENT": "ユーザー",
-        }
-        env.pop("EHA_SESSION_BIN", None)
-        return log_dir, env
-
-    def read_jsonl(self, path: Path) -> list[dict]:
-        if not path.exists():
-            return []
-        rows = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                rows.append(json.loads(line))
-        return rows
-
-    def normalize_trace_value(self, value, env: dict[str, str]):
-        run_root = env["EHA_SHADOW_RUN_ROOT"]
-        if isinstance(value, str):
-            return value.replace(run_root, "<RUN_ROOT>")
-        if isinstance(value, list):
-            return [self.normalize_trace_value(item, env) for item in value]
-        if isinstance(value, dict):
-            return {key: self.normalize_trace_value(value[key], env) for key in sorted(value)}
-        return value
-
-    def capture_wiring_trace(self, env: dict[str, str]) -> dict[str, list[dict]]:
-        trace_dir = Path(env["EHA_SHADOW_TRACE_DIR"])
-        trace = {
-            "claude_calls": self.read_jsonl(trace_dir / "claude_calls.jsonl"),
-            "mcp_config_calls": self.read_jsonl(trace_dir / "mcp_config_calls.jsonl"),
-        }
-        return self.normalize_trace_value(trace, env)
-
-    def comparable_wiring_trace(self, env: dict[str, str]) -> dict[str, list[dict]]:
-        trace = self.capture_wiring_trace(env)
-        for call in trace["claude_calls"]:
-            call.pop("mcp_config_text", None)
-        for call in trace["mcp_config_calls"]:
-            call.pop("generated_config_text", None)
-        return trace
-
-    def replace_flag_value(self, argv: list, flag: str, value) -> bool:
-        try:
-            index = argv.index(flag)
-        except ValueError:
-            return False
-        if index + 1 >= len(argv):
-            return False
-        argv[index + 1] = value
-        return True
-
-    def remove_flag_pair(self, argv: list, flag: str) -> tuple[list, list | None]:
-        try:
-            index = argv.index(flag)
-        except ValueError:
-            return argv[:], None
-        if index + 1 >= len(argv):
-            return argv[:], None
-        return argv[:index] + argv[index + 2:], [argv[index], argv[index + 1]]
-
-    def normalize_allowed_tools_order(self, sh_argv: list, py_argv: list) -> list:
-        # ① 2026-07-16 user decision: allow only argv ordering drift caused by
-        # --allowedTools. That flag is planned to disappear in the invoke-agent
-        # Phase 2 cutover, and moving the identical flag/value pair is not
-        # considered behaviorally meaningful. Any other flag ordering drift must
-        # still remain RED.
-        sh_without_tools, sh_tools = self.remove_flag_pair(sh_argv, "--allowedTools")
-        py_without_tools, py_tools = self.remove_flag_pair(py_argv, "--allowedTools")
-        if sh_tools is not None and sh_tools == py_tools and sh_without_tools == py_without_tools:
-            return py_argv[:]
-        return sh_argv
-
-    def normalize_one_extra_run_root_bin(self, sh_path: str, py_path: str) -> str:
-        if sh_path == py_path:
-            return sh_path
-        marker = "<RUN_ROOT>/bin"
-        sh_parts = sh_path.split(":")
-        py_count = py_path.split(":").count(marker)
-        if sh_parts.count(marker) != py_count + 1 or py_count != 2:
-            return sh_path
-        for index, part in enumerate(sh_parts):
-            if part != marker:
-                continue
-            candidate = ":".join(sh_parts[:index] + sh_parts[index + 1:])
-            if candidate == py_path:
-                return candidate
-        return sh_path
-
-    def normalize_mcp_path_counts(self, sh_config: dict | None, py_config: dict | None) -> None:
-        # ③ 2026-07-16 user decision: loop.py's two EHA_TOOLS_PATH occurrences
-        # are the intended current value. loop.sh has one extra global PATH
-        # export before constructing Claude/MCP env. Keep this as a narrow
-        # whitelist: only remove one extra <RUN_ROOT>/bin when the resulting PATH
-        # exactly equals loop.py's PATH. TODO: separately verify whether the
-        # remaining two occurrences can be reduced to one after checking the
-        # inherited PATH from daemon.py/run.sh.
-        sh_servers = (sh_config or {}).get("mcpServers") or {}
-        py_servers = (py_config or {}).get("mcpServers") or {}
-        for name, sh_server in sh_servers.items():
-            py_server = py_servers.get(name)
-            if not isinstance(sh_server, dict) or not isinstance(py_server, dict):
-                continue
-            sh_env = sh_server.get("env") or {}
-            py_env = py_server.get("env") or {}
-            if "PATH" not in sh_env or "PATH" not in py_env:
-                continue
-            sh_env["PATH"] = self.normalize_one_extra_run_root_bin(sh_env["PATH"], py_env["PATH"])
-
-    def normalize_known_wiring_differences(self, sh_trace: dict, py_trace: dict) -> tuple[dict, dict]:
-        sh_trace = copy.deepcopy(sh_trace)
-        py_trace = copy.deepcopy(py_trace)
-
-        for index, sh_call in enumerate(sh_trace["claude_calls"]):
-            if index >= len(py_trace["claude_calls"]):
-                continue
-            py_call = py_trace["claude_calls"][index]
-            sh_argv = sh_call.get("argv", [])
-            py_argv = py_call.get("argv", [])
-
-            # ② 2026-07-16 user decision: loop.py's real newline system prompt is
-            # correct. loop.sh has long passed literal backslash+n text because
-            # Bash double quotes do not unescape \n. Do not reproduce that bug in
-            # loop.py; normalize the loop.sh trace to the loop.py value for this
-            # one flag only.
-            try:
-                sh_prompt = sh_argv[sh_argv.index("--append-system-prompt") + 1]
-                py_prompt = py_argv[py_argv.index("--append-system-prompt") + 1]
-            except (ValueError, IndexError):
-                sh_prompt = py_prompt = None
-            if isinstance(sh_prompt, str) and isinstance(py_prompt, str) and "\\n" in sh_prompt and "\\n" not in py_prompt:
-                self.replace_flag_value(sh_argv, "--append-system-prompt", py_prompt)
-
-            sh_call["argv"] = self.normalize_allowed_tools_order(sh_argv, py_argv)
-            self.normalize_mcp_path_counts(sh_call.get("mcp_config"), py_call.get("mcp_config"))
-
-        for index, sh_call in enumerate(sh_trace["mcp_config_calls"]):
-            if index >= len(py_trace["mcp_config_calls"]):
-                continue
-            self.normalize_mcp_path_counts(
-                sh_call.get("generated_config"),
-                py_trace["mcp_config_calls"][index].get("generated_config"),
-            )
-
-        return sh_trace, py_trace
-
-    def summarize_argv(self, argv: list) -> list:
-        value_flags = {
-            "--model",
-            "--input-format",
-            "--output-format",
-            "--allowedTools",
-            "--append-system-prompt",
-            "--json-schema",
-            "--mcp-config",
-        }
-        summary = []
-        i = 0
-        while i < len(argv):
-            item = argv[i]
-            if item in value_flags and i + 1 < len(argv):
-                value = argv[i + 1]
-                if item == "--append-system-prompt":
-                    value = {
-                        "len": len(value),
-                        "newlines": value.count("\n"),
-                        "literal_backslash_n": value.count("\\n"),
-                        "sha12": hashlib.sha256(value.encode()).hexdigest()[:12],
-                    }
-                elif item == "--json-schema":
-                    try:
-                        parsed = json.loads(value)
-                        value = {
-                            "title": parsed.get("title"),
-                            "required": parsed.get("required"),
-                        }
-                    except Exception:
-                        value = {
-                            "len": len(value),
-                            "sha12": hashlib.sha256(value.encode()).hexdigest()[:12],
-                        }
-                elif item == "--allowedTools":
-                    value = [part for part in value.split(",") if part]
-                summary.append([item, value])
-                i += 2
-            else:
-                summary.append(item)
-                i += 1
-        return summary
-
-    def summarize_mcp_config(self, config: dict | None) -> dict:
-        servers = (config or {}).get("mcpServers") or {}
-        path_counts = {}
-        for name, server in servers.items():
-            path_value = (server.get("env") or {}).get("PATH", "")
-            path_counts[name] = path_value.count("<RUN_ROOT>/bin")
-        return {
-            "server_names": list(servers),
-            "path_run_root_bin_counts": path_counts,
-        }
-
-    def summarize_wiring_delta(self, left: dict, right: dict) -> dict:
-        summary: dict[str, list | dict] = {
-            "claude_call_count": [len(left["claude_calls"]), len(right["claude_calls"])],
-            "mcp_config_call_count": [len(left["mcp_config_calls"]), len(right["mcp_config_calls"])],
-            "claude_call_deltas": [],
-            "mcp_config_call_deltas": [],
-        }
-        for index in range(max(len(left["claude_calls"]), len(right["claude_calls"]))):
-            l_call = left["claude_calls"][index] if index < len(left["claude_calls"]) else {}
-            r_call = right["claude_calls"][index] if index < len(right["claude_calls"]) else {}
-            if l_call == r_call:
-                continue
-            summary["claude_call_deltas"].append(
-                {
-                    "index": index,
-                    "model": [l_call.get("model"), r_call.get("model")],
-                    "actor": [l_call.get("actor"), r_call.get("actor")],
-                    "mode": [l_call.get("mode"), r_call.get("mode")],
-                    "allowed_tools_equal": l_call.get("allowed_tools") == r_call.get("allowed_tools"),
-                    "mcp_config_path": [l_call.get("mcp_config_path"), r_call.get("mcp_config_path")],
-                    "mcp_config": [
-                        self.summarize_mcp_config(l_call.get("mcp_config")),
-                        self.summarize_mcp_config(r_call.get("mcp_config")),
-                    ],
-                    "argv": [self.summarize_argv(l_call.get("argv", [])), self.summarize_argv(r_call.get("argv", []))],
-                }
-            )
-        for index in range(max(len(left["mcp_config_calls"]), len(right["mcp_config_calls"]))):
-            l_call = left["mcp_config_calls"][index] if index < len(left["mcp_config_calls"]) else {}
-            r_call = right["mcp_config_calls"][index] if index < len(right["mcp_config_calls"]) else {}
-            if l_call == r_call:
-                continue
-            summary["mcp_config_call_deltas"].append(
-                {
-                    "index": index,
-                    "argv": [l_call.get("argv"), r_call.get("argv")],
-                    "servers": [l_call.get("servers"), r_call.get("servers")],
-                    "generated_config": [
-                        self.summarize_mcp_config(l_call.get("generated_config")),
-                        self.summarize_mcp_config(r_call.get("generated_config")),
-                    ],
-                }
-            )
-        return summary
-
     def assert_fixture_anomaly_state_file(self, env: dict[str, str]) -> None:
         anomaly_file = Path(env["EHA_ANOMALY_STATE_FILE"])
 
@@ -674,26 +175,108 @@ print(json.dumps(payload, ensure_ascii=False))
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def run_loop_sh(self, env: dict[str, str], mode: str, cwd: Path) -> subprocess.CompletedProcess:
-        run_env = {**env, "MODE": mode}
-        return self.run_with_shared_tmp_guard(
+        return run_shadow_command(
             ["bash", str(ROOT / "embodied_ha" / "loop.sh")],
             cwd=cwd,
-            env=run_env,
+            env=env,
+            extra_env={"MODE": mode},
+            runner=self.run_with_shared_tmp_guard,
         )
 
     def run_loop_py(self, env: dict[str, str], mode: str, cwd: Path) -> subprocess.CompletedProcess:
-        return self.run_with_shared_tmp_guard(
+        return run_shadow_command(
             ["python3", str(ROOT / "embodied_ha" / "loop.py"), "--mode", mode],
             cwd=cwd,
             env=env,
+            runner=self.run_with_shared_tmp_guard,
         )
+
+    def run_direct_invoke_agent_from_loop_trace(
+        self,
+        env: dict[str, str],
+        trace: dict,
+        *,
+        cwd: Path,
+        drop_tool: str | None = None,
+    ) -> subprocess.CompletedProcess:
+        direct_call = trace["claude_calls"][0]
+        direct_argv = direct_call["argv"]
+        allowed_tools = self.flag_value(direct_argv, "--allowedTools")
+        builtins, mcp_tools = self.split_allowed_tools(allowed_tools)
+        if drop_tool is not None:
+            builtins = [item for item in builtins if item != drop_tool]
+            mcp_tools = [item for item in mcp_tools if item != drop_tool]
+
+        cmd = [
+            "bash",
+            str(ROOT / "embodied_ha" / "invoke-agent.sh"),
+            "--model",
+            "default",
+            "--append-system-prompt",
+            self.flag_value(direct_argv, "--append-system-prompt"),
+            "--json-schema",
+            self.flag_value(direct_argv, "--json-schema"),
+        ]
+        if builtins:
+            cmd += ["--allowed-builtins", ",".join(builtins)]
+        if mcp_tools:
+            cmd += ["--allowed-mcp-tools", ",".join(mcp_tools)]
+            cmd += ["--mcp-servers", " ".join(trace["mcp_config_calls"][0]["servers"])]
+        cmd.append("fixture prompt")
+
+        return run_shadow_command(
+            cmd,
+            cwd=cwd,
+            env=env,
+            extra_env={
+                "EHA_ACTOR": direct_call.get("actor") or "loop",
+                "EHA_CLAUDE_MODEL_DEFAULT": direct_call.get("model") or "opus",
+            },
+        )
+
+    def flag_value(self, argv: list, flag: str) -> str:
+        try:
+            return argv[argv.index(flag) + 1]
+        except (ValueError, IndexError):
+            return ""
+
+    def split_allowed_tools(self, allowed_tools: str) -> tuple[list[str], list[str]]:
+        items = [item for item in allowed_tools.split(",") if item]
+        builtins = [item for item in items if not item.startswith("mcp__")]
+        mcp_tools = [item for item in items if item.startswith("mcp__")]
+        return builtins, mcp_tools
+
+    def allowed_tool_tokens(self, call: dict) -> set[str]:
+        allowed_tools = call.get("allowed_tools") or self.flag_value(call.get("argv", []), "--allowedTools")
+        return {item for item in allowed_tools.split(",") if item}
+
+    def assert_allowed_tools_token_sets_match(self, old_trace: dict, new_trace: dict) -> None:
+        try:
+            old_call = old_trace["claude_calls"][0]
+            new_call = new_trace["claude_calls"][0]
+        except IndexError as exc:
+            raise AssertionError(summarize_wiring_delta(old_trace, new_trace)) from exc
+
+        old_tokens = self.allowed_tool_tokens(old_call)
+        new_tokens = self.allowed_tool_tokens(new_call)
+        if old_tokens != new_tokens:
+            raise AssertionError(
+                json.dumps(
+                    {
+                        "allowed_tools": [sorted(old_tokens), sorted(new_tokens)],
+                        "trace_delta": summarize_wiring_delta(old_trace, new_trace),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
 
     def test_loop_sh_and_loop_py_side_effects_match_for_all_modes(self):
         for mode in self.modes:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
-                sh_log, sh_env = self.make_runtime(root, "loop-sh")
-                py_log, py_env = self.make_runtime(root, "loop-py")
+                sh_log, sh_env = make_runtime(root, "loop-sh")
+                py_log, py_env = make_runtime(root, "loop-py")
                 self.assert_fixture_anomaly_state_file(sh_env)
                 self.assert_fixture_anomaly_state_file(py_env)
 
@@ -712,21 +295,21 @@ print(json.dumps(payload, ensure_ascii=False))
         for mode in self.modes:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
-                _, sh_env = self.make_runtime(root, "loop-sh")
-                _, py_env = self.make_runtime(root, "loop-py")
+                _, sh_env = make_runtime(root, "loop-sh")
+                _, py_env = make_runtime(root, "loop-py")
 
                 sh = self.run_loop_sh(sh_env, mode, root)
                 py = self.run_loop_py(py_env, mode, root)
 
                 self.assertEqual(sh.returncode, 0, sh.stderr)
                 self.assertEqual(py.returncode, 0, py.stderr)
-                sh_trace = self.comparable_wiring_trace(sh_env)
-                py_trace = self.comparable_wiring_trace(py_env)
-                sh_trace, py_trace = self.normalize_known_wiring_differences(sh_trace, py_trace)
-                if sh_trace != py_trace:
+                old_trace = comparable_wiring_trace(sh_env)
+                new_trace = comparable_wiring_trace(py_env)
+                old_trace, new_trace = normalize_known_wiring_differences(old_trace, new_trace)
+                if old_trace != new_trace:
                     self.fail(
                         json.dumps(
-                            self.summarize_wiring_delta(sh_trace, py_trace),
+                            summarize_wiring_delta(old_trace, new_trace),
                             ensure_ascii=False,
                             indent=2,
                         )
@@ -739,8 +322,8 @@ print(json.dumps(payload, ensure_ascii=False))
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
-                _, sh_env = self.make_runtime(root, "loop-sh")
-                _, py_env = self.make_runtime(root, "loop-py")
+                _, sh_env = make_runtime(root, "loop-sh")
+                _, py_env = make_runtime(root, "loop-py")
 
                 sh = self.run_loop_sh(sh_env, "reflect", root)
                 self.assertEqual(sh.returncode, 0, sh.stderr)
@@ -751,6 +334,61 @@ print(json.dumps(payload, ensure_ascii=False))
                 self.assertEqual(dummy.read_text(encoding="utf-8"), "preserve\n")
         finally:
             dummy.unlink(missing_ok=True)
+
+    def test_invoke_agent_direct_shadow_harness_detects_matching_allowed_tools(self):
+        """Self-test for future caller cutovers: the generalized harness can compare final Claude tool sets.
+
+        This does not prove loop.py is wired through invoke-agent.sh; it only
+        proves a manually assembled invoke-agent.sh call can produce the same
+        claude-fixture allowedTools token set as the current direct loop.py path.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _, direct_env = make_runtime(root, "direct-loop-py")
+            _, invoke_env = make_runtime(root, "direct-invoke-agent")
+
+            direct = self.run_loop_py(direct_env, "web", root)
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            direct_trace = comparable_wiring_trace(direct_env)
+
+            invoked = self.run_direct_invoke_agent_from_loop_trace(invoke_env, direct_trace, cwd=root)
+            self.assertEqual(invoked.returncode, 0, invoked.stderr)
+            invoke_trace = comparable_wiring_trace(invoke_env)
+
+            self.assert_allowed_tools_token_sets_match(direct_trace, invoke_trace)
+
+    def test_invoke_agent_direct_shadow_harness_detects_broken_allowed_tools(self):
+        """Self-test for future caller cutovers: the generalized harness fails on meaningful tool drift.
+
+        This intentionally removes WebSearch from the manually assembled
+        invoke-agent.sh call. The expected AssertionError proves the comparison
+        is not a vacuous always-green check.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _, direct_env = make_runtime(root, "direct-loop-py")
+            _, invoke_env = make_runtime(root, "direct-invoke-agent-broken")
+
+            direct = self.run_loop_py(direct_env, "web", root)
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            direct_trace = comparable_wiring_trace(direct_env)
+            # This test's premise depends on WebSearch actually being part of
+            # web mode's allowed_tools; assert it explicitly so a future change
+            # to loop.py's mode_config() can't silently turn this into a
+            # vacuous always-green test (sol review, 2026-07-16).
+            self.assertIn("WebSearch", self.allowed_tool_tokens(direct_trace["claude_calls"][0]))
+
+            invoked = self.run_direct_invoke_agent_from_loop_trace(
+                invoke_env,
+                direct_trace,
+                cwd=root,
+                drop_tool="WebSearch",
+            )
+            self.assertEqual(invoked.returncode, 0, invoked.stderr)
+            invoke_trace = comparable_wiring_trace(invoke_env)
+
+            with self.assertRaises(AssertionError):
+                self.assert_allowed_tools_token_sets_match(direct_trace, invoke_trace)
 
 
 class LoopPyCutoverRegressionTests(unittest.TestCase):
