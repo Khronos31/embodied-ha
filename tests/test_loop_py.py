@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -158,6 +159,117 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors hacontrol")
         self.assertNotIn("--allowed-builtins", cmd)
 
+    def test_invoke_loop_claude_observe_haiku_uses_lite_model_and_content_json_file(self):
+        calls = []
+        seen_content_path = []
+        seen_content = []
+
+        class Result:
+            def __init__(self, stdout="", stderr=""):
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            content_arg = cmd[cmd.index("--content-json") + 1]
+            self.assertTrue(content_arg.startswith("@"))
+            content_path = content_arg[1:]
+            self.assertTrue(os.path.exists(content_path))
+            seen_content_path.append(content_path)
+            seen_content.append(json.loads(Path(content_path).read_text(encoding="utf-8")))
+            payload = "Fixture: clear"
+            return Result(stdout=payload)
+
+        content_blocks = [
+            {"type": "text", "text": "Fixture camera:"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "abc"}},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            response = loop.invoke_loop_claude(
+                user_prompt="watch",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="",
+                mcp_servers=[],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmpdir,
+                    "EHA_TMP_DIR": str(tmp / "tmp"),
+                },
+                model="haiku",
+                content_blocks=content_blocks,
+                response_schema=None,
+                run=fake_run,
+            )
+
+            self.assertEqual(response, "Fixture: clear")
+            self.assertEqual(seen_content, [content_blocks])
+            self.assertFalse(os.path.exists(seen_content_path[0]))
+
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[cmd.index("--model") + 1], "lite")
+        self.assertNotIn("--json-schema", cmd)
+        self.assertNotIn("--allowed-builtins", cmd)
+        self.assertNotIn("--allowed-mcp-tools", cmd)
+        self.assertNotIn("EHA_CLAUDE_MODEL_DEFAULT", kwargs["env"])
+
+    def test_invoke_loop_claude_observe_sonnet_uses_default_model_and_content_json_file(self):
+        calls = []
+        seen_content_path = []
+        seen_content = []
+
+        class Result:
+            def __init__(self, stdout="", stderr=""):
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            content_arg = cmd[cmd.index("--content-json") + 1]
+            self.assertTrue(content_arg.startswith("@"))
+            content_path = content_arg[1:]
+            self.assertTrue(os.path.exists(content_path))
+            seen_content_path.append(content_path)
+            seen_content.append(json.loads(Path(content_path).read_text(encoding="utf-8")))
+            payload = {"private": "見守った", "emotion": "calm", "speak": None}
+            return Result(stdout=json.dumps(payload, ensure_ascii=False))
+
+        content_blocks = [
+            {"type": "text", "text": "summary"},
+            {"type": "text", "text": "observe prompt"},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            response = loop.invoke_loop_claude(
+                user_prompt="observe prompt",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmpdir,
+                    "EHA_TMP_DIR": str(tmp / "tmp"),
+                },
+                model="sonnet",
+                content_blocks=content_blocks,
+                response_schema=loop.loop_schema("observe"),
+                run=fake_run,
+            )
+
+            self.assertEqual(json.loads(response)["private"], "見守った")
+            self.assertEqual(seen_content, [content_blocks])
+            self.assertFalse(os.path.exists(seen_content_path[0]))
+
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[cmd.index("--model") + 1], "default")
+        self.assertIn("--json-schema", cmd)
+        self.assertEqual(cmd[cmd.index("--content-json") + 1], f"@{seen_content_path[0]}")
+        self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
+        self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors")
+        self.assertNotIn("EHA_CLAUDE_MODEL_DEFAULT", kwargs["env"])
+
     def test_build_loop_claude_command_omits_empty_allowed_tools_and_absent_schema(self):
         cmd = loop.build_loop_claude_command(
             claude_bin="/bin/claude",
@@ -202,6 +314,7 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "CLAUDE_BIN": "/bin/claude",
                     "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
+                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
                 },
                 model="sonnet",
                 run=fake_run,
@@ -240,6 +353,7 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "EHA_PREFS_FILE": str(prefs),
                     "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
+                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
                 },
                 "projected_camera_source": "",
                 "user_prompt": "observe prompt",

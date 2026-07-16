@@ -12,6 +12,7 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -132,7 +133,7 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
 
 
 _DEFAULT_RESPONSE_SCHEMA = object()
-_DEFAULT_INVOKE_AGENT_LOOP_MODES = ("reflect", "web", "social", "explore")
+_DEFAULT_INVOKE_AGENT_LOOP_MODES = ("reflect", "web", "social", "explore", "observe")
 
 
 def invoke_agent_migrated_modes(environ: dict[str, str]) -> set[str]:
@@ -225,11 +226,12 @@ def build_invoke_agent_loop_command(
     *,
     script_dir: str,
     mode: str,
+    model_tier: str,
     allowed_tools: str,
     mcp_servers: list[str],
     system_prompt: str,
     user_prompt: str,
-    content_blocks: list[dict[str, Any]] | None = None,
+    content_json_path: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
 ) -> list[str]:
     """Build an invoke-agent.sh command for loop.py Claude-compatible modes."""
@@ -239,7 +241,7 @@ def build_invoke_agent_loop_command(
         "bash",
         os.path.join(script_dir, "invoke-agent.sh"),
         "--model",
-        "default",
+        model_tier,
         "--append-system-prompt",
         system_prompt,
     ]
@@ -251,10 +253,34 @@ def build_invoke_agent_loop_command(
         cmd += ["--mcp-servers", " ".join(mcp_servers)]
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
-    if content_blocks is not None:
-        cmd += ["--content-json", json.dumps(content_blocks, ensure_ascii=False)]
+    if content_json_path is not None:
+        cmd += ["--content-json", f"@{content_json_path}"]
     cmd.append(user_prompt)
     return cmd
+
+
+def _invoke_agent_model_tier(selected_model: str) -> tuple[str, str | None]:
+    if selected_model == "sonnet":
+        return "default", None
+    if selected_model == "haiku":
+        return "lite", None
+    return "default", selected_model
+
+
+def _write_invoke_agent_content_json(content_blocks: list[dict[str, Any]], env: dict[str, str], mode: str) -> str:
+    tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
+    os.makedirs(tmp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix=f"{mode}-content-", suffix=".json", dir=tmp_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(content_blocks, fh, ensure_ascii=False)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def invoke_loop_claude(
@@ -277,44 +303,56 @@ def invoke_loop_claude(
     claude_bin = env.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
     selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
     use_invoke_agent = mode in invoke_agent_migrated_modes(env)
-    if use_invoke_agent:
-        cmd = build_invoke_agent_loop_command(
-            script_dir=script_dir,
-            mode=mode,
-            allowed_tools=allowed_tools,
-            mcp_servers=mcp_servers,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            content_blocks=content_blocks,
-            response_schema=response_schema,
-        )
-        if selected_model != "sonnet":
-            env["EHA_CLAUDE_MODEL_DEFAULT"] = selected_model
-    else:
-        mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
-        cmd = build_loop_claude_command(
-            claude_bin=claude_bin,
-            model=selected_model,
-            mode=mode,
-            allowed_tools=allowed_tools,
-            system_prompt=system_prompt,
-            mcp_config=mcp_config,
-            response_schema=response_schema,
-        )
-    cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
-    run_kwargs: dict[str, Any] = {
-        "capture_output": True,
-        "text": True,
-        "cwd": cwd,
-        "env": env,
-    }
-    if not use_invoke_agent:
-        run_kwargs["input"] = build_message_envelope(user_prompt, content_blocks)
-    result = run(cmd, **run_kwargs)
-    if facts_file:
-        stream_text = result.stderr if use_invoke_agent else result.stdout
-        write_facts_file(facts_file, extract_facts_from_stream_text(stream_text))
-    return result.stdout if use_invoke_agent else stream_result_payload(result.stdout)
+    content_json_path = None
+    try:
+        if use_invoke_agent:
+            model_tier, model_override = _invoke_agent_model_tier(selected_model)
+            if content_blocks is not None:
+                content_json_path = _write_invoke_agent_content_json(content_blocks, env, mode)
+            cmd = build_invoke_agent_loop_command(
+                script_dir=script_dir,
+                mode=mode,
+                model_tier=model_tier,
+                allowed_tools=allowed_tools,
+                mcp_servers=mcp_servers,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                content_json_path=content_json_path,
+                response_schema=response_schema,
+            )
+            if model_override is not None:
+                env["EHA_CLAUDE_MODEL_DEFAULT"] = model_override
+        else:
+            mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
+            cmd = build_loop_claude_command(
+                claude_bin=claude_bin,
+                model=selected_model,
+                mode=mode,
+                allowed_tools=allowed_tools,
+                system_prompt=system_prompt,
+                mcp_config=mcp_config,
+                response_schema=response_schema,
+            )
+        cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+        run_kwargs: dict[str, Any] = {
+            "capture_output": True,
+            "text": True,
+            "cwd": cwd,
+            "env": env,
+        }
+        if not use_invoke_agent:
+            run_kwargs["input"] = build_message_envelope(user_prompt, content_blocks)
+        result = run(cmd, **run_kwargs)
+        if facts_file:
+            stream_text = result.stderr if use_invoke_agent else result.stdout
+            write_facts_file(facts_file, extract_facts_from_stream_text(stream_text))
+        return result.stdout if use_invoke_agent else stream_result_payload(result.stdout)
+    finally:
+        if content_json_path:
+            try:
+                os.unlink(content_json_path)
+            except OSError:
+                pass
 
 
 def loop_introspection_state(parsed: dict[str, Any]) -> dict[str, str]:
