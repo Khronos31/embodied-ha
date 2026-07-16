@@ -63,6 +63,7 @@ def _make_isolated_env(tmp, **overrides):
         "EHA_NEXT_LISTEN_REQUEST_FILE": str(next_listen_request_file),
         "CLAUDE_CONFIG_DIR": str(Path(tmp) / "claude-home"),
         "CLAUDE_BIN": "claude",
+        "EHA_INVOKE_AGENT_CHAT_PATHS": "",
         "MQTT_HOST": "",  # 空=publish無し(実MQTTブローカーに触れない)
         "INGRESS_PORT": "0",  # Web UI呼び出し先も隔離(実際のcurlは後述でモック)
     }

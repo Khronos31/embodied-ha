@@ -257,6 +257,151 @@ class BuildClaudeCommandTests(unittest.TestCase):
             self.assertIn("mcp__audio__speak", cmd[idx + 1])
 
 
+def _arg_after(cmd, flag):
+    return cmd[cmd.index(flag) + 1]
+
+
+class InvokeAgentChatPathTests(unittest.TestCase):
+    def test_default_migrates_normal_path(self):
+        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({}), {"normal"})
+
+    def test_empty_override_disables_migration(self):
+        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({"EHA_INVOKE_AGENT_CHAT_PATHS": ""}), set())
+
+    def test_command_splits_builtin_and_mcp_tools_for_chat(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+        )
+        self.assertEqual(cmd[:4], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh"), "--model", "default"])
+        self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
+
+        allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+        common_mcp_tools = {
+            item for item in chat_invoke._COMMON_TOOLS.split(",")
+            if item.startswith("mcp__")
+        }
+        self.assertTrue(common_mcp_tools.issubset(allowed_mcp_tools))
+        self.assertIn("mcp__audio__speak", allowed_mcp_tools)
+        self.assertNotIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+
+        self.assertEqual(
+            _arg_after(cmd, "--mcp-servers"),
+            "memory ha sociality hacontrol camera audio body sensors http lounge game song",
+        )
+        self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
+
+    def test_queued_listen_turn_stays_on_direct_path_by_default(self):
+        # sol reviewの指摘(2026-07-16): is_queued_listen=Trueのとき、"normal"が
+        # デフォルトで移行済みでもqueued listenは巻き込まれず旧経路(直接claude呼び出し)
+        # のままであることを確認する(--sound-file転送は増分5でまだ未実装のため)。
+        calls = []
+
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            payload = {"type": "result", "structured_output": {"reply": "queued reply"}}
+            return Result(stdout=json.dumps(payload, ensure_ascii=False))
+
+        response = chat_invoke.invoke_chat_claude(
+            chat_source="chat",
+            prompt="こんにちは",
+            prefix_blocks=None,
+            script_dir=str(EMBODIED_HA_DIR),
+            claude_env={},
+            cwd="/tmp",
+            claude_bin="/bin/claude",
+            is_queued_listen=True,
+            run=fake_run,
+        )
+
+        self.assertEqual(json.loads(response)["reply"], "queued reply")
+        self.assertEqual(len(calls), 1)
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[0], "/bin/claude")
+        self.assertNotIn("invoke-agent.sh", cmd[0] if cmd else "")
+        self.assertIn("input", kwargs)
+
+    def test_command_adds_voice_speaker_tool(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="voice",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+        )
+        allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+        self.assertIn("mcp__audio__speak", allowed_mcp_tools)
+        self.assertIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+        self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=True))
+
+    def test_prefix_blocks_are_written_as_content_json_and_removed(self):
+        captured = {}
+        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = "raw stream"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            path = Path(_arg_after(cmd, "--content-json")[1:])
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            captured["path"] = path
+            captured["content"] = json.loads(path.read_text(encoding="utf-8"))
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[image_block],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={"EHA_TMP_DIR": tmp},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertEqual(captured["content"], [image_block, {"type": "text", "text": "こんにちは"}])
+        self.assertFalse(captured["path"].exists())
+        self.assertNotIn("input", captured["kwargs"])
+        self.assertEqual(captured["kwargs"]["env"]["EHA_ACTOR"], "chat")
+        self.assertTrue(_arg_after(captured["cmd"], "--content-json").startswith("@"))
+
+    def test_without_prefix_blocks_omits_content_json(self):
+        captured = {}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return Result()
+
+        response = chat_invoke.invoke_chat_claude(
+            chat_source="chat",
+            prompt="こんにちは",
+            prefix_blocks=[],
+            script_dir=str(EMBODIED_HA_DIR),
+            claude_env={},
+            cwd="/tmp",
+            run=fake_run,
+        )
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertNotIn("--content-json", captured["cmd"])
+        self.assertNotIn("input", captured["kwargs"])
+
+
 class BuildMessageEnvelopeTests(unittest.TestCase):
     def test_no_prefix_blocks_yields_single_text_block(self):
         envelope = json.loads(chat_invoke.build_message_envelope("こんにちは"))
@@ -339,12 +484,40 @@ class ExtractResponseTextTests(unittest.TestCase):
 
 
 class AllowedToolsHttpPostTests(unittest.TestCase):
-    def test_http_post_is_present_in_allowed_tools(self):
-        # http_post自体の有効/無効はmcp-config.py(preferences.jsonのhttp_post_enabled)
-        # 側のMCPサーバー側ゲートで制御する。ここではClaude CLI側の--allowedToolsに
-        # 名前が載っていること(=許可リスト不足による「権限が無い」エラーにならないこと)
-        # だけを確認する。
-        self.assertIn("mcp__http__http_post", chat_invoke._COMMON_TOOLS)
+    # 仕様変更(2026-07-16、#14増分4の実CLI検証で発見・ゆの承認済み): 以前はhttp_postの
+    # 有効/無効判定をmcp-config.py側のMCPサーバーゲートのみに委ね、_COMMON_TOOLSは
+    # 無条件でhttp_postを含んでいた(下のtest_http_post_absent_from_common_toolsが示す通り)。
+    # Claude CLI旧経路の--allowedToolsはtool名の実在確認をしないため、これは無害だった。
+    # しかしinvoke-agent.sh新経路の--allowed-mcp-toolsはmcp-config.pyの厳格な存在検証を
+    # 通すため、http_post_enabled=falseの環境で「無条件に許可を申告しているが実際には
+    # 存在しないtool」としてfail-closedで即エラーになる。これを避けるため、caller側
+    # (_allowed_tools_for_chat_source)でもmcp-config.pyの_http_tools()と同じ条件を
+    # 再現するよう変更した。
+    def test_http_post_absent_from_common_tools(self):
+        self.assertNotIn("mcp__http__http_post", chat_invoke._COMMON_TOOLS)
+
+    def test_http_post_included_only_when_preference_enabled(self):
+        disabled = chat_invoke._allowed_tools_for_chat_source("chat", http_post_enabled=False)
+        enabled = chat_invoke._allowed_tools_for_chat_source("chat", http_post_enabled=True)
+
+        self.assertNotIn("mcp__http__http_post", disabled)
+        self.assertIn("mcp__http__http_post", enabled)
+
+    def test_read_http_post_enabled_mirrors_mcp_config_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            enabled_path = Path(tmp) / "enabled.json"
+            enabled_path.write_text(json.dumps({"http_post_enabled": True}), encoding="utf-8")
+            disabled_path = Path(tmp) / "disabled.json"
+            disabled_path.write_text(json.dumps({"http_post_enabled": False}), encoding="utf-8")
+            missing_key_path = Path(tmp) / "missing_key.json"
+            missing_key_path.write_text(json.dumps({}), encoding="utf-8")
+
+            self.assertTrue(chat_invoke._read_http_post_enabled(str(enabled_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(disabled_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(missing_key_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(Path(tmp) / "nonexistent.json")))
+            self.assertFalse(chat_invoke._read_http_post_enabled(None))
+            self.assertFalse(chat_invoke._read_http_post_enabled(""))
 
 
 if __name__ == "__main__":

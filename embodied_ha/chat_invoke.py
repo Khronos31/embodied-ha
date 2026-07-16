@@ -11,6 +11,8 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+from typing import Any
 
 from json_schemas import chat_schema
 from response_parse import stream_result_payload
@@ -348,7 +350,6 @@ _COMMON_TOOLS = (
     "mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,"
     "mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__resolve_reference,mcp__memory__list_episodes,mcp__memory__get_causal_chain,"
     "mcp__memory__loops_add,mcp__memory__loops_close,"
-    "mcp__camera__watch_media,mcp__audio__listen_media,"
     "mcp__sociality__get_relationship,mcp__sociality__update_relationship,"
     "mcp__sociality__get_narrative,mcp__sociality__append_narrative,"
     "mcp__sociality__get_social_state,mcp__sociality__update_social_state,"
@@ -362,7 +363,7 @@ _COMMON_TOOLS = (
     "mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
     "mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,"
     "mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,"
-    "mcp__http__http_get,mcp__http__http_post,"
+    "mcp__http__http_get,"
     "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
     "mcp__lounge__enqueue_lounge_post,mcp__lounge__read_lounge_queue,mcp__lounge__read_lounge_log,"
     "mcp__game__game_wiki6_start,mcp__game__game_wiki6_getlinks,mcp__game__game_wiki6_solve,"
@@ -370,6 +371,97 @@ _COMMON_TOOLS = (
     "mcp__song__record,"
     "Read"
 )
+
+_CHAT_MCP_SERVERS = (
+    "memory", "ha", "sociality", "hacontrol", "camera", "audio",
+    "body", "sensors", "http", "lounge", "game", "song",
+)
+
+_DEFAULT_INVOKE_AGENT_CHAT_PATHS = ("normal",)
+
+
+def invoke_agent_migrated_chat_paths(environ: dict[str, str]) -> set[str]:
+    """Return chat.py paths that should call Claude through invoke-agent.sh."""
+    raw = environ.get("EHA_INVOKE_AGENT_CHAT_PATHS")
+    if raw is None:
+        return set(_DEFAULT_INVOKE_AGENT_CHAT_PATHS)
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _read_http_post_enabled(prefs_file):
+    """Mirror mcp-config.py's _http_tools(): http_post is only an active tool
+    when preferences.json opts in. _COMMON_TOOLS must not claim it
+    unconditionally, or --allowed-mcp-tools validation dies whenever this
+    preference is off (2026-07-16, found via real-CLI smoke test)."""
+    if not prefs_file:
+        return False
+    try:
+        with open(prefs_file, encoding="utf-8") as fh:
+            prefs = json.load(fh)
+    except Exception:
+        return False
+    return bool(prefs.get("http_post_enabled")) if isinstance(prefs, dict) else False
+
+
+def _allowed_tools_for_chat_source(chat_source, *, http_post_enabled=False):
+    allowed = _COMMON_TOOLS
+    if http_post_enabled:
+        allowed += ",mcp__http__http_post"
+    if chat_source == "voice":
+        return allowed + ",mcp__audio__speak,mcp__audio__use_device_speaker"
+    return allowed + ",mcp__audio__speak"
+
+
+def _split_allowed_tools_for_invoke_agent(allowed_tools: str) -> tuple[str, str]:
+    items = [item.strip() for item in allowed_tools.split(",") if item.strip()]
+    builtins = [item for item in items if not item.startswith("mcp__")]
+    mcp_tools = [item for item in items if item.startswith("mcp__")]
+    return ",".join(builtins), ",".join(mcp_tools)
+
+
+def _write_invoke_agent_content_json(content_blocks: list[dict[str, Any]], env: dict[str, str]) -> str:
+    tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
+    os.makedirs(tmp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="chat-normal-content-", suffix=".json", dir=tmp_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(content_blocks, fh, ensure_ascii=False)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def build_invoke_agent_chat_command(
+    *,
+    chat_source,
+    script_dir,
+    user_prompt,
+    content_json_path=None,
+    http_post_enabled=False,
+):
+    """Build an invoke-agent.sh command for chat.py's normal response path."""
+    allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
+    allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
+    cmd = [
+        "bash",
+        os.path.join(script_dir, "invoke-agent.sh"),
+        "--model",
+        "default",
+    ]
+    if allowed_builtins:
+        cmd += ["--allowed-builtins", allowed_builtins]
+    if allowed_mcp_tools:
+        cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
+    cmd += ["--mcp-servers", " ".join(_CHAT_MCP_SERVERS)]
+    cmd += ["--json-schema", json.dumps(chat_schema(voice=(chat_source == "voice")), ensure_ascii=False)]
+    if content_json_path is not None:
+        cmd += ["--content-json", f"@{content_json_path}"]
+    cmd.append(user_prompt)
+    return cmd
 
 
 def build_claude_command(
@@ -380,6 +472,7 @@ def build_claude_command(
     claude_bin="claude",
     mcp_config_path="/tmp/embodied-ha/mcp_chat.json",
     run_mcp_config=subprocess.run,
+    http_post_enabled=False,
 ):
     """claude CLIコマンド列を構築する（chat.sh:519-562と同一ロジック）。
 
@@ -396,14 +489,11 @@ def build_claude_command(
     if script_dir:
         run_mcp_config(
             ["python3", os.path.join(script_dir, "mcp-config.py"), mcp_config_path,
-             "memory", "ha", "sociality", "hacontrol", "camera", "audio", "body", "sensors", "http", "lounge", "game", "song"],
+             *_CHAT_MCP_SERVERS],
             env={**claude_env, "EHA_ACTOR": "chat"}, check=False,
         )
         if os.path.exists(mcp_config_path):
-            if chat_source == "voice":
-                allowed = _COMMON_TOOLS + ",mcp__audio__speak,mcp__audio__use_device_speaker"
-            else:
-                allowed = _COMMON_TOOLS + ",mcp__audio__speak"
+            allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
             cmd += ["--allowedTools", allowed, "--mcp-config", mcp_config_path]
     return cmd
 
@@ -414,6 +504,75 @@ def invoke_claude(cmd, msg, cwd, env, run=subprocess.run):
     テストではrun引数を差し替えて実CLIを呼ばずに検証する。
     """
     return run(cmd, input=msg, capture_output=True, text=True, cwd=cwd, env=env)
+
+
+def invoke_chat_claude(
+    *,
+    chat_source,
+    prompt,
+    script_dir,
+    claude_env,
+    cwd,
+    prefix_blocks=None,
+    claude_bin="claude",
+    is_queued_listen=False,
+    prefs_file=None,
+    run=subprocess.run,
+    run_mcp_config=subprocess.run,
+):
+    """Invoke the chat response path and return the final response text.
+
+    is_queued_listen distinguishes queued-listen turns from normal turns for
+    the EHA_INVOKE_AGENT_CHAT_PATHS migration toggle. --sound-file forwarding
+    for queued-listen turns is not implemented yet (#14増分5); until then,
+    "queued_listen" is deliberately absent from
+    _DEFAULT_INVOKE_AGENT_CHAT_PATHS so queued-listen turns keep using the
+    direct-claude path even after "normal" turns migrate.
+    """
+    env = dict(claude_env)
+    env.setdefault("CLAUDE_BIN", claude_bin)
+    chat_path = "queued_listen" if is_queued_listen else "normal"
+    use_invoke_agent = chat_path in invoke_agent_migrated_chat_paths(env)
+    http_post_enabled = _read_http_post_enabled(prefs_file)
+    content_json_path = None
+    try:
+        if use_invoke_agent:
+            env["EHA_ACTOR"] = "chat"
+            if prefix_blocks:
+                content_blocks = list(prefix_blocks)
+                content_blocks.append({"type": "text", "text": prompt})
+                content_json_path = _write_invoke_agent_content_json(content_blocks, env)
+            cmd = build_invoke_agent_chat_command(
+                chat_source=chat_source,
+                script_dir=script_dir,
+                user_prompt=prompt,
+                content_json_path=content_json_path,
+                http_post_enabled=http_post_enabled,
+            )
+            r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
+            return r.stdout
+
+        msg = build_message_envelope(prompt, prefix_blocks=prefix_blocks)
+        cmd = build_claude_command(
+            chat_source=chat_source,
+            script_dir=script_dir,
+            http_post_enabled=http_post_enabled,
+            claude_env=env,
+            claude_bin=claude_bin,
+            run_mcp_config=run_mcp_config,
+        )
+        if run is subprocess.run:
+            r = invoke_claude(cmd, msg, cwd, env)
+        else:
+            r = invoke_claude(cmd, msg, cwd, env, run=run)
+        log_tool_use_diagnostics(r.stdout)
+        return extract_response_text(r.stdout, r.stderr, r.returncode)
+    finally:
+        if content_json_path:
+            try:
+                os.unlink(content_json_path)
+            except OSError:
+                pass
 
 
 def log_tool_use_diagnostics(stdout, print_fn=None):

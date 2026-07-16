@@ -254,7 +254,6 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         recent_auditory_input=recent_auditory_input,
         user_msg=user_msg,
     )
-    msg = chat_invoke.build_message_envelope(prompt, prefix_blocks=projected_camera_blocks)
     # chat.shはprepare_queued_listen_session()の戻り値を`eval "$(export ...)"`で
     # シェル環境へ持ち込み、以降のClaude呼び出しの環境にも自然に継承されていた
     # (EHA_SESSION_BIN/EHA_SESSION_MODEL等、深聴きセッション限定のバックエンド
@@ -266,15 +265,18 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         if value is not None:
             env_with_queued_ctx[key] = str(value)
     claude_env = chat_invoke.build_claude_env(env_with_queued_ctx)
-    cmd = chat_invoke.build_claude_command(
-        chat_source=chat_source, script_dir=SCRIPT_DIR, claude_env=claude_env,
-        claude_bin=cfg.get("CLAUDE_BIN", "claude"),
-    )
     cwd = cfg.get("EHA_CLAUDE_CWD") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
-    r = chat_invoke.invoke_claude(cmd, msg, cwd, claude_env)
-
-    chat_invoke.log_tool_use_diagnostics(r.stdout)
-    response_text = chat_invoke.extract_response_text(r.stdout, r.stderr, r.returncode)
+    response_text = chat_invoke.invoke_chat_claude(
+        chat_source=chat_source,
+        prompt=prompt,
+        prefix_blocks=projected_camera_blocks,
+        script_dir=SCRIPT_DIR,
+        claude_env=claude_env,
+        cwd=cwd,
+        claude_bin=cfg.get("CLAUDE_BIN", "claude"),
+        is_queued_listen=bool(queued_listen_file),
+        prefs_file=prefs_file,
+    )
 
     if queued_listen_file:
         try:
