@@ -262,8 +262,8 @@ def _arg_after(cmd, flag):
 
 
 class InvokeAgentChatPathTests(unittest.TestCase):
-    def test_default_migrates_normal_path(self):
-        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({}), {"normal"})
+    def test_default_migrates_normal_and_queued_listen_paths(self):
+        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({}), {"normal", "queued_listen"})
 
     def test_empty_override_disables_migration(self):
         self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({"EHA_INVOKE_AGENT_CHAT_PATHS": ""}), set())
@@ -292,10 +292,11 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
 
-    def test_queued_listen_turn_stays_on_direct_path_by_default(self):
-        # sol reviewの指摘(2026-07-16): is_queued_listen=Trueのとき、"normal"が
-        # デフォルトで移行済みでもqueued listenは巻き込まれず旧経路(直接claude呼び出し)
-        # のままであることを確認する(--sound-file転送は増分5でまだ未実装のため)。
+    def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
+        # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで
+        # invoke-agent.sh経由に移行した。ただしsound_fileを渡さない場合は
+        # 通常のinvoke-agent.sh呼び出しとして--allowed-builtins/--allowed-mcp-toolsを
+        # 使い、--sound-fileは付かないことを確認する。
         calls = []
 
         class Result:
@@ -306,7 +307,7 @@ class InvokeAgentChatPathTests(unittest.TestCase):
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
-            payload = {"type": "result", "structured_output": {"reply": "queued reply"}}
+            payload = {"reply": "queued reply"}
             return Result(stdout=json.dumps(payload, ensure_ascii=False))
 
         response = chat_invoke.invoke_chat_claude(
@@ -324,9 +325,37 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertEqual(json.loads(response)["reply"], "queued reply")
         self.assertEqual(len(calls), 1)
         cmd, kwargs = calls[0]
-        self.assertEqual(cmd[0], "/bin/claude")
-        self.assertNotIn("invoke-agent.sh", cmd[0] if cmd else "")
-        self.assertIn("input", kwargs)
+        self.assertEqual(cmd[:2], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh")])
+        self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
+        self.assertNotIn("--sound-file", cmd)
+        self.assertNotIn("input", kwargs)
+
+    def test_command_for_sound_file_uses_agy_compatible_flags(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+            sound_file="/tmp/queued.wav",
+        )
+
+        self.assertEqual(_arg_after(cmd, "--sound-file"), "/tmp/queued.wav")
+        self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
+        self.assertNotIn("--allowed-builtins", cmd)
+        self.assertIn("--allowed-mcp-tools", cmd)
+        self.assertIn("--mcp-servers", cmd)
+
+    def test_command_rejects_sound_file_with_content_json(self):
+        # sol reviewの指摘(2026-07-17): run_agy()は--content-jsonで即死するため、
+        # 呼び出し側の不備でsound_file/content_json_pathが両方渡っても
+        # ビルダー自身が防御的にfail-loudすることを確認する。
+        with self.assertRaises(ValueError):
+            chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat",
+                script_dir=str(EMBODIED_HA_DIR),
+                user_prompt="こんにちは",
+                sound_file="/tmp/queued.wav",
+                content_json_path="/tmp/content.json",
+            )
 
     def test_command_adds_voice_speaker_tool(self):
         cmd = chat_invoke.build_invoke_agent_chat_command(
@@ -373,6 +402,38 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertNotIn("input", captured["kwargs"])
         self.assertEqual(captured["kwargs"]["env"]["EHA_ACTOR"], "chat")
         self.assertTrue(_arg_after(captured["cmd"], "--content-json").startswith("@"))
+
+    def test_sound_file_with_prefix_blocks_omits_content_json(self):
+        captured = {}
+        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[image_block],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={"EHA_TMP_DIR": tmp},
+                cwd="/tmp",
+                sound_file="/tmp/queued.wav",
+                run=fake_run,
+            )
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertIn("--sound-file", captured["cmd"])
+        self.assertNotIn("--content-json", captured["cmd"])
+        self.assertNotIn("--allowed-builtins", captured["cmd"])
 
     def test_without_prefix_blocks_omits_content_json(self):
         captured = {}

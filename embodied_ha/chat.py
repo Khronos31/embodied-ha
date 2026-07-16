@@ -275,6 +275,7 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         cwd=cwd,
         claude_bin=cfg.get("CLAUDE_BIN", "claude"),
         is_queued_listen=bool(queued_listen_file),
+        sound_file=queued_listen_file,
         prefs_file=prefs_file,
     )
 

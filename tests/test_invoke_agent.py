@@ -39,6 +39,18 @@ def write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+def write_silent_wav(path: Path, *, duration_sec: float = 0.2) -> None:
+    import wave
+
+    frame_rate = 16000
+    n_frames = int(frame_rate * duration_sec)
+    with wave.open(path.as_posix(), "wb") as fh:
+        fh.setnchannels(1)
+        fh.setsampwidth(2)
+        fh.setframerate(frame_rate)
+        fh.writeframes(b"\x00\x00" * n_frames)
+
+
 class InvokeAgentTests(unittest.TestCase):
     def run_wrapper(self, args, env, *, input_text=None):
         run_env = {
@@ -594,11 +606,19 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn("[System Instruction]\nMAIN\n\n[User Prompt]\nhello", prompt)
 
     def test_sound_file_forces_agy_high_even_when_harness_is_codex(self):
+        # 仕様変更(2026-07-17): --sound-fileは実機検証(agyのGo content-sniffがWAVを
+        # audio/waveと誤判定しGemini APIに拒否される)により、WAVをwebmへffmpeg変換した
+        # 上でview_file専用の明示指示付きプロンプトを組み立てるようになった。従来の
+        # 「@<元のwavパス>がそのままプロンプトに載る」という前提は成立しなくなったため、
+        # 実在するWAVフィクスチャを使い、webm変換後のパス参照とツール利用禁止指示を
+        # 検証する形にアサーションを更新した。
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             record = tmpdir / "agy.json"
             agy = tmpdir / "agy"
             codex = tmpdir / "codex"
+            wav_path = tmpdir / "input.wav"
+            write_silent_wav(wav_path)
             write_executable(
                 agy,
                 f"""
@@ -624,7 +644,7 @@ class InvokeAgentTests(unittest.TestCase):
             )
 
             result = self.run_wrapper(
-                ["--model", "lite", "--sound-file", "/tmp/input.wav", "listen"],
+                ["--model", "lite", "--sound-file", wav_path.as_posix(), "listen"],
                 {
                     "EHA_AGENT_HARNESS": "codex",
                     "EHA_CODEX_BIN": codex.as_posix(),
@@ -638,13 +658,18 @@ class InvokeAgentTests(unittest.TestCase):
             args = payload["args"]
             self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (High)")
             prompt = args[args.index("-p") + 1]
-            self.assertIn("【いま聞こえた音】\n@/tmp/input.wav", prompt)
+            self.assertIn("実行ツールや外部スクリプトは使わず", prompt)
+            self.assertIn("view_file", prompt)
+            self.assertNotIn(wav_path.as_posix(), prompt)
+            self.assertRegex(prompt, r"@\S+\.webm")
 
     def test_sound_file_does_not_force_high_when_harness_already_agy(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             record = tmpdir / "agy.json"
             agy = tmpdir / "agy"
+            wav_path = tmpdir / "input.wav"
+            write_silent_wav(wav_path)
             write_executable(
                 agy,
                 f"""
@@ -662,7 +687,7 @@ class InvokeAgentTests(unittest.TestCase):
             )
 
             result = self.run_wrapper(
-                ["--model", "lite", "--sound-file", "/tmp/input.wav", "listen"],
+                ["--model", "lite", "--sound-file", wav_path.as_posix(), "listen"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
@@ -674,7 +699,71 @@ class InvokeAgentTests(unittest.TestCase):
             args = payload["args"]
             self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (Low)")
             prompt = args[args.index("-p") + 1]
-            self.assertIn("【いま聞こえた音】\n@/tmp/input.wav", prompt)
+            self.assertIn("実行ツールや外部スクリプトは使わず", prompt)
+            self.assertRegex(prompt, r"@\S+\.webm")
+
+    def test_sound_file_missing_dies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy = tmpdir / "agy"
+            write_executable(
+                agy,
+                """
+                #!/usr/bin/env bash
+                echo "agy must not be called" >&2
+                exit 99
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--model", "lite", "--sound-file", (tmpdir / "missing.wav").as_posix(), "listen"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--sound-file not found", result.stderr)
+
+    def test_sound_file_webm_conversion_is_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            agy = tmpdir / "agy"
+            wav_path = tmpdir / "input.wav"
+            write_silent_wav(wav_path)
+            write_executable(
+                agy,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                prompt = args[args.index("-p") + 1]
+                webm_path = prompt.split("@", 1)[1].strip()
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"webm_path": webm_path, "exists": Path(webm_path).exists()}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--model", "lite", "--sound-file", wav_path.as_posix(), "listen"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            self.assertTrue(payload["exists"], "webm temp file must exist while agy runs")
+            self.assertFalse(Path(payload["webm_path"]).exists(), "webm temp file must be cleaned up after run")
 
     def test_legacy_allowed_tools_option_is_removed(self):
         with tempfile.TemporaryDirectory() as tmp:

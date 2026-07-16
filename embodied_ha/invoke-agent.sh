@@ -189,10 +189,22 @@ else
 fi
 
 if [[ -n "$sound_file" ]]; then
-  # TODO: This is path injection only. The Web UI should tell users that audio
-  # multimodal processing falls back to Antigravity, and future work should
-  # replace this with a real audio attachment path if the harness supports it.
-  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"@${sound_file}"
+  [[ -f "$sound_file" ]] || die "--sound-file not found: $sound_file"
+  # Antigravity(agy)側のGo content-sniffがWAV/MP3/FLACのMIMEを誤判定し(WAV->audio/wave,
+  # MP3->audio/mpeg, FLAC->application/octet-stream)、いずれもGemini APIに拒否される
+  # (実機検証済み、2026-07-17)。音声のみのWebM(opus)だけがクライアント/サーバー双方に
+  # 受理されるため、ここで変換する。これはAntigravity側のバグに対する暫定ワークアラウンドで
+  # あり、Antigravity側でWAV等のMIME判定が修正されたら不要になる。詳細:
+  # embodied_ha_agy_audio_mime_investigation_2026-07-17 メモリ参照。
+  sound_file_webm="$(mktemp "${TMPDIR:-/tmp}/eha-agy-sound.XXXXXX.webm")"
+  TEMP_FILES+=("$sound_file_webm")
+  ffmpeg -y -loglevel error -i "$sound_file" -vn -c:a libopus "$sound_file_webm" \
+    || die "failed to convert --sound-file to webm for Antigravity: $sound_file"
+  # ツール/スクリプト利用を明示的に禁止する指示。実機検証(2026-07-17)により、この指示が
+  # あれば--dangerously-skip-permissions無しでも安全にview_fileへ直行できることを確認済み
+  # (指示が無いと、モデルがls/file等のcommand権限ツールを試みてheadlessモードで自動拒否
+  # されるか、Pythonスクリプトを自前で書いて外部STT APIへ投げる誤動作を起こす)。
+  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"command/shell/Pythonなどの実行ツールや外部スクリプトは使わず、view_fileだけで下記の音声ファイルを直接読み込んで内容を理解してください。"$'\n'"@${sound_file_webm}"
 fi
 
 selected_harness="${EHA_AGENT_HARNESS:-claude}"

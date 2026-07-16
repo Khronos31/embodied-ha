@@ -377,7 +377,7 @@ _CHAT_MCP_SERVERS = (
     "body", "sensors", "http", "lounge", "game", "song",
 )
 
-_DEFAULT_INVOKE_AGENT_CHAT_PATHS = ("normal",)
+_DEFAULT_INVOKE_AGENT_CHAT_PATHS = ("normal", "queued_listen")
 
 
 def invoke_agent_migrated_chat_paths(environ: dict[str, str]) -> set[str]:
@@ -441,9 +441,16 @@ def build_invoke_agent_chat_command(
     script_dir,
     user_prompt,
     content_json_path=None,
+    sound_file=None,
     http_post_enabled=False,
 ):
-    """Build an invoke-agent.sh command for chat.py's normal response path."""
+    """Build an invoke-agent.sh command for chat.py's response path."""
+    if sound_file and content_json_path is not None:
+        # run_agy() dies unconditionally on --content-json; the only current
+        # caller (invoke_chat_claude) already avoids this combination, but
+        # guard here too so a future caller can't silently build a command
+        # that kills the queued-listen audio path (sol review, 2026-07-17).
+        raise ValueError("build_invoke_agent_chat_command: sound_file and content_json_path are mutually exclusive")
     allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
     allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
     cmd = [
@@ -452,7 +459,9 @@ def build_invoke_agent_chat_command(
         "--model",
         "default",
     ]
-    if allowed_builtins:
+    if sound_file:
+        cmd += ["--sound-file", sound_file, "--agent-site", "chat"]
+    if allowed_builtins and not sound_file:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
@@ -516,6 +525,7 @@ def invoke_chat_claude(
     prefix_blocks=None,
     claude_bin="claude",
     is_queued_listen=False,
+    sound_file=None,
     prefs_file=None,
     run=subprocess.run,
     run_mcp_config=subprocess.run,
@@ -523,11 +533,14 @@ def invoke_chat_claude(
     """Invoke the chat response path and return the final response text.
 
     is_queued_listen distinguishes queued-listen turns from normal turns for
-    the EHA_INVOKE_AGENT_CHAT_PATHS migration toggle. --sound-file forwarding
-    for queued-listen turns is not implemented yet (#14増分5); until then,
-    "queued_listen" is deliberately absent from
-    _DEFAULT_INVOKE_AGENT_CHAT_PATHS so queued-listen turns keep using the
-    direct-claude path even after "normal" turns migrate.
+    the EHA_INVOKE_AGENT_CHAT_PATHS migration toggle. When sound_file is
+    passed through the invoke-agent.sh path, it is forwarded with --sound-file
+    and --agent-site chat, while --allowed-builtins and --content-json are
+    omitted for agy compatibility. As a result, prefix_blocks such as projected
+    camera image blocks are silently ignored when sound_file is also present.
+    That is an accepted tradeoff: concentrate_hearing is expected to become
+    effectively physical-body-only after the body-state gate fix, making this
+    overlap rare rather than a chat-path bug.
     """
     env = dict(claude_env)
     env.setdefault("CLAUDE_BIN", claude_bin)
@@ -538,7 +551,7 @@ def invoke_chat_claude(
     try:
         if use_invoke_agent:
             env["EHA_ACTOR"] = "chat"
-            if prefix_blocks:
+            if prefix_blocks and not sound_file:
                 content_blocks = list(prefix_blocks)
                 content_blocks.append({"type": "text", "text": prompt})
                 content_json_path = _write_invoke_agent_content_json(content_blocks, env)
@@ -547,6 +560,7 @@ def invoke_chat_claude(
                 script_dir=script_dir,
                 user_prompt=prompt,
                 content_json_path=content_json_path,
+                sound_file=sound_file,
                 http_post_enabled=http_post_enabled,
             )
             r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
