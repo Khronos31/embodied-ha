@@ -25,7 +25,9 @@ Options:
                              other single-tool servers, this server-list is the
                              safety boundary, not --allowed-mcp-tools
   --agent-site SITE          Antigravity site: observe/explore/reflect/web/social/chat/game
-  --content-json JSON        Claude Code stream-json content blocks
+  --content-json JSON        Claude Code stream-json content blocks. Use
+                             @PATH to read the JSON from a file instead of
+                             inline (avoids the ~128KB argv element limit).
   -h, --help                 Show this help
 
 Harness selection comes from EHA_AGENT_HARNESS unless --sound-file is present.
@@ -77,6 +79,8 @@ mcp_config=""
 mcp_servers=""
 agent_site=""
 content_json=""
+content_json_file=""
+content_json_set="false"
 prompt_parts=()
 
 while (($#)); do
@@ -136,6 +140,12 @@ while (($#)); do
     --content-json)
       (($# >= 2)) || die "--content-json requires a value"
       content_json="$2"
+      content_json_set="true"
+      if [[ "$content_json" == @* ]]; then
+        content_json_file="${content_json#@}"
+        [[ -f "$content_json_file" ]] || die "--content-json file not found: $content_json_file"
+        content_json=""
+      fi
       shift 2
       ;;
     -h|--help)
@@ -317,9 +327,17 @@ PY
 }
 
 claude_message() {
-  PROMPT_TEXT="$prompt" CONTENT_JSON="$content_json" python3 -c '
+  # content_json_file (from --content-json @PATH) is read via normal file I/O,
+  # not via argv/envp, to avoid Linux's ~128KB single-element limit
+  # (MAX_ARG_STRLEN) that large inline content (e.g. camera images) would hit.
+  PROMPT_TEXT="$prompt" CONTENT_JSON="$content_json" CONTENT_JSON_FILE="$content_json_file" python3 -c '
 import json, os, sys
-content_json = os.environ.get("CONTENT_JSON", "")
+content_json_file = os.environ.get("CONTENT_JSON_FILE", "")
+if content_json_file:
+    with open(content_json_file, encoding="utf-8") as fh:
+        content_json = fh.read()
+else:
+    content_json = os.environ.get("CONTENT_JSON", "")
 if content_json:
     content = json.loads(content_json)
 else:
@@ -378,7 +396,7 @@ run_claude() {
 run_codex() {
   [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
-  [[ -z "$content_json" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
+  [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
   local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-codex}}"
   local cwd="${EHA_AGENT_CWD:-${EHA_CODEX_CWD:-$PWD}}"
@@ -425,7 +443,7 @@ run_codex() {
 run_agy() {
   [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
-  [[ -z "$content_json" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
+  [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
 
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"

@@ -390,6 +390,57 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn(schema, prompt)
             self.assertTrue(prompt.endswith("JSON:\n"))
 
+    def test_claude_content_json_at_prefix_reads_from_file(self):
+        # 2026-07-16発見: --content-jsonのinline JSONはLinuxの単一argv要素128KB上限
+        # (MAX_ARG_STRLEN)に引っかかる(observeモードの実カメラ画像で確認)。
+        # curl -d @file慣習で@<path>指定時はファイルから読むようにした。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "claude.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                stdin = sys.stdin.read()
+                Path({record.as_posix()!r}).write_text(stdin, encoding="utf-8")
+                print(json.dumps({{"type": "result", "structured_output": {{"ok": True}}}}, ensure_ascii=False))
+                """,
+            )
+            # 128KBのinline argv上限を超えるペイロード(大きな画像相当)をファイル経由で渡す。
+            big_text = "x" * 200_000
+            content = json.dumps(
+                [{"type": "text", "text": big_text}],
+                ensure_ascii=False,
+            )
+            content_path = tmpdir / "content.json"
+            content_path.write_text(content, encoding="utf-8")
+
+            result = self.run_wrapper(
+                ["--content-json", f"@{content_path}", "ignored"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            envelope = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(envelope["message"]["content"], json.loads(content))
+
+    def test_claude_content_json_at_prefix_missing_file_dies(self):
+        result = self.run_wrapper(
+            ["--content-json", "@/nonexistent/path.json", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--content-json file not found", result.stderr)
+
     def test_claude_emits_raw_stream_on_stderr_for_tool_use_extraction(self):
         # loop.pyのfacts抽出(introspection_facts.extract_facts_from_stream_text)は
         # assistant/userイベント中のtool_use/tool_resultを必要とするが、stdoutは
@@ -853,6 +904,37 @@ class InvokeAgentTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--allowed-builtins is not supported for codex", result.stderr)
+
+    def test_codex_rejects_content_json_including_at_path_form(self):
+        # content_json_set(2026-07-16の@<path>対応)がinline/@path両方の指定を
+        # 正しく検出し、codexへ回さずに拒否できることを確認する。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "codex"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env bash
+                echo "codex must not be called" >&2
+                exit 99
+                """,
+            )
+            content_path = tmpdir / "content.json"
+            content_path.write_text("[]", encoding="utf-8")
+
+            inline = self.run_wrapper(
+                ["--content-json", "[]", "hello"],
+                {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_BIN": fake.as_posix()},
+            )
+            at_path = self.run_wrapper(
+                ["--content-json", f"@{content_path}", "hello"],
+                {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_BIN": fake.as_posix()},
+            )
+
+            self.assertNotEqual(inline.returncode, 0)
+            self.assertIn("--content-json is not supported for codex", inline.stderr)
+            self.assertNotEqual(at_path.returncode, 0)
+            self.assertIn("--content-json is not supported for codex", at_path.stderr)
 
     def test_agy_first_use_writes_site_config_and_registers_project(self):
         with tempfile.TemporaryDirectory() as tmp:
