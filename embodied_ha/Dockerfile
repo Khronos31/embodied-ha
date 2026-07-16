@@ -6,15 +6,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2-plugins pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Debianのmedia-typesパッケージは/etc/mime.typesにwav/mp3を
-# audio/x-wav・audio/mpegとしてのみ登録しており、audio/wav・audio/mp3が無い。
-# Antigravity(agy) CLIのファイル読み込みがこの片方しか受け付けず、
-# queued listen等の音声ファイル解析が失敗する原因になるため、
-# パッケージインストール後に不足分を追記する(冪等)。
+# Debianのmedia-typesパッケージは/etc/mime.typesに.wavをaudio/x-wavとしてのみ
+# 登録しており、audio/wavが無い。Antigravity(agy.real)のバイナリは文字列
+# "audio/wav"を保持しているが"audio/x-wav"は保持しておらず(strings確認済み)、
+# queued listen等のWAVファイル解析が"unsupported mime type audio/wave"で
+# 失敗する原因になっていた。パッケージインストール後に不足分を冪等に追記する。
+#
+# 実機検証(2026-07-16): audio/wav追記後、agy -pへ.wavを@<path>形式で渡すと
+# --dangerously-skip-permissions無し・スクリプト実行禁止でも直接読み込み
+# (view_file)で正確な音声内容を取得できることを確認した。
+#
+# 注意: .mp3は対象外。agy.realバイナリは文字列"audio/mp3"を一切保持しておらず
+# (strings確認済み)、既存の"audio/mpeg"マッピングでも実機テストでMP3の直接
+# 読み込みはタイムアウトし機能しなかった。production側のqueued listenは
+# audio_daemon.pyのwrite_wav()で常にWAVのみを生成するため、MP3対応は
+# 現時点で不要と判断し追加しない。
 RUN grep -qxF 'audio/wav					wav' /etc/mime.types 2>/dev/null \
-      || echo 'audio/wav					wav' >> /etc/mime.types \
-    && grep -qxF 'audio/mp3					mp3' /etc/mime.types 2>/dev/null \
-      || echo 'audio/mp3					mp3' >> /etc/mime.types
+      || echo 'audio/wav					wav' >> /etc/mime.types
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true
 RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad==3.2.0" \
