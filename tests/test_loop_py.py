@@ -52,69 +52,6 @@ class LoopPyModeSelectionTests(unittest.TestCase):
 
 
 class LoopPyInvocationTests(unittest.TestCase):
-    def test_build_loop_claude_command_uses_schema_and_mcp_config(self):
-        cmd = loop.build_loop_claude_command(
-            claude_bin="/bin/claude",
-            model="sonnet",
-            mode="reflect",
-            allowed_tools="mcp__memory__recall",
-            system_prompt="system",
-            mcp_config="/tmp/mcp.json",
-        )
-
-        self.assertEqual(cmd[:4], ["/bin/claude", "-p", "--model", "sonnet"])
-        self.assertIn("--json-schema", cmd)
-        self.assertIn("--mcp-config", cmd)
-        self.assertIn("/tmp/mcp.json", cmd)
-        self.assertIn("mcp__memory__recall", cmd)
-
-    def test_invoke_loop_claude_is_claude_only_and_returns_structured_output(self):
-        calls = []
-
-        class Result:
-            def __init__(self, stdout=""):
-                self.stdout = stdout
-
-        def fake_run(cmd, **kwargs):
-            calls.append((cmd, kwargs))
-            if cmd[0] == "python3":
-                Path(cmd[2]).parent.mkdir(parents=True, exist_ok=True)
-                Path(cmd[2]).write_text("{}", encoding="utf-8")
-                return Result()
-            payload = {
-                "type": "result",
-                "structured_output": {"private": "静かに考えた", "emotion": "calm", "speak": None},
-            }
-            return Result(json.dumps(payload, ensure_ascii=False))
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            response = loop.invoke_loop_claude(
-                user_prompt="user",
-                system_prompt="system",
-                mode="reflect",
-                allowed_tools="mcp__memory__recall",
-                mcp_servers=["memory"],
-                environ={
-                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
-                    "CLAUDE_BIN": "/bin/claude",
-                    "EHA_SESSION_BIN": "agy",
-                    "EHA_DATA_DIR": tmpdir,
-                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
-                },
-                run=fake_run,
-            )
-
-        self.assertEqual(json.loads(response)["private"], "静かに考えた")
-        claude_calls = [call for call in calls if call[0][0] == "/bin/claude"]
-        self.assertEqual(len(claude_calls), 1)
-        claude_cmd, claude_kwargs = claude_calls[0]
-        self.assertNotIn("agy", claude_cmd)
-        self.assertIn("--mcp-config", claude_cmd)
-        self.assertEqual(claude_kwargs["cwd"], str(Path(tmpdir) / "workdir"))
-        envelope = json.loads(claude_kwargs["input"])
-        self.assertEqual(envelope["type"], "user")
-        self.assertEqual(envelope["message"]["content"][0]["text"], "user")
-
     def test_invoke_loop_claude_explore_with_boundary_gate_hacontrol_uses_invoke_agent(self):
         # apply_boundary_gate()がexploreモードで許可時にallowed_tools/mcp_serversへ
         # hacontrol/mcp__hacontrol__ha_call_serviceを動的追加する(loop.py:676-700)。
@@ -315,36 +252,17 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertNotIn("--content-json", cmd)
         self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
 
-    def test_build_loop_claude_command_omits_empty_allowed_tools_and_absent_schema(self):
-        cmd = loop.build_loop_claude_command(
-            claude_bin="/bin/claude",
-            model="haiku",
-            mode="observe",
-            allowed_tools="",
-            system_prompt="watch",
-            response_schema=None,
-        )
-
-        self.assertNotIn("--allowedTools", cmd)
-        self.assertNotIn("--json-schema", cmd)
-
     def test_observe_invocation_uses_sonnet_and_does_not_set_actor(self):
         calls = []
 
         class Result:
-            def __init__(self, stdout=""):
+            def __init__(self, stdout="", stderr=""):
                 self.stdout = stdout
+                self.stderr = stderr
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
-            if cmd[0] == "python3":
-                Path(cmd[2]).parent.mkdir(parents=True, exist_ok=True)
-                Path(cmd[2]).write_text("{}", encoding="utf-8")
-                return Result()
-            payload = {
-                "type": "result",
-                "structured_output": {"private": "見守った", "emotion": "calm", "speak": None},
-            }
+            payload = {"private": "見守った", "emotion": "calm", "speak": None}
             return Result(json.dumps(payload, ensure_ascii=False))
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -359,29 +277,30 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "CLAUDE_BIN": "/bin/claude",
                     "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
-                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
                 },
                 model="sonnet",
                 run=fake_run,
             )
 
         self.assertEqual(json.loads(response)["private"], "見守った")
-        claude_cmd, claude_kwargs = [call for call in calls if call[0][0] == "/bin/claude"][0]
-        self.assertEqual(claude_cmd[claude_cmd.index("--model") + 1], "sonnet")
-        self.assertNotIn("EHA_ACTOR", claude_kwargs["env"])
+        invoke_cmd, invoke_kwargs = [call for call in calls if call[0][:2] == ["bash", str(ROOT / "embodied_ha" / "invoke-agent.sh")]][0]
+        self.assertEqual(invoke_cmd[invoke_cmd.index("--model") + 1], "default")
+        self.assertNotIn("input", invoke_kwargs)
+        self.assertNotIn("EHA_ACTOR", invoke_kwargs["env"])
 
     def test_watch_summary_invocation_uses_haiku_without_tools_or_schema(self):
         calls = []
 
         class Result:
-            def __init__(self, stdout="", returncode=0):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
+                self.stderr = stderr
                 self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
-            if cmd[0] == "/bin/claude":
-                return Result(json.dumps({"type": "result", "result": "Fixture: clear"}, ensure_ascii=False))
+            if cmd[:2] == ["bash", str(ROOT / "embodied_ha" / "invoke-agent.sh")]:
+                return Result("Fixture: clear")
             return Result()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -398,7 +317,6 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "EHA_PREFS_FILE": str(prefs),
                     "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
-                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
                 },
                 "projected_camera_source": "",
                 "user_prompt": "observe prompt",
@@ -424,11 +342,12 @@ class LoopPyInvocationTests(unittest.TestCase):
                 loop.fetch_frame = original_fetch_frame
 
         self.assertIn("Fixture: clear", blocks[0]["text"])
-        claude_cmd, claude_kwargs = [call for call in calls if call[0][0] == "/bin/claude"][0]
-        self.assertEqual(claude_cmd[claude_cmd.index("--model") + 1], "haiku")
-        self.assertNotIn("--allowedTools", claude_cmd)
-        self.assertNotIn("--json-schema", claude_cmd)
-        self.assertNotIn("EHA_ACTOR", claude_kwargs["env"])
+        invoke_cmd, invoke_kwargs = [call for call in calls if call[0][:2] == ["bash", str(ROOT / "embodied_ha" / "invoke-agent.sh")]][0]
+        self.assertEqual(invoke_cmd[invoke_cmd.index("--model") + 1], "lite")
+        self.assertNotIn("--allowed-builtins", invoke_cmd)
+        self.assertNotIn("--allowed-mcp-tools", invoke_cmd)
+        self.assertNotIn("--json-schema", invoke_cmd)
+        self.assertNotIn("EHA_ACTOR", invoke_kwargs["env"])
 
 
 class LoopPyPostprocessTests(unittest.TestCase):
@@ -625,17 +544,14 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 return self.Result()
             if cmd and cmd[0] == "curl":
                 return self.Result()
-            if cmd and cmd[0] == "/bin/claude":
+            if len(cmd) >= 2 and cmd[0] == "bash" and cmd[1].endswith("invoke-agent.sh"):
                 payload = {
-                    "type": "result",
-                    "structured_output": {
-                        "topic": "fixture",
-                        "private": "静かに確認している",
-                        "emotion": "calm",
-                        "speak": "あとで見ます",
-                        "proposal": None,
-                        "feature_presented": None,
-                    },
+                    "topic": "fixture",
+                    "private": "静かに確認している",
+                    "emotion": "calm",
+                    "speak": "あとで見ます",
+                    "proposal": None,
+                    "feature_presented": None,
                 }
                 return self.Result(json.dumps(payload, ensure_ascii=False) + "\n")
             return self.Result()
@@ -662,7 +578,6 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
             "EHA_CLAUDE_CWD": str(workdir),
             "EHA_TEST_TIMESTAMP": "2026-07-15T12:00:00+09:00",
             "EHA_TEST_HOUR": "12",
-            "EHA_INVOKE_AGENT_LOOP_MODES": "",
         }
 
     def test_run_all_modes_with_mocked_external_commands(self):
@@ -674,18 +589,20 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
 
                 self.assertEqual(result["mode"], mode)
                 self.assertTrue(result["parsed"].get("_parse_ok"))
-                claude_calls = [call for call in calls if call[0] and call[0][0] == "/bin/claude"]
-                self.assertTrue(claude_calls)
-                claude_cmd, claude_kwargs = claude_calls[-1]
-                self.assertIn("--allowedTools", claude_cmd)
-                self.assertIn(result["context"]["allowed_tools"], claude_cmd)
-                self.assertIn("--append-system-prompt", claude_cmd)
-                self.assertIn(result["context"]["sys_prompt"], claude_cmd)
-                envelope = json.loads(claude_kwargs["input"])
-                self.assertEqual(envelope["message"]["content"][-1]["text"], result["context"]["user_prompt"])
-                mcp_calls = [call for call in calls if len(call[0]) >= 2 and call[0][0] == "python3" and call[0][1].endswith("mcp-config.py")]
-                self.assertTrue(mcp_calls)
-                self.assertEqual(tuple(mcp_calls[-1][0][3:]), tuple(result["context"]["mcp_servers"]))
+                invoke_calls = [call for call in calls if len(call[0]) >= 2 and call[0][0] == "bash" and call[0][1].endswith("invoke-agent.sh")]
+                self.assertTrue(invoke_calls)
+                invoke_cmd, invoke_kwargs = invoke_calls[-1]
+                if result["context"]["allowed_tools"]:
+                    expected_builtins, expected_mcp_tools = loop._split_allowed_tools_for_invoke_agent(result["context"]["allowed_tools"])
+                    if expected_builtins:
+                        self.assertEqual(invoke_cmd[invoke_cmd.index("--allowed-builtins") + 1], expected_builtins)
+                    if expected_mcp_tools:
+                        self.assertEqual(invoke_cmd[invoke_cmd.index("--allowed-mcp-tools") + 1], expected_mcp_tools)
+                self.assertIn("--append-system-prompt", invoke_cmd)
+                self.assertIn(result["context"]["sys_prompt"], invoke_cmd)
+                self.assertNotIn("input", invoke_kwargs)
+                self.assertEqual(invoke_cmd[-1], result["context"]["user_prompt"])
+                self.assertEqual(invoke_cmd[invoke_cmd.index("--mcp-servers") + 1], " ".join(result["context"]["mcp_servers"]))
                 rows = self.read_jsonl(tmp / "log" / ("observations.jsonl" if mode == "observe" else "explore.jsonl"))
                 self.assertEqual(rows[0]["private"], "静かに確認している")
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")

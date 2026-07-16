@@ -265,7 +265,11 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         if value is not None:
             env_with_queued_ctx[key] = str(value)
     claude_env = chat_invoke.build_claude_env(env_with_queued_ctx)
-    cwd = cfg.get("EHA_CLAUDE_CWD") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+    cwd = (
+        cfg.get("EHA_AGENT_CWD")
+        or cfg.get("EHA_CLAUDE_CWD")
+        or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+    )
     response_text = chat_invoke.invoke_chat_claude(
         chat_source=chat_source,
         prompt=prompt,

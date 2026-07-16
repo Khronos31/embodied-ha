@@ -155,10 +155,9 @@ echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 # .claude/settings.local.json（claudeMdExcludes）を配置する。既存ファイルは上書きしない。
 _OPT_CWD=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_cwd',''))" 2>/dev/null || echo "")
 export EHA_CLAUDE_CWD="${_OPT_CWD:-$EHA_DATA_DIR/workdir}"
-# invoke-agent.sh caller配線(#14)移行期間中の二重export。EHA_AGENT_CWDが3ハーネス共通の
-# 正式変数になる予定だが、daybook_rollup.py・loop.sh/chat.sh（ロールバック経路）は
-# EHA_CLAUDE_CWDのみを読み続けるため、旧経路コードを削除する増分まで両方exportする
-# （docs/invoke-agent-caller-wiring-phase2-spec.md 増分1・7参照）。
+# EHA_AGENT_CWDは3ハーネス共通の正式変数。daybook_rollup.py・loop.sh/chat.sh
+# （ロールバック経路として温存）は引き続きEHA_CLAUDE_CWDのみを読むため、
+# それら自体を削除するまでは両方exportし続ける。
 export EHA_AGENT_CWD="$EHA_CLAUDE_CWD"
 unset _OPT_CWD
 echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD} EHA_AGENT_CWD=${EHA_AGENT_CWD}"

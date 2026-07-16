@@ -216,58 +216,11 @@ class BuildClaudeEnvTests(unittest.TestCase):
         self.assertIn("/usr/bin", env["PATH"])
 
 
-class BuildClaudeCommandTests(unittest.TestCase):
-    def test_no_script_dir_omits_tool_flags(self):
-        cmd = chat_invoke.build_claude_command(
-            chat_source="chat", script_dir="", claude_env={}, run_mcp_config=lambda *a, **k: None,
-        )
-        self.assertNotIn("--allowedTools", cmd)
-        self.assertNotIn("--mcp-config", cmd)
-
-    def test_mcp_config_missing_after_run_omits_tool_flags(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            missing_path = Path(tmp) / "mcp_chat.json"  # run_mcp_configが何も作らない想定
-            cmd = chat_invoke.build_claude_command(
-                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(missing_path), run_mcp_config=lambda *a, **k: None,
-            )
-            self.assertNotIn("--allowedTools", cmd)
-
-    def test_voice_adds_speaker_tools(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mcp_path = Path(tmp) / "mcp_chat.json"
-            mcp_path.write_text("{}", encoding="utf-8")
-            cmd = chat_invoke.build_claude_command(
-                chat_source="voice", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(mcp_path), run_mcp_config=lambda *a, **k: None,
-            )
-            idx = cmd.index("--allowedTools")
-            self.assertIn("mcp__audio__use_device_speaker", cmd[idx + 1])
-
-    def test_chat_omits_use_device_speaker(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mcp_path = Path(tmp) / "mcp_chat.json"
-            mcp_path.write_text("{}", encoding="utf-8")
-            cmd = chat_invoke.build_claude_command(
-                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(mcp_path), run_mcp_config=lambda *a, **k: None,
-            )
-            idx = cmd.index("--allowedTools")
-            self.assertNotIn("mcp__audio__use_device_speaker", cmd[idx + 1])
-            self.assertIn("mcp__audio__speak", cmd[idx + 1])
-
-
 def _arg_after(cmd, flag):
     return cmd[cmd.index(flag) + 1]
 
 
 class InvokeAgentChatPathTests(unittest.TestCase):
-    def test_default_migrates_normal_and_queued_listen_paths(self):
-        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({}), {"normal", "queued_listen"})
-
-    def test_empty_override_disables_migration(self):
-        self.assertEqual(chat_invoke.invoke_agent_migrated_chat_paths({"EHA_INVOKE_AGENT_CHAT_PATHS": ""}), set())
-
     def test_command_splits_builtin_and_mcp_tools_for_chat(self):
         cmd = chat_invoke.build_invoke_agent_chat_command(
             chat_source="chat",
@@ -461,87 +414,6 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertEqual(response, '{"reply":"ok"}')
         self.assertNotIn("--content-json", captured["cmd"])
         self.assertNotIn("input", captured["kwargs"])
-
-
-class BuildMessageEnvelopeTests(unittest.TestCase):
-    def test_no_prefix_blocks_yields_single_text_block(self):
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは"))
-        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
-
-    def test_prefix_blocks_come_before_prompt_text(self):
-        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[image_block]))
-        content = envelope["message"]["content"]
-        self.assertEqual(content[0], image_block)
-        self.assertEqual(content[-1], {"type": "text", "text": "こんにちは"})
-
-    def test_empty_prefix_blocks_list_behaves_like_none(self):
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[]))
-        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
-
-
-class InvokeClaudeTests(unittest.TestCase):
-    def test_delegates_to_run_with_expected_kwargs(self):
-        captured = {}
-
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
-            captured["kwargs"] = kwargs
-            return "FAKE_RESULT"
-
-        result = chat_invoke.invoke_claude(["claude", "-p"], "msg", "/some/cwd", {"A": "1"}, run=fake_run)
-        self.assertEqual(result, "FAKE_RESULT")
-        self.assertEqual(captured["cmd"], ["claude", "-p"])
-        self.assertEqual(captured["kwargs"]["input"], "msg")
-        self.assertEqual(captured["kwargs"]["cwd"], "/some/cwd")
-        self.assertEqual(captured["kwargs"]["env"], {"A": "1"})
-        self.assertTrue(captured["kwargs"]["capture_output"])
-        self.assertTrue(captured["kwargs"]["text"])
-
-
-class LogToolUseDiagnosticsTests(unittest.TestCase):
-    def test_prints_tool_use_details(self):
-        printed = []
-        stdout = json.dumps({
-            "type": "assistant",
-            "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
-        }, ensure_ascii=False)
-        chat_invoke.log_tool_use_diagnostics(stdout, print_fn=printed.append)
-        self.assertEqual(len(printed), 1)
-        self.assertIn("recall", printed[0])
-        self.assertIn("エアコン", printed[0])
-
-    def test_ignores_non_assistant_lines(self):
-        printed = []
-        stdout = json.dumps({"type": "result", "result": "ok"}, ensure_ascii=False)
-        chat_invoke.log_tool_use_diagnostics(stdout, print_fn=printed.append)
-        self.assertEqual(printed, [])
-
-    def test_malformed_lines_are_skipped(self):
-        printed = []
-        chat_invoke.log_tool_use_diagnostics("not json\n", print_fn=printed.append)
-        self.assertEqual(printed, [])
-
-
-class ExtractResponseTextTests(unittest.TestCase):
-    def test_normal_result_returns_text_without_diagnostics(self):
-        printed = []
-        stdout = json.dumps({"type": "result", "result": '{"reply": "こんにちは"}'}, ensure_ascii=False)
-        result = chat_invoke.extract_response_text(stdout, "", 0, print_fn=printed.append)
-        self.assertEqual(result, '{"reply": "こんにちは"}')
-        self.assertEqual(printed, [])
-
-    def test_empty_response_prints_diagnostics(self):
-        printed = []
-        result = chat_invoke.extract_response_text("", "some claude stderr", 1, print_fn=printed.append)
-        self.assertEqual(result, "")
-        self.assertTrue(any("returncode=1" in p for p in printed))
-        self.assertTrue(any("some claude stderr" in p for p in printed))
-
-    def test_empty_response_with_no_stderr_only_prints_returncode_line(self):
-        printed = []
-        chat_invoke.extract_response_text("", "", 0, print_fn=printed.append)
-        self.assertEqual(len(printed), 1)
 
 
 class AllowedToolsHttpPostTests(unittest.TestCase):

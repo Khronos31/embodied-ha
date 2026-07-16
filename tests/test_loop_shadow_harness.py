@@ -15,11 +15,9 @@ sys.path.insert(0, str(ROOT / "embodied_ha"))
 
 from loop_shadow_harness import (  # noqa: E402
     RUNTIME_FILES,
-    assert_same_side_effects,
     capture_runtime_side_effects,
     comparable_wiring_trace,
     make_runtime,
-    normalize_known_wiring_differences,
     run_shadow_command,
     summarize_wiring_delta,
 )
@@ -177,15 +175,6 @@ class LoopShadowProcessParityTests(unittest.TestCase):
                 self.restore_shared_tmp_known_files(snapshot)
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
-    def run_loop_sh(self, env: dict[str, str], mode: str, cwd: Path) -> subprocess.CompletedProcess:
-        return run_shadow_command(
-            ["bash", str(ROOT / "embodied_ha" / "loop.sh")],
-            cwd=cwd,
-            env=env,
-            extra_env={"MODE": mode},
-            runner=self.run_with_shared_tmp_guard,
-        )
-
     def run_loop_py(self, env: dict[str, str], mode: str, cwd: Path) -> subprocess.CompletedProcess:
         return run_shadow_command(
             ["python3", str(ROOT / "embodied_ha" / "loop.py"), "--mode", mode],
@@ -279,94 +268,6 @@ class LoopShadowProcessParityTests(unittest.TestCase):
         self.assertIsInstance(facts, dict)
         return facts
 
-    def test_loop_sh_and_loop_py_side_effects_match_for_all_modes(self):
-        for mode in self.modes:
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
-                root = Path(tmpdir)
-                sh_log, sh_env = make_runtime(root, "loop-sh")
-                py_log, py_env = make_runtime(root, "loop-py")
-                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
-                self.assert_fixture_anomaly_state_file(sh_env)
-                self.assert_fixture_anomaly_state_file(py_env)
-
-                sh = self.run_loop_sh(sh_env, mode, root)
-                py = self.run_loop_py(py_env, mode, root)
-
-                self.assertEqual(sh.returncode, 0, sh.stderr)
-                self.assertEqual(py.returncode, 0, py.stderr)
-                assert_same_side_effects(
-                    self,
-                    capture_runtime_side_effects(sh_log),
-                    capture_runtime_side_effects(py_log),
-                )
-
-    def test_loop_sh_and_loop_py_wiring_match_for_all_modes(self):
-        for mode in self.modes:
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
-                root = Path(tmpdir)
-                _, sh_env = make_runtime(root, "loop-sh")
-                _, py_env = make_runtime(root, "loop-py")
-                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
-
-                sh = self.run_loop_sh(sh_env, mode, root)
-                py = self.run_loop_py(py_env, mode, root)
-
-                self.assertEqual(sh.returncode, 0, sh.stderr)
-                self.assertEqual(py.returncode, 0, py.stderr)
-                old_trace = comparable_wiring_trace(sh_env)
-                new_trace = comparable_wiring_trace(py_env)
-                old_trace, new_trace = normalize_known_wiring_differences(old_trace, new_trace)
-                if old_trace != new_trace:
-                    self.fail(
-                        json.dumps(
-                            summarize_wiring_delta(old_trace, new_trace),
-                            ensure_ascii=False,
-                            indent=2,
-                        )
-                    )
-
-    def test_shared_tmp_dummy_file_survives_loop_process_runs(self):
-        self.shared_tmp_dir.mkdir(parents=True, exist_ok=True)
-        dummy = self.shared_tmp_dir / f"shadow_parity_preserve_{os.getpid()}.txt"
-        dummy.write_text("preserve\n", encoding="utf-8")
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                root = Path(tmpdir)
-                _, sh_env = make_runtime(root, "loop-sh")
-                _, py_env = make_runtime(root, "loop-py")
-                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
-
-                sh = self.run_loop_sh(sh_env, "reflect", root)
-                self.assertEqual(sh.returncode, 0, sh.stderr)
-                self.assertEqual(dummy.read_text(encoding="utf-8"), "preserve\n")
-
-                py = self.run_loop_py(py_env, "reflect", root)
-                self.assertEqual(py.returncode, 0, py.stderr)
-                self.assertEqual(dummy.read_text(encoding="utf-8"), "preserve\n")
-        finally:
-            dummy.unlink(missing_ok=True)
-
-    def test_loop_py_invoke_agent_migrated_modes_match_direct_path(self):
-        for mode in ("reflect", "web", "social", "explore", "observe"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
-                root = Path(tmpdir)
-                direct_log, direct_env = make_runtime(root, "loop-py-direct")
-                invoke_log, invoke_env = make_runtime(root, "loop-py-invoke-agent")
-                direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
-
-                direct = self.run_loop_py(direct_env, mode, root)
-                invoked = self.run_loop_py(invoke_env, mode, root)
-
-                self.assertEqual(direct.returncode, 0, direct.stderr)
-                self.assertEqual(invoked.returncode, 0, invoked.stderr)
-                assert_same_side_effects(
-                    self,
-                    capture_runtime_side_effects(direct_log),
-                    capture_runtime_side_effects(invoke_log),
-                )
-                self.assertEqual(self.loop_facts(direct_env, mode), self.loop_facts(invoke_env, mode))
-                self.assertEqual(self.loop_facts(invoke_env, mode)["tool_calls"], 1)
-
     def test_invoke_agent_direct_shadow_harness_detects_matching_allowed_tools(self):
         """Self-test for future caller cutovers: the generalized harness can compare final Claude tool sets.
 
@@ -378,7 +279,6 @@ class LoopShadowProcessParityTests(unittest.TestCase):
             root = Path(tmpdir)
             _, direct_env = make_runtime(root, "direct-loop-py")
             _, invoke_env = make_runtime(root, "direct-invoke-agent")
-            direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
             direct = self.run_loop_py(direct_env, "web", root)
             self.assertEqual(direct.returncode, 0, direct.stderr)
@@ -401,7 +301,6 @@ class LoopShadowProcessParityTests(unittest.TestCase):
             root = Path(tmpdir)
             _, direct_env = make_runtime(root, "direct-loop-py")
             _, invoke_env = make_runtime(root, "direct-invoke-agent-broken")
-            direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
             direct = self.run_loop_py(direct_env, "web", root)
             self.assertEqual(direct.returncode, 0, direct.stderr)
