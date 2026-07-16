@@ -1,8 +1,8 @@
 """mcp-config.pyのhttp_post許可トグル(preferences.jsonのhttp_post_enabled)テスト。
 
 http-mcp.py自身はEHA_HTTP_ALLOW_POST環境変数でhttp_postツールの
-tools/list掲載有無を切り替える(--allowedToolsではMCPツール単位の
-絞り込みができないため、これが唯一の制御点)。mcp-config.pyはその
+tools/list掲載有無を切り替える。Claude Codeの--allowedToolsはMCPツールを
+実行時に絞り込めるが、tools/listの可視性は絞らないため、非掲載も防御層として残る。mcp-config.pyはその
 env変数を、preferences.jsonのhttp_post_enabledフィールド(Web UI
 「高度な設定」タブのトグル)から動的に注入する役割を持つ。
 
@@ -231,10 +231,11 @@ class McpConfigFormatTests(unittest.TestCase):
             self.assertIn("must cover every selected server", result.stderr)
             self.assertFalse(out_path.exists())
 
-    def test_claude_rejects_server_internal_partial_allowlist(self):
+    def test_claude_allows_server_internal_partial_allowlist(self):
+        """Specification change: Claude now accepts a per-server tool subset."""
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "mcp_config.json"
-            result = self.run_config_no_check(
+            self.run_config(
                 [
                     "--format",
                     "claude",
@@ -245,9 +246,9 @@ class McpConfigFormatTests(unittest.TestCase):
                 ]
             )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Claude MCP allowlist cannot restrict tools within a server", result.stderr)
-            self.assertFalse(out_path.exists())
+            config = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(config["mcpServers"]), {"memory"})
+            self.assertNotIn("includeTools", config["mcpServers"]["memory"])
 
 
 class ServerSpecsTests(unittest.TestCase):

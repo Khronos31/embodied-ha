@@ -17,9 +17,9 @@ Options:
   --allowed-builtins CSV     Built-in tool allow-list for Claude Code only
                              (currently: Read, WebSearch)
   --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; must cover every
-                             selected MCP server. Claude rejects per-server
-                             partial MCP allowlists; allow every tool in the
-                             server or omit the server from --mcp-servers.
+                             selected MCP server. Per-server partial allowlists
+                             are allowed: Claude blocks unlisted tool execution,
+                             but keeps connected tool schemas visible.
   --mcp-config PATH          Claude Code MCP config path
   --mcp-servers "NAMES"      Space-separated MCP server names; for hacontrol and
                              other single-tool servers, this server-list is the

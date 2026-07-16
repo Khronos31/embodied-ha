@@ -7,8 +7,9 @@
 
 --mcp-servers に hacontrol などの単一tool serverを含めるかどうかが、
 そのserverの安全性境界である。--allowed-mcp-tools は多tool server内の
-補助的な絞り込みであり、hacontrol のような単一tool serverの安全性は
-tool allow-listではなく server-list 接続可否と boundary.py 側ゲートに依存する。
+実行を絞り込めるが、Claude Codeでは未許可toolの一覧・スキーマも可視のまま
+である。hacontrol のような単一tool serverの安全性は tool allow-list だけに
+依存せず、server-list 接続可否と boundary.py 側ゲートで多層に守る。
 
 サーバー名: audio / body / camera / ha / hacontrol / http / lounge / memory / sensors / sociality / song
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
@@ -121,8 +122,9 @@ SERVER_SPECS = {
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
     # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
-    # --allowedTools ではMCPツール単位の絞り込みができないため、tools/listに載せるかどうかが
-    # 唯一の制御点(http-mcp.py側のコメント参照)。うちだけの外部デバイス連携用の抜け道であり、
+    # Claude Codeの--allowedToolsは実行時にMCPツール単位で拒否できるが、tools/listの可視性は
+    # 絞らない。tools/listに載せないことは引き続き有効な防御層(http-mcp.py側のコメント参照)。
+    # うちだけの外部デバイス連携用の抜け道であり、
     # デフォルトは無効。
     "http": ServerSpec(lambda: _server("http-mcp.py", extra_env={
         "EHA_HTTP_ALLOW_POST": "1" if prefs.get("http_post_enabled") else None,
@@ -229,14 +231,13 @@ def _parse_allowed_mcp_tools(csv, selected_servers):
 
 
 def _validate_claude_allowed_tools(allowed_tools):
-    for server, tools in allowed_tools.items():
-        all_tools = set(SERVER_SPECS[server].active_tools())
-        if set(tools) != all_tools:
-            missing = sorted(all_tools - set(tools))
-            _fail(
-                "Claude MCP allowlist cannot restrict tools within a server; "
-                f"server {server} is missing: {', '.join(missing)}"
-            )
+    """Accept Claude per-server partial allowlists.
+
+    `_parse_allowed_mcp_tools` retains the fail-closed syntax, selected-server,
+    active-tool, and duplicate checks. Claude Code enforces the resulting
+    `--allowedTools` entries at execution time, although all connected MCP tool
+    schemas remain visible to the model.
+    """
 
 
 def _json_config(servers, allowed_tools=None, *, include_tools=False):

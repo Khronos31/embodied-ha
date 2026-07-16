@@ -125,9 +125,10 @@ Co-Authored-By: Codex <noreply@openai.com>
 - **Atomic writes**: use `os.replace()` for all JSON/Markdown file writes (see existing code)
 - **No hardcoded personal data**: personal names, entity IDs, IPs belong in `preferences.json`
   or `personal_data/` (excluded from public repo via .gitignore)
-- **`claude -p` tool restriction caveat**: `--allowedTools` per-tool filtering does NOT work
-  when MCP servers are attached — the entire server's tools become available. Design
-  access control at the MCP server level, not the tool-name level.
+- **`claude -p` tool restriction caveat**: `--allowedTools` enforces MCP tool-level execution
+  restrictions when MCP servers are attached (verified with Claude Code 2.1.211), but it does
+  not hide the connected server's tool list or schemas. Keep server-level connection controls
+  and MCP-side gates as defense in depth; re-run the live canary after Claude CLI upgrades.
 
 ## Multi-agent setup
 

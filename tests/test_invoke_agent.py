@@ -703,7 +703,7 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertIn("hacontrol", help_text)
         self.assertIn("server-list is the", help_text)
         self.assertIn("not --allowed-mcp-tools", help_text)
-        self.assertIn("Claude rejects per-server", help_text)
+        self.assertIn("Per-server partial allowlists", help_text)
 
     def test_codex_rejects_allowed_builtins(self):
         with tempfile.TemporaryDirectory() as tmp:
