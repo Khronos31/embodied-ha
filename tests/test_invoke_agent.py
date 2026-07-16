@@ -203,6 +203,99 @@ class InvokeAgentTests(unittest.TestCase):
             message = json.loads(payload["stdin"])
             self.assertEqual(message["message"]["content"], json.loads(content))
 
+    def test_claude_cwd_prefers_eha_agent_cwd_and_falls_back_to_eha_claude_cwd(self):
+        # invoke-agent-caller-wiring-phase2-spec.md 増分1: EHA_AGENT_CWD/EHA_CLAUDE_CWD
+        # 移行期間の二重export下で、claudeサブプロセスの実行cwdが両変数で
+        # byte-identicalに解決されることを確認する（run.shは同一値を両方exportする前提）。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "claude.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:], "pwd": os.environ.get("PWD")}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{"type": "result", "result": "ok"}}, ensure_ascii=False))
+                """,
+            )
+            shared_cwd = tmpdir / "workdir"
+            shared_cwd.mkdir()
+            other_cwd = tmpdir / "stale-claude-only-workdir"
+            other_cwd.mkdir()
+
+            # 移行期間の二重export想定: EHA_AGENT_CWDとEHA_CLAUDE_CWDが同じ値。
+            both_set = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": shared_cwd.as_posix(),
+                    "EHA_CLAUDE_CWD": shared_cwd.as_posix(),
+                },
+            )
+            self.assertEqual(both_set.returncode, 0, both_set.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["pwd"],
+                shared_cwd.as_posix(),
+            )
+
+            # 優先順位そのものの検証(false positive防止): 値が食い違う場合、
+            # EHA_AGENT_CWDが実際に勝つことを確認する(同値ケースだけでは
+            # 旧優先順序のままでも偶然通ってしまう)。
+            precedence = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": shared_cwd.as_posix(),
+                    "EHA_CLAUDE_CWD": other_cwd.as_posix(),
+                },
+            )
+            self.assertEqual(precedence.returncode, 0, precedence.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["pwd"],
+                shared_cwd.as_posix(),
+            )
+
+            # 増分1完了前（EHA_AGENT_CWD未export）の現行動作: EHA_CLAUDE_CWDのみで解決。
+            legacy_only = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "EHA_CLAUDE_CWD": shared_cwd.as_posix(),
+                },
+            )
+            self.assertEqual(legacy_only.returncode, 0, legacy_only.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["pwd"],
+                shared_cwd.as_posix(),
+            )
+
+            # 増分7完了後（EHA_CLAUDE_CWD未export）を先取りした動作: EHA_AGENT_CWDのみで解決。
+            new_only = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": shared_cwd.as_posix(),
+                },
+            )
+            self.assertEqual(new_only.returncode, 0, new_only.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["pwd"],
+                shared_cwd.as_posix(),
+            )
+
     def test_codex_lite_uses_process_substitution_contract_and_stdout_normalization(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -864,6 +957,34 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             args = json.loads(record.read_text(encoding="utf-8"))["args"]
             self.assertEqual(args[args.index("-C") + 1], "/tmp/codex-cwd")
+
+    def test_agent_site_prefers_eha_agent_cwd_over_eha_claude_cwd(self):
+        # invoke-agent-caller-wiring-phase2-spec.md 増分1: agyのsite_dir解決も
+        # EHA_AGENT_CWDを優先するよう揃えた（旧: EHA_CLAUDE_CWD優先）。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            fake = self.write_project_fake_agy(tmpdir)
+            agent_workdir = tmpdir / "agent-workdir"
+            claude_workdir = tmpdir / "claude-workdir"
+
+            result = self.run_wrapper(
+                ["--agent-site", "chat", "--mcp-servers", "ha", "--allowed-mcp-tools", "mcp__ha__ha_get", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                    "EHA_AGENT_CWD": agent_workdir.as_posix(),
+                    "EHA_CLAUDE_CWD": claude_workdir.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((agent_workdir / "chat" / ".agents" / "mcp_config.json").exists())
+            self.assertFalse((claude_workdir / "chat").exists())
+            records = self.read_agy_records(tmpdir)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["cwd"], str(agent_workdir / "chat"))
 
     def test_agy_parallel_first_registration_is_serialized_by_global_flock(self):
         with tempfile.TemporaryDirectory() as tmp:

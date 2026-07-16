@@ -332,6 +332,7 @@ print(json.dumps({"type": "user", "message": {"role": "user", "content": content
 
 run_claude() {
   local bin="${EHA_CLAUDE_BIN:-${CLAUDE_BIN:-claude}}"
+  local cwd="${EHA_AGENT_CWD:-${EHA_CLAUDE_CWD:-$PWD}}"
   local stdout
   local mcp_config_arg="$mcp_config"
   local effective_allowed_tools="$allowed_builtins"
@@ -365,7 +366,7 @@ run_claude() {
   if [[ -n "$mcp_config_arg" ]]; then
     cmd+=("--mcp-config" "$mcp_config_arg")
   fi
-  stdout="$(claude_message | "${cmd[@]}")"
+  stdout="$(claude_message | (cd "$cwd" && "${cmd[@]}"))"
   printf '%s' "$stdout" | extract_result_json
 }
 
@@ -433,7 +434,7 @@ run_agy() {
       observe|explore|reflect|web|social|chat|game) ;;
       *) die "--agent-site must be one of observe/explore/reflect/web/social/chat/game" ;;
     esac
-    local base_cwd="${EHA_CLAUDE_CWD:-${EHA_AGENT_CWD:-$PWD}}"
+    local base_cwd="${EHA_AGENT_CWD:-${EHA_CLAUDE_CWD:-$PWD}}"
     site_dir="$base_cwd/$agent_site"
     mkdir -p "$site_dir/.agents"
   fi
