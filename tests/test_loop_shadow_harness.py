@@ -25,6 +25,7 @@ from loop_shadow_harness import (  # noqa: E402
 )
 
 import loop  # noqa: E402
+import introspection_facts  # noqa: E402
 
 
 class LoopMigrationSafetyTests(unittest.TestCase):
@@ -271,12 +272,18 @@ class LoopShadowProcessParityTests(unittest.TestCase):
                 )
             )
 
+    def loop_facts(self, env: dict[str, str], mode: str) -> dict:
+        facts = introspection_facts.load_facts_file(str(Path(env["EHA_TMP_DIR"]) / f"{mode}_facts.json"))
+        self.assertIsInstance(facts, dict)
+        return facts
+
     def test_loop_sh_and_loop_py_side_effects_match_for_all_modes(self):
         for mode in self.modes:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 sh_log, sh_env = make_runtime(root, "loop-sh")
                 py_log, py_env = make_runtime(root, "loop-py")
+                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
                 self.assert_fixture_anomaly_state_file(sh_env)
                 self.assert_fixture_anomaly_state_file(py_env)
 
@@ -297,6 +304,7 @@ class LoopShadowProcessParityTests(unittest.TestCase):
                 root = Path(tmpdir)
                 _, sh_env = make_runtime(root, "loop-sh")
                 _, py_env = make_runtime(root, "loop-py")
+                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
                 sh = self.run_loop_sh(sh_env, mode, root)
                 py = self.run_loop_py(py_env, mode, root)
@@ -324,6 +332,7 @@ class LoopShadowProcessParityTests(unittest.TestCase):
                 root = Path(tmpdir)
                 _, sh_env = make_runtime(root, "loop-sh")
                 _, py_env = make_runtime(root, "loop-py")
+                py_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
                 sh = self.run_loop_sh(sh_env, "reflect", root)
                 self.assertEqual(sh.returncode, 0, sh.stderr)
@@ -334,6 +343,27 @@ class LoopShadowProcessParityTests(unittest.TestCase):
                 self.assertEqual(dummy.read_text(encoding="utf-8"), "preserve\n")
         finally:
             dummy.unlink(missing_ok=True)
+
+    def test_loop_py_invoke_agent_migrated_modes_match_direct_path(self):
+        for mode in ("reflect", "web", "social"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                direct_log, direct_env = make_runtime(root, "loop-py-direct")
+                invoke_log, invoke_env = make_runtime(root, "loop-py-invoke-agent")
+                direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
+
+                direct = self.run_loop_py(direct_env, mode, root)
+                invoked = self.run_loop_py(invoke_env, mode, root)
+
+                self.assertEqual(direct.returncode, 0, direct.stderr)
+                self.assertEqual(invoked.returncode, 0, invoked.stderr)
+                assert_same_side_effects(
+                    self,
+                    capture_runtime_side_effects(direct_log),
+                    capture_runtime_side_effects(invoke_log),
+                )
+                self.assertEqual(self.loop_facts(direct_env, mode), self.loop_facts(invoke_env, mode))
+                self.assertEqual(self.loop_facts(invoke_env, mode)["tool_calls"], 1)
 
     def test_invoke_agent_direct_shadow_harness_detects_matching_allowed_tools(self):
         """Self-test for future caller cutovers: the generalized harness can compare final Claude tool sets.
@@ -346,6 +376,7 @@ class LoopShadowProcessParityTests(unittest.TestCase):
             root = Path(tmpdir)
             _, direct_env = make_runtime(root, "direct-loop-py")
             _, invoke_env = make_runtime(root, "direct-invoke-agent")
+            direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
             direct = self.run_loop_py(direct_env, "web", root)
             self.assertEqual(direct.returncode, 0, direct.stderr)
@@ -368,6 +399,7 @@ class LoopShadowProcessParityTests(unittest.TestCase):
             root = Path(tmpdir)
             _, direct_env = make_runtime(root, "direct-loop-py")
             _, invoke_env = make_runtime(root, "direct-invoke-agent-broken")
+            direct_env["EHA_INVOKE_AGENT_LOOP_MODES"] = ""
 
             direct = self.run_loop_py(direct_env, "web", root)
             self.assertEqual(direct.returncode, 0, direct.stderr)

@@ -98,6 +98,7 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "CLAUDE_BIN": "/bin/claude",
                     "EHA_SESSION_BIN": "agy",
                     "EHA_DATA_DIR": tmpdir,
+                    "EHA_INVOKE_AGENT_LOOP_MODES": "",
                 },
                 run=fake_run,
             )
@@ -458,6 +459,7 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
             "EHA_CLAUDE_CWD": str(workdir),
             "EHA_TEST_TIMESTAMP": "2026-07-15T12:00:00+09:00",
             "EHA_TEST_HOUR": "12",
+            "EHA_INVOKE_AGENT_LOOP_MODES": "",
         }
 
     def test_run_all_modes_with_mocked_external_commands(self):

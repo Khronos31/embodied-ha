@@ -277,6 +277,29 @@ try:
 except Exception:
     pass
 
+tool_name = next((part for part in allowed_tools.split(",") if part), "fixture_tool")
+print(json.dumps({
+    "type": "assistant",
+    "message": {
+        "content": [{
+            "type": "tool_use",
+            "id": "toolu_fixture",
+            "name": tool_name,
+            "input": {},
+        }]
+    },
+}, ensure_ascii=False))
+print(json.dumps({
+    "type": "user",
+    "message": {
+        "content": [{
+            "type": "tool_result",
+            "tool_use_id": "toolu_fixture",
+            "content": "ok",
+        }]
+    },
+}, ensure_ascii=False))
+
 private = (
     f"mode={mode};model={model};actor={actor or 'unset'};"
     f"schema={int(has_schema)};tools={int(has_tools)};watch={watch or 'none'}"

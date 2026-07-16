@@ -132,6 +132,15 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
 
 
 _DEFAULT_RESPONSE_SCHEMA = object()
+_DEFAULT_INVOKE_AGENT_LOOP_MODES = ("reflect", "web", "social")
+
+
+def invoke_agent_migrated_modes(environ: dict[str, str]) -> set[str]:
+    """Return loop modes that should call Claude through invoke-agent.sh."""
+    raw = environ.get("EHA_INVOKE_AGENT_LOOP_MODES")
+    if raw is None:
+        return set(_DEFAULT_INVOKE_AGENT_LOOP_MODES)
+    return {m.strip() for m in raw.split(",") if m.strip()}
 
 
 def build_loop_claude_env(environ: dict[str, str] | None = None, *, actor: str | None = "loop") -> dict[str, str]:
@@ -205,6 +214,49 @@ def build_loop_claude_command(
     return cmd
 
 
+def _split_allowed_tools_for_invoke_agent(allowed_tools: str) -> tuple[str, str]:
+    items = [item.strip() for item in allowed_tools.split(",") if item.strip()]
+    builtins = [item for item in items if not item.startswith("mcp__")]
+    mcp_tools = [item for item in items if item.startswith("mcp__")]
+    return ",".join(builtins), ",".join(mcp_tools)
+
+
+def build_invoke_agent_loop_command(
+    *,
+    script_dir: str,
+    mode: str,
+    allowed_tools: str,
+    mcp_servers: list[str],
+    system_prompt: str,
+    user_prompt: str,
+    content_blocks: list[dict[str, Any]] | None = None,
+    response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
+) -> list[str]:
+    """Build an invoke-agent.sh command for loop.py Claude-compatible modes."""
+    schema = loop_schema(mode) if response_schema is _DEFAULT_RESPONSE_SCHEMA else response_schema
+    allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed_tools)
+    cmd = [
+        "bash",
+        os.path.join(script_dir, "invoke-agent.sh"),
+        "--model",
+        "default",
+        "--append-system-prompt",
+        system_prompt,
+    ]
+    if allowed_builtins:
+        cmd += ["--allowed-builtins", allowed_builtins]
+    if allowed_mcp_tools:
+        cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
+    if mcp_servers:
+        cmd += ["--mcp-servers", " ".join(mcp_servers)]
+    if schema is not None:
+        cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
+    if content_blocks is not None:
+        cmd += ["--content-json", json.dumps(content_blocks, ensure_ascii=False)]
+    cmd.append(user_prompt)
+    return cmd
+
+
 def invoke_loop_claude(
     *,
     user_prompt: str,
@@ -224,28 +276,45 @@ def invoke_loop_claude(
     script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
     claude_bin = env.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
     selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
-    mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
-    cmd = build_loop_claude_command(
-        claude_bin=claude_bin,
-        model=selected_model,
-        mode=mode,
-        allowed_tools=allowed_tools,
-        system_prompt=system_prompt,
-        mcp_config=mcp_config,
-        response_schema=response_schema,
-    )
+    use_invoke_agent = mode in invoke_agent_migrated_modes(env)
+    if use_invoke_agent:
+        cmd = build_invoke_agent_loop_command(
+            script_dir=script_dir,
+            mode=mode,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            content_blocks=content_blocks,
+            response_schema=response_schema,
+        )
+        if selected_model != "sonnet":
+            env["EHA_CLAUDE_MODEL_DEFAULT"] = selected_model
+    else:
+        mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
+        cmd = build_loop_claude_command(
+            claude_bin=claude_bin,
+            model=selected_model,
+            mode=mode,
+            allowed_tools=allowed_tools,
+            system_prompt=system_prompt,
+            mcp_config=mcp_config,
+            response_schema=response_schema,
+        )
     cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
-    result = run(
-        cmd,
-        input=build_message_envelope(user_prompt, content_blocks),
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        env=env,
-    )
+    run_kwargs: dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "cwd": cwd,
+        "env": env,
+    }
+    if not use_invoke_agent:
+        run_kwargs["input"] = build_message_envelope(user_prompt, content_blocks)
+    result = run(cmd, **run_kwargs)
     if facts_file:
-        write_facts_file(facts_file, extract_facts_from_stream_text(result.stdout))
-    return stream_result_payload(result.stdout)
+        stream_text = result.stderr if use_invoke_agent else result.stdout
+        write_facts_file(facts_file, extract_facts_from_stream_text(stream_text))
+    return result.stdout if use_invoke_agent else stream_result_payload(result.stdout)
 
 
 def loop_introspection_state(parsed: dict[str, Any]) -> dict[str, str]:
