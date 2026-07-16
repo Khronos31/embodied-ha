@@ -232,6 +232,7 @@ def build_invoke_agent_loop_command(
     system_prompt: str,
     user_prompt: str,
     content_json_path: str | None = None,
+    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
 ) -> list[str]:
     """Build an invoke-agent.sh command for loop.py Claude-compatible modes."""
@@ -245,7 +246,11 @@ def build_invoke_agent_loop_command(
         "--append-system-prompt",
         system_prompt,
     ]
-    if allowed_builtins:
+    if sound_file:
+        # --sound-fileはinvoke-agent.sh側でharness=agyへ強制されるため、agyがdieする
+        # --allowed-builtinsは渡さない(#14増分5・chat_invoke.pyと同じ制約)。
+        cmd += ["--sound-file", sound_file, "--agent-site", mode]
+    elif allowed_builtins:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
@@ -294,6 +299,7 @@ def invoke_loop_claude(
     content_blocks: list[dict[str, Any]] | None = None,
     facts_file: str | None = None,
     model: str | None = None,
+    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
     run=subprocess.run,
 ) -> str:
@@ -307,7 +313,10 @@ def invoke_loop_claude(
     try:
         if use_invoke_agent:
             model_tier, model_override = _invoke_agent_model_tier(selected_model)
-            if content_blocks is not None:
+            # sound_file時はagyがdieするため--content-jsonを渡さない(観測カメラ画像等の
+            # content_blocksはこのターンでは黙って落とす。#14増分5・chat_invoke.pyと同じ
+            # 既知のトレードオフ)。
+            if content_blocks is not None and not sound_file:
                 content_json_path = _write_invoke_agent_content_json(content_blocks, env, mode)
             cmd = build_invoke_agent_loop_command(
                 script_dir=script_dir,
@@ -318,6 +327,7 @@ def invoke_loop_claude(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 content_json_path=content_json_path,
+                sound_file=sound_file,
                 response_schema=response_schema,
             )
             if model_override is not None:
@@ -940,8 +950,6 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
 
 def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run) -> dict[str, Any]:
     environ = dict(environ if environ is not None else os.environ)
-    if os.path.basename(environ.get("EHA_SESSION_BIN", "")) == "agy":
-        raise SystemExit("loop.py does not implement EHA_SESSION_BIN=agy; cutover is blocked until invoke-agent.sh parity exists")
     cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
     paths = resolve_paths(cfg)
     Path(paths.log_dir).mkdir(parents=True, exist_ok=True)
@@ -969,6 +977,7 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             content_blocks=content_blocks,
             facts_file=facts_file,
             model="sonnet" if context["mode"] == "observe" else None,
+            sound_file=context.get("queued_listen_file"),
             response_schema=loop_schema(context["mode"]),
             run=run_subprocess,
         )

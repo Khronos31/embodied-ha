@@ -59,12 +59,14 @@ class LoopMigrationSafetyTests(unittest.TestCase):
         self.assertIn("invoke-agent.sh", doc)
         self.assertIn("not cutover-ready", doc)
 
-    def test_loop_py_blocks_agy_until_invoke_agent_cutover(self):
-        with self.assertRaises(SystemExit) as caught:
-            loop.run({"EHA_SESSION_BIN": "/data/bin/agy"})
-
-        self.assertIn("EHA_SESSION_BIN=agy", str(caught.exception))
-        self.assertIn("invoke-agent.sh", str(caught.exception))
+    def test_loop_py_no_longer_blocks_agy_after_invoke_agent_cutover(self):
+        # 仕様変更(2026-07-17、#14増分6): EHA_SESSION_BIN=agyのSystemExitガードは
+        # invoke-agent.sh --sound-file経由のAntigravity音声サポート実装に伴い撤去した。
+        # このテストは「もう落ちない」ことを確認する形へ更新する(loop.pyのソースに
+        # 撤去済みのSystemExit文字列が残っていないことを直接確認)。
+        source = (ROOT / "embodied_ha" / "loop.py").read_text(encoding="utf-8")
+        self.assertNotIn("EHA_SESSION_BIN", source)
+        self.assertNotIn("does not implement EHA_SESSION_BIN=agy", source)
 
     def test_side_effect_snapshot_normalizes_runtime_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:

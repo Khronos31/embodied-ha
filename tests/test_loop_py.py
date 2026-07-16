@@ -270,6 +270,51 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors")
         self.assertNotIn("EHA_CLAUDE_MODEL_DEFAULT", kwargs["env"])
 
+    def test_invoke_loop_claude_sound_file_forwards_agent_site_and_drops_content_json(self):
+        # #14増分6: queued listen(sound_file)がobserveの投射カメラ画像content_blocksと
+        # 同時に発生しても、agyは--content-json/--allowed-builtinsで即死するため
+        # 黙って落とす(chat_invoke.pyと同じ既知のトレードオフ)。
+        calls = []
+
+        class Result:
+            def __init__(self, stdout="", stderr=""):
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return Result(stdout="音が聞こえました")
+
+        content_blocks = [{"type": "text", "text": "camera frame note"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            response = loop.invoke_loop_claude(
+                user_prompt="observe prompt",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="Read,mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmpdir,
+                    "EHA_TMP_DIR": str(tmp / "tmp"),
+                },
+                model="sonnet",
+                content_blocks=content_blocks,
+                sound_file="/tmp/queued.wav",
+                response_schema=None,
+                run=fake_run,
+            )
+
+            self.assertEqual(response, "音が聞こえました")
+
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[cmd.index("--sound-file") + 1], "/tmp/queued.wav")
+        self.assertEqual(cmd[cmd.index("--agent-site") + 1], "observe")
+        self.assertNotIn("--allowed-builtins", cmd)
+        self.assertNotIn("--content-json", cmd)
+        self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
+
     def test_build_loop_claude_command_omits_empty_allowed_tools_and_absent_schema(self):
         cmd = loop.build_loop_claude_command(
             claude_bin="/bin/claude",
@@ -645,6 +690,18 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 self.assertEqual(rows[0]["private"], "静かに確認している")
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
+
+    def test_eha_session_bin_agy_no_longer_blocks_run(self):
+        # #14増分6: EHA_SESSION_BIN=agyでも(既にレガシー変数として無視されるだけで)
+        # run()がSystemExitしないことを確認する。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            calls = []
+            env = self.make_env(tmp, "reflect")
+            env["EHA_SESSION_BIN"] = "/data/bin/agy"
+            result = loop.run(env, run_subprocess=self.fake_run_factory(calls))
+
+            self.assertEqual(result["mode"], "reflect")
 
     def test_mode_config_matches_loop_sh_mcp_and_allowed_tools(self):
         text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
