@@ -114,6 +114,50 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(envelope["type"], "user")
         self.assertEqual(envelope["message"]["content"][0]["text"], "user")
 
+    def test_invoke_loop_claude_explore_with_boundary_gate_hacontrol_uses_invoke_agent(self):
+        # apply_boundary_gate()がexploreモードで許可時にallowed_tools/mcp_serversへ
+        # hacontrol/mcp__hacontrol__ha_call_serviceを動的追加する(loop.py:676-700)。
+        # invoke_loop_claude()の新経路(build_invoke_agent_loop_command)は追加変換なしに
+        # mcp__ prefixで分割するだけなので、拡張済みの値がそのまま正しく渡ることを確認する
+        # (#18で決定済みの設計の実配線側の裏付け)。
+        calls = []
+
+        class Result:
+            def __init__(self, stdout="", stderr=""):
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            # invoke-agent.sh's own extract_result_json already unwraps the
+            # stream-json "result" event before returning stdout to the caller
+            # (unlike the old direct-claude path, whose raw stdout still needs
+            # stream_result_payload()).
+            payload = {"private": "見回った", "emotion": "calm", "speak": None}
+            return Result(stdout=json.dumps(payload, ensure_ascii=False))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            response = loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="explore",
+                allowed_tools="mcp__sensors__get_sensors,mcp__hacontrol__ha_call_service",
+                mcp_servers=["sensors", "hacontrol"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmpdir,
+                },
+                run=fake_run,
+            )
+
+        self.assertEqual(json.loads(response)["private"], "見回った")
+        invoke_calls = [call for call in calls if "invoke-agent.sh" in call[0][1]]
+        self.assertEqual(len(invoke_calls), 1)
+        cmd, _kwargs = invoke_calls[0]
+        self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors,mcp__hacontrol__ha_call_service")
+        self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors hacontrol")
+        self.assertNotIn("--allowed-builtins", cmd)
+
     def test_build_loop_claude_command_omits_empty_allowed_tools_and_absent_schema(self):
         cmd = loop.build_loop_claude_command(
             claude_bin="/bin/claude",

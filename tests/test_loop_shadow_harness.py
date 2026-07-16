@@ -345,7 +345,7 @@ class LoopShadowProcessParityTests(unittest.TestCase):
             dummy.unlink(missing_ok=True)
 
     def test_loop_py_invoke_agent_migrated_modes_match_direct_path(self):
-        for mode in ("reflect", "web", "social"):
+        for mode in ("reflect", "web", "social", "explore"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
                 root = Path(tmpdir)
                 direct_log, direct_env = make_runtime(root, "loop-py-direct")

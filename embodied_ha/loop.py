@@ -132,7 +132,7 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
 
 
 _DEFAULT_RESPONSE_SCHEMA = object()
-_DEFAULT_INVOKE_AGENT_LOOP_MODES = ("reflect", "web", "social")
+_DEFAULT_INVOKE_AGENT_LOOP_MODES = ("reflect", "web", "social", "explore")
 
 
 def invoke_agent_migrated_modes(environ: dict[str, str]) -> set[str]:
