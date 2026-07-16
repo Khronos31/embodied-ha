@@ -390,6 +390,39 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn(schema, prompt)
             self.assertTrue(prompt.endswith("JSON:\n"))
 
+    def test_claude_emits_raw_stream_on_stderr_for_tool_use_extraction(self):
+        # loop.pyのfacts抽出(introspection_facts.extract_facts_from_stream_text)は
+        # assistant/userイベント中のtool_use/tool_resultを必要とするが、stdoutは
+        # extract_result_json()が最終resultイベントだけに絞ってしまう。run_codex()の
+        # 「生transcriptはstderr、構造化結果はstdout」契約をrun_claude()にも揃え、
+        # callerがstderrから生ストリームを読めるようにする(2026-07-16)。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "1", "name": "mcp__ha__ha_get", "input": {}}]}}, ensure_ascii=False))
+                print(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "1"}]}}, ensure_ascii=False))
+                print(json.dumps({"type": "result", "structured_output": {"ok": True}}, ensure_ascii=False))
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"ok": True})
+            stderr_events = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+            self.assertEqual([e["type"] for e in stderr_events], ["assistant", "user", "result"])
+
     def test_claude_system_prompt_uses_native_flag_distinct_from_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

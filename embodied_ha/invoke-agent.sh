@@ -367,6 +367,11 @@ run_claude() {
     cmd+=("--mcp-config" "$mcp_config_arg")
   fi
   stdout="$(claude_message | (cd "$cwd" && "${cmd[@]}"))"
+  # Mirror run_codex()'s contract: full raw stream-json transcript goes to
+  # stderr (callers that need tool_use/tool_result events, e.g. loop.py's
+  # facts extraction, read it from there), extracted structured payload
+  # goes to stdout.
+  printf '%s\n' "$stdout" >&2
   printf '%s' "$stdout" | extract_result_json
 }
 
