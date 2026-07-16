@@ -9,12 +9,17 @@ Options:
   --model default|lite        Logical model tier (default: default)
   --json-schema JSON         Structured output schema JSON
   --sound-file PATH          Force Antigravity audio fallback and inject PATH into the prompt
-  --append-system-prompt TXT System prompt text
-  --allowed-tools TOOLS      Claude Code allowed tools list
+  --system-prompt TXT        Replace the harness's main system instruction (Claude native
+                             --system-prompt; Codex via model_instructions_file; Antigravity
+                             via prompt prefix approximation)
+  --append-system-prompt TXT Append to the harness/system prompt (Claude native
+                             --append-system-prompt; Codex/Antigravity via prompt prefix)
   --allowed-builtins CSV     Built-in tool allow-list for Claude Code only
-  --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; Claude receives this via
-                             --allowedTools but MCP per-tool filtering is not a
-                             safety boundary for Claude Code
+                             (currently: Read, WebSearch)
+  --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; must cover every
+                             selected MCP server. Claude rejects per-server
+                             partial MCP allowlists; allow every tool in the
+                             server or omit the server from --mcp-servers.
   --mcp-config PATH          Claude Code MCP config path
   --mcp-servers "NAMES"      Space-separated MCP server names; for hacontrol and
                              other single-tool servers, this server-list is the
@@ -24,6 +29,8 @@ Options:
   -h, --help                 Show this help
 
 Harness selection comes from EHA_AGENT_HARNESS unless --sound-file is present.
+Removed: --allowed-tools / --allowedTools. Use --allowed-builtins and
+--allowed-mcp-tools separately.
 EOF
 }
 
@@ -61,9 +68,11 @@ json_schema=""
 logical_model="default"
 sound_file=""
 system_prompt=""
-allowed_tools=""
+system_prompt_replace=""
 allowed_builtins=""
+allowed_builtins_set="false"
 allowed_mcp_tools=""
+allowed_mcp_tools_set="false"
 mcp_config=""
 mcp_servers=""
 agent_site=""
@@ -87,24 +96,26 @@ while (($#)); do
       sound_file="$2"
       shift 2
       ;;
+    --system-prompt)
+      (($# >= 2)) || die "--system-prompt requires a value"
+      system_prompt_replace="$2"
+      shift 2
+      ;;
     --append-system-prompt)
       (($# >= 2)) || die "--append-system-prompt requires a value"
       system_prompt="$2"
       shift 2
       ;;
-    --allowed-tools|--allowedTools)
-      (($# >= 2)) || die "$1 requires a value"
-      allowed_tools="$2"
-      shift 2
-      ;;
     --allowed-builtins)
       (($# >= 2)) || die "--allowed-builtins requires a value"
       allowed_builtins="$2"
+      allowed_builtins_set="true"
       shift 2
       ;;
     --allowed-mcp-tools)
       (($# >= 2)) || die "--allowed-mcp-tools requires a value"
       allowed_mcp_tools="$2"
+      allowed_mcp_tools_set="true"
       shift 2
       ;;
     --mcp-config)
@@ -149,7 +160,10 @@ done
 if [[ -n "$mcp_config" && -n "$mcp_servers" ]]; then
   die "--mcp-config and --mcp-servers cannot be used together"
 fi
-if [[ -n "$allowed_mcp_tools" && -z "$mcp_servers" ]]; then
+if [[ -n "$mcp_config" && ( "$allowed_mcp_tools_set" == "true" || "$allowed_builtins_set" == "true" ) ]]; then
+  die "--mcp-config cannot be used with --allowed-builtins or --allowed-mcp-tools; use --mcp-servers"
+fi
+if [[ "$allowed_mcp_tools_set" == "true" && -z "$mcp_servers" ]]; then
   die "--allowed-mcp-tools requires --mcp-servers"
 fi
 
@@ -168,18 +182,14 @@ if [[ -n "$sound_file" ]]; then
   # TODO: This is path injection only. The Web UI should tell users that audio
   # multimodal processing falls back to Antigravity, and future work should
   # replace this with a real audio attachment path if the harness supports it.
-  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"${sound_file}"
+  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"@${sound_file}"
 fi
 
-selected_harness="${EHA_AGENT_HARNESS:-}"
-if [[ -z "$selected_harness" && -n "${EHA_SESSION_BIN:-}" ]]; then
-  case "$(basename "$EHA_SESSION_BIN")" in
-    claude) selected_harness="claude" ;;
-    codex) selected_harness="codex" ;;
-    agy|agy.real) selected_harness="agy" ;;
-  esac
-fi
-selected_harness="${selected_harness:-claude}"
+selected_harness="${EHA_AGENT_HARNESS:-claude}"
+harness_was_agy="false"
+case "$(lower "$selected_harness")" in
+  agy|antigravity|gemini) harness_was_agy="true" ;;
+esac
 if [[ -n "$sound_file" ]]; then
   selected_harness="agy"
 fi
@@ -217,7 +227,7 @@ case "$harness:$logical_model" in
     model="${EHA_AGY_MODEL_LITE:-Gemini 3.5 Flash (Low)}"
     ;;
 esac
-if [[ "$harness" == "agy" && -n "$sound_file" ]]; then
+if [[ "$harness" == "agy" && -n "$sound_file" && "$harness_was_agy" != "true" ]]; then
   model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
 fi
 
@@ -243,6 +253,31 @@ if not result:
 print(result, end="")
 '
 }
+
+validate_allowed_builtins() {
+  [[ "$allowed_builtins_set" == "true" ]] || return 0
+  local IFS=,
+  local item
+  local seen=","
+  local -a builtin_items=()
+  read -r -a builtin_items <<< "$allowed_builtins" || true
+  ((${#builtin_items[@]} > 0)) || die "--allowed-builtins contains an empty entry"
+  for item in "${builtin_items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [[ -n "$item" ]] || die "--allowed-builtins contains an empty entry"
+    case "$item" in
+      Read|WebSearch) ;;
+      *) die "unknown built-in tool in --allowed-builtins: $item" ;;
+    esac
+    if [[ "$seen" == *",$item,"* ]]; then
+      die "duplicate built-in tool in --allowed-builtins: $item"
+    fi
+    seen+="$item,"
+  done
+}
+
+validate_allowed_builtins
 
 detect_new_agy_project_id() {
   local projects_dir="$1"
@@ -299,8 +334,7 @@ run_claude() {
   local bin="${EHA_CLAUDE_BIN:-${CLAUDE_BIN:-claude}}"
   local stdout
   local mcp_config_arg="$mcp_config"
-  local effective_allowed_tools="$allowed_tools"
-  effective_allowed_tools="$(append_csv "$effective_allowed_tools" "$allowed_builtins")"
+  local effective_allowed_tools="$allowed_builtins"
   effective_allowed_tools="$(append_csv "$effective_allowed_tools" "$allowed_mcp_tools")"
   if [[ -n "$mcp_servers" ]]; then
     mcp_config_arg="$(mktemp "${TMPDIR:-/tmp}/eha-claude-mcp.XXXXXX.json")"
@@ -308,7 +342,7 @@ run_claude() {
     local server_args=()
     read -r -a server_args <<< "$mcp_servers"
     local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format claude)
-    if [[ -n "$allowed_mcp_tools" ]]; then
+    if [[ "$allowed_mcp_tools_set" == "true" ]]; then
       gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
     fi
     gen_cmd+=("$mcp_config_arg" "${server_args[@]}")
@@ -316,6 +350,9 @@ run_claude() {
   fi
   local cmd=("$bin" "-p" "--model" "$model" "--effort" "$effort"
              "--input-format" "stream-json" "--output-format" "stream-json" "--verbose")
+  if [[ -n "$system_prompt_replace" ]]; then
+    cmd+=("--system-prompt" "$system_prompt_replace")
+  fi
   if [[ -n "$system_prompt" ]]; then
     cmd+=("--append-system-prompt" "$system_prompt")
   fi
@@ -333,8 +370,7 @@ run_claude() {
 }
 
 run_codex() {
-  [[ -z "$allowed_tools" ]] || die "--allowed-tools is not supported for codex in invoke-agent.sh yet"
-  [[ -z "$allowed_builtins" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
+  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
   [[ -z "$content_json" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
@@ -348,6 +384,13 @@ run_codex() {
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  if [[ -n "$system_prompt_replace" ]]; then
+    local instructions_path
+    instructions_path="$(mktemp "${TMPDIR:-/tmp}/eha-codex-system-prompt.XXXXXX.md")"
+    TEMP_FILES+=("$instructions_path")
+    printf '%s' "$system_prompt_replace" > "$instructions_path"
+    cmd+=("--config" "model_instructions_file=\"$instructions_path\"")
+  fi
   if [[ -n "$mcp_servers" ]]; then
     local codex_home="${CODEX_HOME:-${HOME:-/data}/.codex}"
     mkdir -p "$codex_home"
@@ -356,7 +399,7 @@ run_codex() {
     local server_args=()
     read -r -a server_args <<< "$mcp_servers"
     local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format codex)
-    if [[ -n "$allowed_mcp_tools" ]]; then
+    if [[ "$allowed_mcp_tools_set" == "true" ]]; then
       gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
     fi
     gen_cmd+=("$profile_path" "${server_args[@]}")
@@ -374,8 +417,7 @@ run_codex() {
 }
 
 run_agy() {
-  [[ -z "$allowed_tools" ]] || die "--allowed-tools is not supported for agy in invoke-agent.sh yet"
-  [[ -z "$allowed_builtins" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
+  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   [[ -z "$content_json" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
 
@@ -399,7 +441,7 @@ run_agy() {
     local server_args=()
     read -r -a server_args <<< "$mcp_servers"
     local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format agy)
-    if [[ -n "$allowed_mcp_tools" ]]; then
+    if [[ "$allowed_mcp_tools_set" == "true" ]]; then
       gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
     fi
     gen_cmd+=("$site_dir/.agents/mcp_config.json" "${server_args[@]}")
@@ -407,6 +449,9 @@ run_agy() {
   fi
   local full_prompt="$prompt"
   local stdout
+  if [[ -n "$system_prompt_replace" ]]; then
+    full_prompt="[System Instruction]"$'\n'"${system_prompt_replace}"$'\n\n'"[User Prompt]"$'\n'"${full_prompt}"
+  fi
   if [[ -n "$system_prompt" ]]; then
     full_prompt="あなたへの指示:"$'\n'"${system_prompt}"$'\n\n'"${full_prompt}"
   fi

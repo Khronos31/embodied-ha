@@ -9,6 +9,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "embodied_ha" / "invoke-agent.sh"
+MEMORY_ALLOWLIST = ",".join(
+    f"mcp__memory__{name}"
+    for name in [
+        "recall",
+        "remember",
+        "loops_list",
+        "loops_add",
+        "loops_close",
+        "record_episode",
+        "record_counterfactual",
+        "get_episode",
+        "get_working_memory",
+        "ingest_scene",
+        "resolve_reference",
+        "compare_recent_scenes",
+        "list_episodes",
+        "build_daybook",
+        "get_daybook",
+        "record_causal_chain",
+        "get_causal_chain",
+        "consolidate_memory",
+    ]
+)
 
 
 def write_executable(path: Path, text: str) -> None:
@@ -147,10 +170,12 @@ class InvokeAgentTests(unittest.TestCase):
                     "lite",
                     "--json-schema",
                     schema,
-                    "--allowed-tools",
-                    "Read,mcp__ha__ha_get",
-                    "--mcp-config",
-                    "/tmp/mcp.json",
+                    "--allowed-builtins",
+                    "Read",
+                    "--mcp-servers",
+                    "ha",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
                     "--append-system-prompt",
                     "system prompt",
                     "--content-json",
@@ -160,6 +185,7 @@ class InvokeAgentTests(unittest.TestCase):
                 {
                     "EHA_AGENT_HARNESS": "claude",
                     "EHA_CLAUDE_BIN": fake.as_posix(),
+                    "SUPERVISOR_TOKEN": "secret-token",
                 },
             )
 
@@ -172,7 +198,7 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(args[args.index("--effort") + 1], "low")
             self.assertEqual(args[args.index("--json-schema") + 1], schema)
             self.assertEqual(args[args.index("--allowedTools") + 1], "Read,mcp__ha__ha_get")
-            self.assertEqual(args[args.index("--mcp-config") + 1], "/tmp/mcp.json")
+            self.assertIn("--mcp-config", args)
             self.assertEqual(args[args.index("--append-system-prompt") + 1], "system prompt")
             message = json.loads(payload["stdin"])
             self.assertEqual(message["message"]["content"], json.loads(content))
@@ -271,6 +297,125 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn(schema, prompt)
             self.assertTrue(prompt.endswith("JSON:\n"))
 
+    def test_claude_system_prompt_uses_native_flag_distinct_from_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "claude.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:]}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{"type": "result", "result": "ok"}}, ensure_ascii=False))
+                """,
+            )
+
+            result = self.run_wrapper(
+                [
+                    "--system-prompt", "MAIN",
+                    "--append-system-prompt", "EXTRA",
+                    "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "claude",
+                    "EHA_CLAUDE_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            self.assertEqual(args[args.index("--system-prompt") + 1], "MAIN")
+            self.assertEqual(args[args.index("--append-system-prompt") + 1], "EXTRA")
+
+    def test_codex_system_prompt_uses_model_instructions_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "codex.json"
+            fake = tmpdir / "codex"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                out_path = args[args.index("-o") + 1]
+                config_values = [
+                    a for i, a in enumerate(args)
+                    if args[i - 1] == "--config" and a.startswith("model_instructions_file=")
+                ]
+                instructions_content = None
+                if config_values:
+                    instructions_path = config_values[0].split("=", 1)[1].strip('"')
+                    instructions_content = Path(instructions_path).read_text(encoding="utf-8")
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": args, "instructions_content": instructions_content}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--system-prompt", "MAIN INSTRUCTION", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": "/tmp",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(payload["instructions_content"], "MAIN INSTRUCTION")
+
+    def test_agy_system_prompt_uses_system_instruction_prefix_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": args}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--system-prompt", "MAIN", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            prompt = args[args.index("-p") + 1]
+            self.assertIn("[System Instruction]\nMAIN\n\n[User Prompt]\nhello", prompt)
+
     def test_sound_file_forces_agy_high_even_when_harness_is_codex(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -316,9 +461,45 @@ class InvokeAgentTests(unittest.TestCase):
             args = payload["args"]
             self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (High)")
             prompt = args[args.index("-p") + 1]
-            self.assertIn("【いま聞こえた音】\n/tmp/input.wav", prompt)
+            self.assertIn("【いま聞こえた音】\n@/tmp/input.wav", prompt)
 
-    def test_codex_rejects_claude_only_tool_contract_instead_of_dropping_it(self):
+    def test_sound_file_does_not_force_high_when_harness_already_agy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            agy = tmpdir / "agy"
+            write_executable(
+                agy,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:]}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--model", "lite", "--sound-file", "/tmp/input.wav", "listen"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (Low)")
+            prompt = args[args.index("-p") + 1]
+            self.assertIn("【いま聞こえた音】\n@/tmp/input.wav", prompt)
+
+    def test_legacy_allowed_tools_option_is_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp) / "codex"
             write_executable(
@@ -339,7 +520,7 @@ class InvokeAgentTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("--allowed-tools is not supported for codex", result.stderr)
+            self.assertIn("unknown option: --allowed-tools", result.stderr)
 
     def test_codex_mcp_servers_use_temp_profile_and_delete_after_call(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,7 +624,7 @@ class InvokeAgentTests(unittest.TestCase):
                     "--allowed-builtins",
                     "Read,WebSearch",
                     "--allowed-mcp-tools",
-                    "mcp__ha__ha_get",
+                    "mcp__ha__ha_get," + MEMORY_ALLOWLIST,
                     "hello",
                 ],
                 {
@@ -456,7 +637,10 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             payload = json.loads(record.read_text(encoding="utf-8"))
             args = payload["args"]
-            self.assertEqual(args[args.index("--allowedTools") + 1], "Read,WebSearch,mcp__ha__ha_get")
+            self.assertEqual(
+                args[args.index("--allowedTools") + 1],
+                "Read,WebSearch,mcp__ha__ha_get," + MEMORY_ALLOWLIST,
+            )
             self.assertTrue(payload["mcp_config_exists_during_call"])
             self.assertFalse(Path(payload["mcp_config_path"]).exists())
             config = payload["mcp_config"]["mcpServers"]
@@ -474,6 +658,21 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--mcp-config and --mcp-servers cannot be used together", result.stderr)
 
+    def test_mcp_config_rejects_separate_allowlists(self):
+        builtins = self.run_wrapper(
+            ["--mcp-config", "/tmp/x.json", "--allowed-builtins", "Read", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+        mcp_tools = self.run_wrapper(
+            ["--mcp-config", "/tmp/x.json", "--allowed-mcp-tools", "mcp__ha__ha_get", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+
+        self.assertNotEqual(builtins.returncode, 0)
+        self.assertIn("--mcp-config cannot be used with --allowed-builtins or --allowed-mcp-tools", builtins.stderr)
+        self.assertNotEqual(mcp_tools.returncode, 0)
+        self.assertIn("--mcp-config cannot be used with --allowed-builtins or --allowed-mcp-tools", mcp_tools.stderr)
+
     def test_allowed_mcp_tools_requires_mcp_servers(self):
         result = self.run_wrapper(
             ["--allowed-mcp-tools", "mcp__ha__ha_get", "hello"],
@@ -483,6 +682,15 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--allowed-mcp-tools requires --mcp-servers", result.stderr)
 
+    def test_empty_allowed_builtins_is_invalid_when_specified(self):
+        result = self.run_wrapper(
+            ["--allowed-builtins", "", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--allowed-builtins contains an empty entry", result.stderr)
+
     def test_help_documents_hacontrol_server_list_safety_boundary(self):
         result = self.run_wrapper(["--help"], {})
 
@@ -491,9 +699,11 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertIn("--allowed-builtins", help_text)
         self.assertIn("--allowed-mcp-tools", help_text)
         self.assertIn("--mcp-servers", help_text)
+        self.assertIn("Removed: --allowed-tools / --allowedTools", help_text)
         self.assertIn("hacontrol", help_text)
         self.assertIn("server-list is the", help_text)
         self.assertIn("not --allowed-mcp-tools", help_text)
+        self.assertIn("Claude rejects per-server", help_text)
 
     def test_codex_rejects_allowed_builtins(self):
         with tempfile.TemporaryDirectory() as tmp:
