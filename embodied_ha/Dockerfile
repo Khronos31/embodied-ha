@@ -6,6 +6,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2-plugins pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Debianのmedia-typesパッケージは/etc/mime.typesにwav/mp3を
+# audio/x-wav・audio/mpegとしてのみ登録しており、audio/wav・audio/mp3が無い。
+# Antigravity(agy) CLIのファイル読み込みがこの片方しか受け付けず、
+# queued listen等の音声ファイル解析が失敗する原因になるため、
+# パッケージインストール後に不足分を追記する(冪等)。
+RUN grep -qxF 'audio/wav					wav' /etc/mime.types 2>/dev/null \
+      || echo 'audio/wav					wav' >> /etc/mime.types \
+    && grep -qxF 'audio/mp3					mp3' /etc/mime.types 2>/dev/null \
+      || echo 'audio/mp3					mp3' >> /etc/mime.types
+
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true
 RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad==3.2.0" \
     && python3 -c "from pysilero_vad import SileroVoiceActivityDetector; SileroVoiceActivityDetector()"
