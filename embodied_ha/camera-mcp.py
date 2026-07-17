@@ -350,6 +350,17 @@ def main():
                     "isError": True
                 }})
 
+        elif id_ is not None:
+            # 未対応メソッドには JSON-RPC エラーを返す（通知にはなにもしない）
+            send({
+                "jsonrpc": "2.0",
+                "id": id_,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {method}",
+                },
+            })
+
 
 if __name__ == "__main__":
     main()
