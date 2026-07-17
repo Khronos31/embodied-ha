@@ -8,6 +8,7 @@ chat_invoke.build_chat_prompt() の出力を直接比較する。副作用（sub
 安全に実行できる（body_state.py/json_schemas.py の import と、
 try/exceptで包まれたlocation_belief.json/preferences.jsonの読み取りのみ）。
 """
+import io
 import json
 import sys
 import tempfile
@@ -414,6 +415,83 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertEqual(response, '{"reply":"ok"}')
         self.assertNotIn("--content-json", captured["cmd"])
         self.assertNotIn("input", captured["kwargs"])
+
+    def test_invoke_chat_claude_logs_returncode_and_stderr_on_failure(self):
+        class Result:
+            stdout = ""
+            stderr = "invoke-agent.sh: something went wrong\n"
+            returncode = 1
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=1", logged)
+        self.assertIn("something went wrong", logged)
+
+    def test_invoke_chat_claude_logs_on_blank_stdout_even_with_zero_returncode(self):
+        # returncode==0だがstdoutが空/空白のみ(agyの応答形式不備等)というORのもう一方の
+        # 分岐を独立に確認する(gpt-5.6-solレビュー指摘、2026-07-17)。
+        class Result:
+            stdout = "   "
+            stderr = "invoke-agent.sh: empty result event\n"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "   ")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=0", logged)
+        self.assertIn("empty result event", logged)
+
+    def test_invoke_chat_claude_stays_silent_on_success(self):
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(stderr_capture.getvalue(), "")
 
 
 class AllowedToolsHttpPostTests(unittest.TestCase):

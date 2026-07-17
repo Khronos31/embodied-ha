@@ -275,6 +275,10 @@ def invoke_loop_claude(
             "env": env,
         }
         result = run(cmd, **run_kwargs)
+        if result.returncode != 0 or not result.stdout.strip():
+            print(f"[loop][invoke-agent] 呼び出し失敗 returncode={result.returncode}", file=sys.stderr)
+            if result.stderr.strip():
+                print(f"[loop][invoke-agent][stderr] {result.stderr.strip()[-400:]}", file=sys.stderr)
         if facts_file:
             write_facts_file(facts_file, extract_facts_from_stream_text(result.stderr))
         return result.stdout

@@ -492,6 +492,10 @@ def invoke_chat_claude(
             http_post_enabled=http_post_enabled,
         )
         r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
+        if r.returncode != 0 or not r.stdout.strip():
+            print(f"[chat][invoke-agent] 呼び出し失敗 returncode={r.returncode}", file=sys.stderr)
+            if r.stderr.strip():
+                print(f"[chat][invoke-agent][stderr] {r.stderr.strip()[-400:]}", file=sys.stderr)
         return r.stdout
     finally:
         if content_json_path:

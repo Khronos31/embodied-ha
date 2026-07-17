@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,9 +63,10 @@ class LoopPyInvocationTests(unittest.TestCase):
         calls = []
 
         class Result:
-            def __init__(self, stdout="", stderr=""):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
                 self.stderr = stderr
+                self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
@@ -102,9 +105,10 @@ class LoopPyInvocationTests(unittest.TestCase):
         seen_content = []
 
         class Result:
-            def __init__(self, stdout="", stderr=""):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
                 self.stderr = stderr
+                self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
@@ -157,9 +161,10 @@ class LoopPyInvocationTests(unittest.TestCase):
         seen_content = []
 
         class Result:
-            def __init__(self, stdout="", stderr=""):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
                 self.stderr = stderr
+                self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
@@ -214,9 +219,10 @@ class LoopPyInvocationTests(unittest.TestCase):
         calls = []
 
         class Result:
-            def __init__(self, stdout="", stderr=""):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
                 self.stderr = stderr
+                self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
@@ -252,13 +258,97 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertNotIn("--content-json", cmd)
         self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
 
+    def test_invoke_loop_claude_logs_returncode_and_stderr_on_failure(self):
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            return Result(stderr="invoke-agent.sh: something went wrong\n", returncode=1)
+
+        stderr_capture = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("sys.stderr", stderr_capture):
+            response = loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=1", logged)
+        self.assertIn("something went wrong", logged)
+
+    def test_invoke_loop_claude_logs_on_blank_stdout_even_with_zero_returncode(self):
+        # returncode==0だがstdoutが空/空白のみというORのもう一方の分岐を独立に確認する
+        # (gpt-5.6-solレビュー指摘、2026-07-17)。
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            return Result(stdout="   ", stderr="invoke-agent.sh: empty result event\n", returncode=0)
+
+        stderr_capture = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("sys.stderr", stderr_capture):
+            response = loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "   ")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=0", logged)
+        self.assertIn("empty result event", logged)
+
+    def test_invoke_loop_claude_stays_silent_on_success(self):
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            return Result(stdout=json.dumps({"private": "ok"}, ensure_ascii=False))
+
+        stderr_capture = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("sys.stderr", stderr_capture):
+            loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="observe",
+                allowed_tools="mcp__sensors__get_sensors",
+                mcp_servers=["sensors"],
+                environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
+                run=fake_run,
+            )
+
+        self.assertEqual(stderr_capture.getvalue(), "")
+
     def test_observe_invocation_uses_sonnet_and_does_not_set_actor(self):
         calls = []
 
         class Result:
-            def __init__(self, stdout="", stderr=""):
+            def __init__(self, stdout="", stderr="", returncode=0):
                 self.stdout = stdout
                 self.stderr = stderr
+                self.returncode = returncode
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
