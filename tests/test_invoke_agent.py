@@ -1101,6 +1101,158 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertNotIn("--new-project", records[0]["args"])
             self.assertEqual(records[0]["args"][records[0]["args"].index("--project") + 1], "saved-project-123")
 
+    def _run_agy_with_servers(self, tmpdir, agy_home, extra_args):
+        workdir = tmpdir / "workdir"
+        site_dir = workdir / "chat"
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / ".eha_project_id").write_text("saved-project-123\n", encoding="utf-8")
+        fake = tmpdir / "agy"
+        if not fake.exists():
+            fake = self.write_project_fake_agy(tmpdir)
+        return self.run_wrapper(
+            ["--agent-site", "chat", *extra_args, "hello"],
+            {
+                "EHA_AGENT_HARNESS": "agy",
+                "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                "EHA_CLAUDE_CWD": workdir.as_posix(),
+            },
+        )
+
+    def test_agy_writes_server_wildcard_permission_grants(self):
+        # agy 1.1.3 headlessはconfig.jsonのglobalPermissionGrantsだけを実行承認に
+        # 使う(settings.jsonのpermissions.allowは無視される。実機切り分け済み、
+        # 2026-07-17)。グラントは接続サーバー単位のワイルドカードmcp(server/*)——
+        # 完全一致だとモデルがグラント外ツール名を呼んだ時点でprintモードが
+        # ターン全体を打ち切るため(実測)。--allowed-mcp-toolsの有無はグラントに
+        # 影響しない(それはincludeTools=可視性側の入力)。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                '{"userSettings": {"remoteControlHostname": "keep-me"}}',
+                encoding="utf-8",
+            )
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home,
+                ["--mcp-servers", "ha memory",
+                 "--allowed-mcp-tools", "mcp__ha__ha_get,mcp__memory__recall"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config["userSettings"]["remoteControlHostname"], "keep-me")
+            self.assertEqual(
+                config["userSettings"]["globalPermissionGrants"]["allow"],
+                ["mcp(ha/*)", "mcp(memory/*)"],
+            )
+
+    def test_agy_permission_grants_merge_is_add_only_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps({"userSettings": {"globalPermissionGrants": {
+                    "allow": ["mcp(ha/*)", "read_file(*)"]}}}),
+                encoding="utf-8",
+            )
+
+            for _ in range(2):
+                result = self._run_agy_with_servers(
+                    tmpdir, agy_home,
+                    ["--mcp-servers", "ha memory",
+                     "--allowed-mcp-tools", "mcp__ha__ha_get,mcp__memory__recall"],
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                config["userSettings"]["globalPermissionGrants"]["allow"],
+                ["mcp(ha/*)", "read_file(*)", "mcp(memory/*)"],
+            )
+
+    def test_agy_permission_grants_written_without_allowed_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                config["userSettings"]["globalPermissionGrants"]["allow"],
+                ["mcp(ha/*)"],
+            )
+
+    def test_agy_permission_grants_die_on_corrupt_config_without_clobbering(self):
+        # 壊れた既存config.jsonを黙って{}で全置換するとuserSettingsの他キーを
+        # 失うため、fail-closedで停止しファイルへ触れないこと(sol review指摘)。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("{broken json", encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("grants merge failed", result.stderr)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), "{broken json")
+
+    def test_agy_permission_grants_die_on_invalid_nested_types(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            original = json.dumps({"userSettings": {"globalPermissionGrants": {"allow": "mcp(ha/*)"}}})
+            config_path.write_text(original, encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("allow is not a list", result.stderr)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
+
+    def test_agy_permission_grants_preserve_file_mode_and_skip_rewrite_when_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps({"userSettings": {"globalPermissionGrants": {"allow": ["mcp(ha/*)"]}}}),
+                encoding="utf-8",
+            )
+            os.chmod(config_path, 0o600)
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+            # 既に必要なグラントが揃っている場合は書き換え自体が起きないこと
+            mtime_before = config_path.stat().st_mtime_ns
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(config_path.stat().st_mtime_ns, mtime_before)
+
     def test_agy_mcp_requires_agent_site_and_rejects_allowed_builtins(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = self.write_project_fake_agy(Path(tmp))

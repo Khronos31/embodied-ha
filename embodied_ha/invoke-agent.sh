@@ -301,6 +301,80 @@ validate_allowed_builtins() {
 
 validate_allowed_builtins
 
+# agy 1.1.3のheadless(-p)モードは、MCPツール実行の確認をsettings.jsonの
+# permissions.allowではなく、config.jsonのuserSettings.globalPermissionGrants
+# (grant store)で判定する(settings.json側はエラーメッセージの案内に反して
+# 無視される。実機切り分け済み、2026-07-17)。ここで必要なグラントを
+# add-onlyマージで反映しないと、モデルがMCPツールを呼んだ時点でターン全体が
+# 空応答になる。グラントは呼び出し後も残す(EHA専用identityへの恒久配置。
+# 呼び出し単位のツール制限はmcp_configのincludeTools側が担う)。
+ensure_agy_permission_grants() {
+  local agy_home="$1"
+  local grants="$2"
+  local config_dir="$agy_home/.gemini/config"
+  mkdir -p "$config_dir"
+  local lock_file="$config_dir/.eha-grants.lock"
+  (
+    flock -x 200
+    AGY_CONFIG_JSON="$config_dir/config.json" EHA_GRANTS="$grants" python3 - <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path = os.environ["AGY_CONFIG_JSON"]
+wanted = [g for g in os.environ["EHA_GRANTS"].split("\n") if g]
+
+
+def fail(message):
+    # 壊れた/型不正の既存config.jsonを黙って全置換すると、userSettingsの
+    # 他のキーを失う。fail-closedで止めて診断に乗せる(sol review、2026-07-17)。
+    print(f"invoke-agent.sh: agy config.json grants merge failed: {message} ({path})", file=sys.stderr)
+    sys.exit(1)
+
+
+file_existed = os.path.exists(path)
+config = {}
+if file_existed:
+    try:
+        with open(path, encoding="utf-8") as f:
+            config = json.load(f)
+    except ValueError as e:
+        fail(f"existing file is not valid JSON: {e}")
+    if not isinstance(config, dict):
+        fail("existing JSON root is not an object")
+user_settings = config.setdefault("userSettings", {})
+if not isinstance(user_settings, dict):
+    fail("userSettings is not an object")
+grants = user_settings.setdefault("globalPermissionGrants", {})
+if not isinstance(grants, dict):
+    fail("userSettings.globalPermissionGrants is not an object")
+allow = grants.setdefault("allow", [])
+if not isinstance(allow, list):
+    fail("userSettings.globalPermissionGrants.allow is not a list")
+changed = False
+for grant in wanted:
+    if grant not in allow:
+        allow.append(grant)
+        changed = True
+if changed:
+    mode = os.stat(path).st_mode & 0o777 if file_existed else 0o600
+    fd, tmp = tempfile.mkstemp(prefix=".config.json.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+PY
+  ) 200>"$lock_file"
+}
+
 detect_new_agy_project_id() {
   local projects_dir="$1"
   local before_file="$2"
@@ -482,6 +556,23 @@ run_agy() {
     fi
     gen_cmd+=("$site_dir/.agents/mcp_config.json" "${server_args[@]}")
     "${gen_cmd[@]}"
+
+    # headless実行の実行承認グラントを、接続サーバー単位のワイルドカード
+    # mcp(server/*)で導出する。完全一致(mcp(server/tool))にしない理由:
+    # agy 1.1.3はincludeToolsの可視性制限を実効させておらず、モデルがグラント外の
+    # ツール名を1回でも呼ぶとprintモードがターン全体を打ち切る(実測、2026-07-17)。
+    # ワイルドカードなら未知ツール名はMCPサーバー側の「未知のツール」エラーとして
+    # 返り、モデルは続行できる。ツール単位の安全境界はサーバー側ゲート
+    # (http_postのtools/list掲載制御・hacontrolのquiet gate等)が担う。
+    # includeTools強制と「拒否=ターン死」挙動がagy側で修正されたら、完全一致への
+    # 引き締めを再検討する(この粒度はワークアラウンド。グラント配布という行為
+    # 自体はagyのheadless権限モデルが要求する恒久処理)。
+    local grants=""
+    local server
+    for server in "${server_args[@]}"; do
+      grants+="mcp(${server}/*)"$'\n'
+    done
+    ensure_agy_permission_grants "$agy_home" "$grants"
   fi
   local full_prompt="$prompt"
   local stdout
