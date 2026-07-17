@@ -470,6 +470,38 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertIn("returncode=0", logged)
         self.assertIn("empty result event", logged)
 
+    def test_invoke_chat_claude_logs_tool_use_audit_from_stderr(self):
+        # 増分7で失われたchat経路のツール操作監査ログ([chat][tool])の復元
+        # (PR#2最終レビュー指摘)。invoke-agent.sh経由では生stream-jsonが
+        # stderrへ流れるため、そこからtool_useを抽出して出力する。
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
+            }, ensure_ascii=False) + "\n"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        logged = stderr_capture.getvalue()
+        self.assertIn("[chat][tool] recall", logged)
+        self.assertIn("エアコン", logged)
+        self.assertNotIn("呼び出し失敗", logged)
+
     def test_invoke_chat_claude_stays_silent_on_success(self):
         class Result:
             stdout = '{"reply":"ok"}'
@@ -492,6 +524,32 @@ class InvokeAgentChatPathTests(unittest.TestCase):
             )
 
         self.assertEqual(stderr_capture.getvalue(), "")
+
+
+class LogToolUseDiagnosticsTests(unittest.TestCase):
+    # 増分7で削除→PR#2最終レビュー指摘で復元(入力は旧stdoutから
+    # invoke-agent.sh契約のstderrへ変更、パース自体は同一)
+    def test_prints_tool_use_details(self):
+        printed = []
+        stream_text = json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
+        }, ensure_ascii=False)
+        chat_invoke.log_tool_use_diagnostics(stream_text, print_fn=printed.append)
+        self.assertEqual(len(printed), 1)
+        self.assertIn("recall", printed[0])
+        self.assertIn("エアコン", printed[0])
+
+    def test_ignores_non_assistant_lines(self):
+        printed = []
+        stream_text = json.dumps({"type": "result", "result": "ok"}, ensure_ascii=False)
+        chat_invoke.log_tool_use_diagnostics(stream_text, print_fn=printed.append)
+        self.assertEqual(printed, [])
+
+    def test_malformed_lines_are_skipped(self):
+        printed = []
+        chat_invoke.log_tool_use_diagnostics("not json\n", print_fn=printed.append)
+        self.assertEqual(printed, [])
 
 
 class AllowedToolsHttpPostTests(unittest.TestCase):

@@ -448,6 +448,35 @@ def build_invoke_agent_chat_command(
     return cmd
 
 
+def log_tool_use_diagnostics(stream_text, print_fn=None):
+    """assistant側のtool_use呼び出しをstderrへ操作監査ログとして出す(副作用のみ)。
+
+    旧経路ではclaude CLIのstdout(生stream-json)を読んでいたが、invoke-agent.sh経由では
+    生transcriptがstderrへ流れる契約のため、呼び出し元はr.stderrを渡す。家電操作・
+    memory更新等の成功したツール使用がSupervisorログに残らない監査回帰(PR#2最終レビュー
+    指摘)への対応として増分7で削除されたものを復元した。agyハーネスのstderrには
+    stream-jsonが含まれないため、単に何も出力されない(無害)。
+    """
+    if print_fn is None:
+        def print_fn(msg):
+            print(msg, file=sys.stderr)
+    for line in stream_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") != "assistant":
+            continue
+        for blk in d.get("message", {}).get("content", []):
+            if blk.get("type") == "tool_use":
+                inp = blk.get("input", {})
+                detail = inp.get("path") or inp.get("keywords") or json.dumps(inp, ensure_ascii=False)[:80]
+                print_fn(f"[chat][tool] {blk.get('name', '')}: {detail}")
+
+
 def invoke_chat_claude(
     *,
     chat_source,
@@ -492,6 +521,7 @@ def invoke_chat_claude(
             http_post_enabled=http_post_enabled,
         )
         r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
+        log_tool_use_diagnostics(r.stderr)
         if r.returncode != 0 or not r.stdout.strip():
             print(f"[chat][invoke-agent] 呼び出し失敗 returncode={r.returncode}", file=sys.stderr)
             if r.stderr.strip():
