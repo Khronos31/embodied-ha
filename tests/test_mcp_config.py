@@ -1,8 +1,8 @@
 """mcp-config.pyのhttp_post許可トグル(preferences.jsonのhttp_post_enabled)テスト。
 
 http-mcp.py自身はEHA_HTTP_ALLOW_POST環境変数でhttp_postツールの
-tools/list掲載有無を切り替える(--allowedToolsではMCPツール単位の
-絞り込みができないため、これが唯一の制御点)。mcp-config.pyはその
+tools/list掲載有無を切り替える。Claude Codeの--allowedToolsはMCPツールを
+実行時に絞り込めるが、tools/listの可視性は絞らないため、非掲載も防御層として残る。mcp-config.pyはその
 env変数を、preferences.jsonのhttp_post_enabledフィールド(Web UI
 「高度な設定」タブのトグル)から動的に注入する役割を持つ。
 
@@ -11,11 +11,14 @@ subprocessとして実際に起動し、生成されるmcp設定JSONのenvを検
 単体テストより実行経路に忠実なsubprocess呼び出しの方が適している)。
 """
 import json
+import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +75,16 @@ class McpConfigFormatTests(unittest.TestCase):
             text=True,
         )
 
+    def run_config_no_check(self, args, env=None):
+        run_env = {"PATH": "/usr/bin:/bin", **(env or {})}
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            env=run_env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     def test_format_claude_matches_legacy_output_byte_for_byte(self):
         with tempfile.TemporaryDirectory() as tmp:
             legacy = Path(tmp) / "legacy.json"
@@ -94,7 +107,6 @@ class McpConfigFormatTests(unittest.TestCase):
                     "mcp__ha__ha_get",
                     str(out_path),
                     "ha",
-                    "memory",
                 ]
             )
 
@@ -103,7 +115,7 @@ class McpConfigFormatTests(unittest.TestCase):
                 config["mcpServers"]["ha"][GEMINI_OFFICIAL_MCP_ALLOWLIST_KEY],
                 ["ha_get"],
             )
-            self.assertNotIn(GEMINI_OFFICIAL_MCP_ALLOWLIST_KEY, config["mcpServers"]["memory"])
+            self.assertEqual(set(config["mcpServers"]), {"ha"})
 
     def test_format_codex_writes_profile_toml_with_enabled_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -139,6 +151,155 @@ class McpConfigFormatTests(unittest.TestCase):
         self.assertIn("--mcp-servers", text)
         self.assertIn("--allowed-mcp-tools", text)
         self.assertIn("server-list", text)
+
+    def test_bare_filename_output_path_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "mcp_config.json", "memory"],
+                cwd=tmp,
+                env={"PATH": "/usr/bin:/bin"},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((Path(tmp) / "mcp_config.json").exists())
+
+    def assert_rejects_without_output(self, args, expected_stderr):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "mcp_config.json"
+            result = self.run_config_no_check([*args, str(out_path), "ha"])
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(expected_stderr, result.stderr)
+            self.assertFalse(out_path.exists())
+
+    def test_unknown_selected_server_is_error_and_does_not_write_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "mcp_config.json"
+            result = self.run_config_no_check([str(out_path), "unknown"])
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown MCP server: unknown", result.stderr)
+            self.assertFalse(out_path.exists())
+
+    def test_allowed_mcp_tools_rejects_unknown_server_and_does_not_write_output(self):
+        self.assert_rejects_without_output(
+            ["--allowed-mcp-tools", "mcp__unknown__ha_get"],
+            "unknown MCP server in allowlist: unknown",
+        )
+
+    def test_allowed_mcp_tools_rejects_unselected_server_and_does_not_write_output(self):
+        self.assert_rejects_without_output(
+            ["--allowed-mcp-tools", "mcp__memory__recall"],
+            "MCP server is not selected by --mcp-servers: memory",
+        )
+
+    def test_allowed_mcp_tools_rejects_unknown_tool_and_does_not_write_output(self):
+        self.assert_rejects_without_output(
+            ["--allowed-mcp-tools", "mcp__ha__typo"],
+            "unknown MCP tool for server ha: typo",
+        )
+
+    def test_allowed_mcp_tools_rejects_duplicate_and_does_not_write_output(self):
+        self.assert_rejects_without_output(
+            ["--allowed-mcp-tools", "mcp__ha__ha_get,mcp__ha__ha_get"],
+            "duplicate MCP tool allowlist entry: mcp__ha__ha_get",
+        )
+
+    def test_allowed_mcp_tools_rejects_empty_entry_and_does_not_write_output(self):
+        self.assert_rejects_without_output(
+            ["--allowed-mcp-tools", "mcp__ha__ha_get,"],
+            "--allowed-mcp-tools contains an empty entry",
+        )
+
+    def test_allowed_mcp_tools_must_cover_all_selected_servers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "mcp_config.json"
+            result = self.run_config_no_check(
+                [
+                    "--format",
+                    "agy",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    str(out_path),
+                    "ha",
+                    "memory",
+                ]
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must cover every selected server", result.stderr)
+            self.assertFalse(out_path.exists())
+
+    def test_claude_allows_server_internal_partial_allowlist(self):
+        """Specification change: Claude now accepts a per-server tool subset."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "mcp_config.json"
+            self.run_config(
+                [
+                    "--format",
+                    "claude",
+                    "--allowed-mcp-tools",
+                    "mcp__memory__recall",
+                    str(out_path),
+                    "memory",
+                ]
+            )
+
+            config = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(config["mcpServers"]), {"memory"})
+            self.assertNotIn("includeTools", config["mcpServers"]["memory"])
+
+
+class ServerSpecsTests(unittest.TestCase):
+    def load_module(self, tmp, prefs_content=None):
+        prefs_file = Path(tmp) / "preferences.json"
+        prefs_file.write_text(json.dumps(prefs_content or {}, ensure_ascii=False), encoding="utf-8")
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HA_URL": "http://example.invalid",
+            "SUPERVISOR_TOKEN": "test-token",
+            "EHA_PREFS_FILE": str(prefs_file),
+            "EHA_DATA_DIR": str(Path(tmp) / "data"),
+            "EHA_LOG_DIR": str(Path(tmp) / "log"),
+        }
+        Path(env["EHA_DATA_DIR"]).mkdir()
+        Path(env["EHA_LOG_DIR"]).mkdir()
+        spec = importlib.util.spec_from_file_location("mcp_config_for_test", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(os.environ, env, clear=False):
+            spec.loader.exec_module(module)
+        return module, env
+
+    def list_runtime_tools(self, server, env):
+        proc = subprocess.Popen(
+            [server["command"], *server.get("args", [])],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**env, **(server.get("env") or {})},
+            cwd=ROOT,
+        )
+        request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}) + "\n"
+        stdout, stderr = proc.communicate(request, timeout=5)
+        self.assertEqual(proc.returncode, 0, stderr)
+        response = json.loads(stdout)
+        return [tool["name"] for tool in response["result"]["tools"]]
+
+    def assert_server_specs_match_runtime_tools(self, prefs_content=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, env = self.load_module(tmp, prefs_content)
+            with mock.patch.dict(os.environ, env, clear=False):
+                for name, spec in module.SERVER_SPECS.items():
+                    server = spec.build()
+                    self.assertEqual(self.list_runtime_tools(server, env), list(spec.active_tools()), name)
+
+    def test_server_specs_match_runtime_tools_with_default_preferences(self):
+        self.assert_server_specs_match_runtime_tools()
+
+    def test_server_specs_match_runtime_tools_when_http_post_enabled(self):
+        self.assert_server_specs_match_runtime_tools({"http_post_enabled": True})
 
 
 if __name__ == "__main__":

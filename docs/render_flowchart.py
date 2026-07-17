@@ -52,7 +52,7 @@ NODES = {
     "G8b": ("recent_auditory_input = 空文字列\\n(依存先を呼ばない)", "fallback"),
     "G9": ("queued listen(深聴き予約)解決\\n(あればenv継承)", "fallback"),
     "H": ("プロンプト構築\\nbuild_chat_prompt()", "fallback"),
-    "I": ("Claude CLI起動\\ninvoke_claude()", "system"),
+    "I": ("Claude CLI起動\\ninvoke_chat_claude()\\n(invoke-agent.sh経由)", "system"),
     "J": ("レスポンス抽出\\nchat_extract()", "fallback"),
     "K1": ("紹介済み機能を記録", "fallback"),
     "K2": ("保留提案の消化", "fallback"),

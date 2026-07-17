@@ -27,16 +27,9 @@ sys.path.insert(0, str(EMBODIED_HA_DIR))
 import chat  # type: ignore  # noqa: E402
 
 
-def _fake_claude_run(cmd, **kwargs):
-    """claude -p 呼び出しを模したstream-json応答を返す。"""
-    class _Result:
-        stdout = json.dumps({
-            "type": "result",
-            "result": json.dumps({"reply": "こんにちは、元気ですよ", "private": "テスト内省"}, ensure_ascii=False),
-        }, ensure_ascii=False)
-        stderr = ""
-        returncode = 0
-    return _Result()
+def _fake_chat_response(**_kwargs):
+    """invoke-agent.sh呼び出し後のchat JSON本文を返す。"""
+    return json.dumps({"reply": "こんにちは、元気ですよ", "private": "テスト内省"}, ensure_ascii=False)
 
 
 def _make_isolated_env(tmp, **overrides):
@@ -77,14 +70,13 @@ class ChatRunIntegrationTests(unittest.TestCase):
             web_ui_calls = []
 
             with patch.object(chat, "_web_ui_status", side_effect=lambda status, source, port: web_ui_calls.append(status)), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=lambda cmd, msg, cwd, env: _fake_claude_run(cmd)), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=_fake_chat_response), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "_build_features_presented", return_value=""):
                 chat.run(env)
 
             self.assertEqual(web_ui_calls, ["thinking", "idle"])
@@ -101,14 +93,13 @@ class ChatRunIntegrationTests(unittest.TestCase):
             env, log_dir, prefs_file = _make_isolated_env(tmp, CHAT_SOURCE="voice")
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=lambda cmd, msg, cwd, env: _fake_claude_run(cmd)), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=_fake_chat_response), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "_build_features_presented", return_value=""):
                 chat.run(env)
 
             chat_log = log_dir / "chat_log.jsonl"
@@ -125,28 +116,20 @@ class ChatRunIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env, log_dir, prefs_file = _make_isolated_env(tmp)
 
-            def fake_claude_with_prefs_update(cmd, msg, cwd, claude_env):
-                class _Result:
-                    stdout = json.dumps({
-                        "type": "result",
-                        "result": json.dumps({
-                            "reply": "覚えました",
-                            "preferences_update": {"policies_add": ["静かに"]},
-                        }, ensure_ascii=False),
-                    }, ensure_ascii=False)
-                    stderr = ""
-                    returncode = 0
-                return _Result()
+            def fake_chat_with_prefs_update(**_kwargs):
+                return json.dumps({
+                    "reply": "覚えました",
+                    "preferences_update": {"policies_add": ["静かに"]},
+                }, ensure_ascii=False)
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=fake_claude_with_prefs_update), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=fake_chat_with_prefs_update), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "_build_features_presented", return_value=""):
                 chat.run(env)
 
             with open(prefs_file, encoding="utf-8") as fh:
@@ -159,32 +142,29 @@ class ChatRunIntegrationTests(unittest.TestCase):
             body_location_file = Path(env["EHA_BODY_LOCATION_FILE"])
             body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
 
-            captured_msgs = []
+            captured_calls = []
 
-            def capture_invoke_claude(cmd, msg, cwd, claude_env):
-                captured_msgs.append(msg)
-                return _fake_claude_run(cmd)
+            def capture_invoke_chat(**kwargs):
+                captured_calls.append(kwargs)
+                return _fake_chat_response()
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=capture_invoke_chat), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
                  patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"):
                 chat.run(env)
 
-            self.assertEqual(len(captured_msgs), 1)
-            content = json.loads(captured_msgs[0])["message"]["content"]
+            self.assertEqual(len(captured_calls), 1)
+            content = captured_calls[0]["prefix_blocks"]
             self.assertGreater(len(content), 1)
             image_blocks = [b for b in content if b.get("type") == "image"]
             self.assertEqual(len(image_blocks), 1)
             self.assertEqual(image_blocks[0]["source"]["data"], __import__("base64").b64encode(b"FAKE_JPEG_BYTES").decode("ascii"))
-            # 画像ブロックはユーザープロンプト本文(最後のtextブロック)より前に来る
-            self.assertEqual(content[-1]["type"], "text")
 
     def test_camera_fetch_failure_does_not_crash_and_omits_image(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,15 +173,14 @@ class ChatRunIntegrationTests(unittest.TestCase):
             body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=lambda cmd, msg, cwd, env: _fake_claude_run(cmd)), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=_fake_chat_response), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
                  patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat, "fetch_frame", side_effect=RuntimeError("network down")), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "fetch_frame", side_effect=RuntimeError("network down")):
                 chat.run(env)  # 例外を投げずに完走することの確認
 
             chat_log = log_dir / "chat_log.jsonl"
@@ -216,26 +195,24 @@ class ChatRunIntegrationTests(unittest.TestCase):
             character_file = Path(env["EHA_CHARACTER_FILE"])
             character_file.write_text("私はテスト用のあかね。特徴的な一文。", encoding="utf-8")
 
-            captured_msgs = []
+            captured_calls = []
 
-            def capture_invoke_claude(cmd, msg, cwd, claude_env):
-                captured_msgs.append(msg)
-                return _fake_claude_run(cmd)
+            def capture_invoke_chat(**kwargs):
+                captured_calls.append(kwargs)
+                return _fake_chat_response()
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=capture_invoke_chat), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat, "_build_features_presented", return_value=""):
                 chat.run(env)
 
-            self.assertEqual(len(captured_msgs), 1)
-            content = json.loads(captured_msgs[0])["message"]["content"]
-            prompt_text = content[-1]["text"]
+            self.assertEqual(len(captured_calls), 1)
+            prompt_text = captured_calls[0]["prompt"]
             self.assertIn("私はテスト用のあかね。特徴的な一文。", prompt_text)
 
     def test_queued_listen_context_propagates_to_claude_env(self):
@@ -248,9 +225,9 @@ class ChatRunIntegrationTests(unittest.TestCase):
 
             captured_envs = []
 
-            def capture_invoke_claude(cmd, msg, cwd, claude_env):
-                captured_envs.append(claude_env)
-                return _fake_claude_run(cmd)
+            def capture_invoke_chat(**kwargs):
+                captured_envs.append(kwargs["claude_env"])
+                return _fake_chat_response()
 
             fake_queued_ctx = {
                 "RECENT_AUDITORY_INPUT": None,
@@ -260,15 +237,14 @@ class ChatRunIntegrationTests(unittest.TestCase):
             }
 
             with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_claude", side_effect=capture_invoke_claude), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=capture_invoke_chat), \
                  patch.object(chat, "_build_long_memory", return_value="なし"), \
                  patch.object(chat, "_build_recent_chat_context", return_value=""), \
                  patch.object(chat, "_build_open_loops", return_value="なし"), \
                  patch.object(chat, "_build_sensors", return_value=""), \
                  patch.object(chat, "_build_body_location_context", return_value=""), \
                  patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_context, "resolve_queued_listen_context", return_value=fake_queued_ctx), \
-                 patch.object(chat.chat_invoke, "build_claude_command", return_value=["claude", "-p"]):
+                 patch.object(chat.chat_context, "resolve_queued_listen_context", return_value=fake_queued_ctx):
                 chat.run(env)
 
             self.assertEqual(len(captured_envs), 1)

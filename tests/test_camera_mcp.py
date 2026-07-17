@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -117,6 +118,66 @@ class CameraMcpTests(unittest.TestCase):
             camera_mcp._handle_watch_media("missing", "http://supervisor/core/api", "http://homeassistant.local:1984", 12)
         self.assertTrue(sent[-1]["result"]["isError"])
         self.assertIn("未登録です", sent[-1]["result"]["content"][0]["text"])
+
+    def test_main_replies_method_not_found_for_unknown_request_with_id(self):
+        camera_mcp = load_camera_mcp_module()
+        stdin = io.StringIO(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"protocolVersion": "2026-07-28"}}) + "\n"
+        )
+        sent = []
+        with mock.patch.object(camera_mcp.sys, "argv", ["camera-mcp.py"]), \
+             mock.patch.object(camera_mcp.sys, "stdin", stdin), \
+             mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+            camera_mcp.main()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["id"], 1)
+        self.assertEqual(sent[0]["error"]["code"], -32601)
+        self.assertIn("server/discover", sent[0]["error"]["message"])
+
+    def test_main_stays_silent_for_unknown_notification_without_id(self):
+        camera_mcp = load_camera_mcp_module()
+        stdin = io.StringIO(
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/unknown"}) + "\n"
+        )
+        sent = []
+        with mock.patch.object(camera_mcp.sys, "argv", ["camera-mcp.py"]), \
+             mock.patch.object(camera_mcp.sys, "stdin", stdin), \
+             mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+            camera_mcp.main()
+        self.assertEqual(sent, [])
+
+    def test_main_survives_agy_handshake_sequence(self):
+        """Regression test for the agy 1.1.3 hang: server/discover before initialize."""
+        camera_mcp = load_camera_mcp_module()
+        requests = [
+            {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"protocolVersion": "2026-07-28"}},
+            {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}},
+        ]
+        stdin = io.StringIO("".join(json.dumps(r) + "\n" for r in requests))
+        sent = []
+        with mock.patch.object(camera_mcp.sys, "argv", ["camera-mcp.py"]), \
+             mock.patch.object(camera_mcp.sys, "stdin", stdin), \
+             mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+            camera_mcp.main()
+
+        self.assertEqual(len(sent), 3)
+
+        discover_reply = sent[0]
+        self.assertEqual(discover_reply["id"], 1)
+        self.assertEqual(discover_reply["error"]["code"], -32601)
+
+        initialize_reply = sent[1]
+        self.assertEqual(initialize_reply["id"], 2)
+        self.assertIn("protocolVersion", initialize_reply["result"])
+        self.assertIn("serverInfo", initialize_reply["result"])
+
+        tools_list_reply = sent[2]
+        self.assertEqual(tools_list_reply["id"], 3)
+        tool_names = {tool["name"] for tool in tools_list_reply["result"]["tools"]}
+        self.assertEqual(tool_names, {"use_device_camera", "watch_media"})
+
 
 if __name__ == "__main__":
     unittest.main()

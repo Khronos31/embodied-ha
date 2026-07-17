@@ -7,8 +7,9 @@
 
 --mcp-servers に hacontrol などの単一tool serverを含めるかどうかが、
 そのserverの安全性境界である。--allowed-mcp-tools は多tool server内の
-補助的な絞り込みであり、hacontrol のような単一tool serverの安全性は
-tool allow-listではなく server-list 接続可否と boundary.py 側ゲートに依存する。
+実行を絞り込めるが、Claude Codeでは未許可toolの一覧・スキーマも可視のまま
+である。hacontrol のような単一tool serverの安全性は tool allow-list だけに
+依存せず、server-list 接続可否と boundary.py 側ゲートで多層に守る。
 
 サーバー名: audio / body / camera / ha / hacontrol / http / lounge / memory / sensors / sociality / song
 env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
@@ -20,8 +21,10 @@ env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_TOOLS_PATH, PATH, LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
 """
 import argparse
+from dataclasses import dataclass
 import json
 import os
+import re
 import sys
 
 DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,47 +68,176 @@ def _server(script, extra_args=None, extra_env=None):
     }
 
 
-REGISTRY = {
-    "audio":   lambda: _server("audio-mcp.py"),
-    "body":    lambda: _server("body-mcp.py"),
-    "camera": lambda: _server("camera-mcp.py", [
+@dataclass(frozen=True)
+class ServerSpec:
+    command: object
+    tools: object
+
+    def build(self):
+        return self.command()
+
+    def active_tools(self):
+        tools = self.tools() if callable(self.tools) else self.tools
+        return tuple(tools)
+
+
+def _http_tools():
+    tools = ["http_get"]
+    if prefs.get("http_post_enabled"):
+        tools.append("http_post")
+    return tuple(tools)
+
+
+SERVER_SPECS = {
+    "audio": ServerSpec(lambda: _server("audio-mcp.py"), (
+        "listen",
+        "listen_media",
+        "read_audio_log",
+        "read_heard_audio_log",
+        "read_active_listen_log",
+        "read_non_speech_audio_events",
+        "read_audio_event_tags",
+        "speak",
+        "use_device_speaker",
+        "use_device_microphone",
+        "concentrate_hearing",
+    )),
+    "body": ServerSpec(lambda: _server("body-mcp.py"), (
+        "get_location",
+        "move_to",
+        "enter_cyberspace",
+        "move_cyber",
+        "return_to_body",
+        "estimate_move_cost",
+        "get_room_graph",
+    )),
+    "camera": ServerSpec(lambda: _server("camera-mcp.py", [
         "--ha-url",     os.environ["HA_URL"],
         "--go2rtc-url", os.environ.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
-    ]),
-    "ha":        lambda: _server("ha-mcp.py"),          # 読み取り専用（ha_get）
-    "hacontrol": lambda: _server("ha-control-mcp.py"),  # 家電操作（ha_call_service）
+    ]), (
+        "use_device_camera",
+        "watch_media",
+    )),
+    "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
+    "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
     # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
-    # --allowedTools ではMCPツール単位の絞り込みができないため、tools/listに載せるかどうかが
-    # 唯一の制御点(http-mcp.py側のコメント参照)。うちだけの外部デバイス連携用の抜け道であり、
+    # Claude Codeの--allowedToolsは実行時にMCPツール単位で拒否できるが、tools/listの可視性は
+    # 絞らない。tools/listに載せないことは引き続き有効な防御層(http-mcp.py側のコメント参照)。
+    # うちだけの外部デバイス連携用の抜け道であり、
     # デフォルトは無効。
-    "http":    lambda: _server("http-mcp.py", extra_env={
+    "http": ServerSpec(lambda: _server("http-mcp.py", extra_env={
         "EHA_HTTP_ALLOW_POST": "1" if prefs.get("http_post_enabled") else None,
-    }),
-    "lounge": lambda: _server("lounge-mcp.py", extra_env={
+    }), _http_tools),
+    "lounge": ServerSpec(lambda: _server("lounge-mcp.py", extra_env={
         "LOUNGE_APP_ID": prefs.get("ai_lounge", {}).get("app_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
         "LOUNGE_INSTALLATION_ID": prefs.get("ai_lounge", {}).get("installation_id", "") if isinstance(prefs.get("ai_lounge"), dict) else "",
-    }),
-    "memory":  lambda: _server("memory-mcp.py"),
-    "sensors": lambda: _server("sensors-mcp.py"),
-    "sociality": lambda: _server("sociality-mcp.py"),
-    "game":     lambda: _server("game-mcp.py"),
-    "song":     lambda: _server("song-mcp.py"),
+    }), (
+        "read_lounge_discussions",
+        "read_lounge_discussion",
+        "enqueue_lounge_post",
+        "read_lounge_queue",
+        "read_lounge_log",
+    )),
+    "memory": ServerSpec(lambda: _server("memory-mcp.py"), (
+        "recall",
+        "remember",
+        "loops_list",
+        "loops_add",
+        "loops_close",
+        "record_episode",
+        "record_counterfactual",
+        "get_episode",
+        "get_working_memory",
+        "ingest_scene",
+        "resolve_reference",
+        "compare_recent_scenes",
+        "list_episodes",
+        "build_daybook",
+        "get_daybook",
+        "record_causal_chain",
+        "get_causal_chain",
+        "consolidate_memory",
+    )),
+    "sensors": ServerSpec(lambda: _server("sensors-mcp.py"), ("get_sensors",)),
+    "sociality": ServerSpec(lambda: _server("sociality-mcp.py"), (
+        "get_relationship",
+        "update_relationship",
+        "get_narrative",
+        "append_narrative",
+        "get_social_state",
+        "update_social_state",
+        "get_shared_focus",
+        "set_shared_focus",
+        "get_person_model",
+        "record_boundary",
+        "record_consent",
+        "should_interrupt",
+        "get_turn_taking_state",
+        "ingest_interaction",
+    )),
+    "game": ServerSpec(lambda: _server("game-mcp.py"), (
+        "game_wiki6_start",
+        "game_wiki6_getlinks",
+        "game_wordvec_race_start",
+        "game_wordvec_race_cpu_move",
+        "game_wordvec_race_submit",
+        "game_wordvec_race_hint",
+        "game_wiki6_solve",
+    )),
+    "song": ServerSpec(lambda: _server("song-mcp.py"), ("record",)),
 }
 
 
-def _parse_allowed_mcp_tools(csv):
+_MCP_TOOL_RE = re.compile(r"^mcp__([A-Za-z0-9_-]+)__([A-Za-z0-9_-]+)$")
+
+
+def _fail(message):
+    print(f"[mcp-config] {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _parse_allowed_mcp_tools(csv, selected_servers):
+    if csv is None:
+        return {}
+    selected = set(selected_servers)
     allowed = {}
-    for item in (csv or "").split(","):
-        item = item.strip()
+    seen = set()
+    for raw_item in csv.split(","):
+        item = raw_item.strip()
         if not item:
-            continue
-        if not item.startswith("mcp__") or "__" not in item[5:]:
-            continue
-        server, tool = item[5:].split("__", 1)
-        if server and tool:
-            allowed.setdefault(server, []).append(tool)
+            _fail("--allowed-mcp-tools contains an empty entry")
+        match = _MCP_TOOL_RE.fullmatch(item)
+        if not match:
+            _fail(f"invalid MCP tool allowlist entry: {item}")
+        if item in seen:
+            _fail(f"duplicate MCP tool allowlist entry: {item}")
+        seen.add(item)
+        server, tool = match.groups()
+        if server not in SERVER_SPECS:
+            _fail(f"unknown MCP server in allowlist: {server}")
+        if server not in selected:
+            _fail(f"MCP server is not selected by --mcp-servers: {server}")
+        active_tools = set(SERVER_SPECS[server].active_tools())
+        if tool not in active_tools:
+            _fail(f"unknown MCP tool for server {server}: {tool}")
+        if tool in allowed.setdefault(server, []):
+            _fail(f"duplicate MCP tool for server {server}: {tool}")
+        allowed[server].append(tool)
+    missing = selected - set(allowed)
+    if missing:
+        _fail("--allowed-mcp-tools must cover every selected server; missing: " + ", ".join(sorted(missing)))
     return allowed
+
+
+def _validate_claude_allowed_tools(allowed_tools):
+    """Accept Claude per-server partial allowlists.
+
+    `_parse_allowed_mcp_tools` retains the fail-closed syntax, selected-server,
+    active-tool, and duplicate checks. Claude Code enforces the resulting
+    `--allowedTools` entries at execution time, although all connected MCP tool
+    schemas remain visible to the model.
+    """
 
 
 def _json_config(servers, allowed_tools=None, *, include_tools=False):
@@ -150,22 +282,29 @@ def main():
         description="Generate MCP server config for Claude, Codex, or Antigravity.",
     )
     parser.add_argument("--format", choices=("claude", "codex", "agy"), default="claude")
-    parser.add_argument("--allowed-mcp-tools", default="")
+    parser.add_argument("--allowed-mcp-tools")
     parser.add_argument("output_path")
     parser.add_argument("servers", nargs="*")
     args = parser.parse_args()
     out = args.output_path
     names = args.servers
 
-    servers = {}
-    for n in names:
-        if n in REGISTRY:
-            servers[n] = REGISTRY[n]()
-        else:
-            print(f"[mcp-config] 未知のサーバー: {n}（スキップ）", file=sys.stderr)
+    duplicate_names = sorted({n for n in names if names.count(n) > 1})
+    if duplicate_names:
+        _fail("duplicate MCP server name: " + ", ".join(duplicate_names))
 
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    allowed_tools = _parse_allowed_mcp_tools(args.allowed_mcp_tools)
+    for n in names:
+        if n not in SERVER_SPECS:
+            _fail(f"unknown MCP server: {n}")
+
+    allowed_tools = _parse_allowed_mcp_tools(args.allowed_mcp_tools, names)
+    if args.format == "claude" and allowed_tools:
+        _validate_claude_allowed_tools(allowed_tools)
+
+    servers = {n: SERVER_SPECS[n].build() for n in names}
+    out_dir = os.path.dirname(out)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     if args.format == "codex":
         _write_codex_profile(out, servers, allowed_tools)
     else:

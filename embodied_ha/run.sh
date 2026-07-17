@@ -155,8 +155,12 @@ echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 # .claude/settings.local.json（claudeMdExcludes）を配置する。既存ファイルは上書きしない。
 _OPT_CWD=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_cwd',''))" 2>/dev/null || echo "")
 export EHA_CLAUDE_CWD="${_OPT_CWD:-$EHA_DATA_DIR/workdir}"
+# EHA_AGENT_CWDは3ハーネス共通の正式変数。daybook_rollup.py・loop.sh/chat.sh
+# （ロールバック経路として温存）は引き続きEHA_CLAUDE_CWDのみを読むため、
+# それら自体を削除するまでは両方exportし続ける。
+export EHA_AGENT_CWD="$EHA_CLAUDE_CWD"
 unset _OPT_CWD
-echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD}"
+echo "[run] EHA_CLAUDE_CWD=${EHA_CLAUDE_CWD} EHA_AGENT_CWD=${EHA_AGENT_CWD}"
 
 mkdir -p "$EHA_CLAUDE_CWD/.claude"
 for _eha_agent_site in observe explore reflect web social chat game; do

@@ -158,7 +158,8 @@ def main() -> None:
         },
     }
     # http_post は用途廃止のためデフォルト無効。将来必要になったら EHA_HTTP_ALLOW_POST=1 で復活。
-    # 注意: allowedTools では MCP ツールを絞れないため、ここで tools/list に載せないことが唯一の封鎖手段。
+    # 注意: allowedToolsはMCPツールの実行を絞れるが、tools/listの可視性は絞れない。
+    # ここでtools/listに載せないことは、引き続き有効な防御層である。
     if os.environ.get("EHA_HTTP_ALLOW_POST", "").strip().lower() in {"1", "true", "yes", "on"}:
         tools["http_post"] = {
             "spec": {

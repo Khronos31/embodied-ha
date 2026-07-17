@@ -15,19 +15,15 @@ Python port is shadow-tested against the shell loop.
   rollback path if the cutover has to be reverted.
 - Historical blockers are closed. `loop.py` was previously marked
   not cutover-ready until all five modes passed end-to-end shadow parity tests.
-- `EHA_SESSION_BIN=agy` is not reimplemented in `loop.py`. The daemon cutover
-  required operator/runtime use of `EHA_SESSION_BIN` to be audited or an
-  `invoke-agent.sh` abstraction to be wired and tested.
-  Phase1 audit on 2026-07-16 found no `EHA_SESSION_BIN` assignment in the main
-  loop startup path: `embodied_ha/run.sh` sets `EHA_AUDIO_SESSION_BIN` and
-  `EHA_ANTIGRAVITY_BIN` for audio/Antigravity support but not `EHA_SESSION_BIN`,
-  `embodied_ha/config.yaml` has no `EHA_SESSION_BIN`, production
-  `/config/embodied-ha/preferences.json` has no `EHA_SESSION_BIN`/`session_bin`
-  entry, and the current Studio Code Server environment has no
-  `EHA_SESSION_BIN`. Because `daemon.py` inherits its process environment, the
-  running add-on/container environment was re-checked before cutover; an
-  externally injected `EHA_SESSION_BIN=agy` would still hit the explicit
-  `loop.py` cutover guard.
+- **Resolved (2026-07-17, #14増分6)**: the `EHA_SESSION_BIN=agy` `SystemExit` guard
+  in `loop.py`'s `run()` has been removed. Antigravity audio support for loop.py's
+  queued-listen turns is now implemented via `invoke_loop_claude()` forwarding
+  `--sound-file`/`--agent-site <mode>` to `invoke-agent.sh` (mirroring `chat.py`'s
+  #14増分5). `EHA_SESSION_BIN` itself is a legacy variable
+  ([[embodied_ha_invoke_agent_caller_argument_open_items_2026-07-15]] item 9,
+  slated for removal) that `loop.py` no longer reads for harness selection —
+  harness selection is `invoke-agent.sh`'s responsibility via `EHA_AGENT_HARNESS`,
+  which `--sound-file` always forces to `agy` regardless of caller intent.
 - After cutover, keep re-verifying that `agy --project <uuid>` / `agy --new-project`
   still behave as documented in the `invoke-agent.sh` MCP allow-list design
   (workspace-local `.agents/mcp_config.json` resolution, `--project`

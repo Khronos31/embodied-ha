@@ -12,6 +12,7 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,7 @@ from introspection_facts import extract_facts_from_stream_text, write_facts_file
 from json_schemas import loop_schema  # noqa: E402
 from media_capture import fetch_frame  # noqa: E402
 from observe_context import build_projected_camera_blocks  # noqa: E402
-from response_parse import loop_extract, stream_result_payload  # noqa: E402
+from response_parse import loop_extract  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -148,61 +149,77 @@ def build_loop_claude_env(environ: dict[str, str] | None = None, *, actor: str |
     return result
 
 
-def build_mcp_config(
+def _split_allowed_tools_for_invoke_agent(allowed_tools: str) -> tuple[str, str]:
+    items = [item.strip() for item in allowed_tools.split(",") if item.strip()]
+    builtins = [item for item in items if not item.startswith("mcp__")]
+    mcp_tools = [item for item in items if item.startswith("mcp__")]
+    return ",".join(builtins), ",".join(mcp_tools)
+
+
+def build_invoke_agent_loop_command(
     *,
     script_dir: str,
-    mcp_servers: list[str],
-    env: dict[str, str],
-    tmp_dir: str = "/tmp/embodied-ha",
-    run=subprocess.run,
-) -> str | None:
-    """mcp-config.py を呼び、生成できた場合だけconfig pathを返す。"""
-    if not mcp_servers or not script_dir:
-        return None
-    path = os.path.join(tmp_dir, "mcp.json")
-    os.makedirs(tmp_dir, exist_ok=True)
-    gen = os.path.join(script_dir, "mcp-config.py")
-    run(["python3", gen, path, *mcp_servers], env=env, check=False)
-    return path if os.path.exists(path) else None
-
-
-def build_message_envelope(user_prompt: str, content_blocks: list[dict[str, Any]] | None = None) -> str:
-    blocks = content_blocks if content_blocks is not None else [{"type": "text", "text": user_prompt}]
-    return json.dumps({"type": "user", "message": {"role": "user", "content": blocks}})
-
-
-def build_loop_claude_command(
-    *,
-    claude_bin: str,
-    model: str,
     mode: str,
+    model_tier: str,
     allowed_tools: str,
+    mcp_servers: list[str],
     system_prompt: str,
-    mcp_config: str | None = None,
+    user_prompt: str,
+    content_json_path: str | None = None,
+    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
 ) -> list[str]:
-    """loop.pyではClaude Code専用コマンドだけを組み立てる。agy分岐はinvoke-agent層へ委ねる。"""
+    """Build an invoke-agent.sh command for loop.py Claude-compatible modes."""
     schema = loop_schema(mode) if response_schema is _DEFAULT_RESPONSE_SCHEMA else response_schema
+    allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed_tools)
     cmd = [
-        claude_bin,
-        "-p",
+        "bash",
+        os.path.join(script_dir, "invoke-agent.sh"),
         "--model",
-        model,
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
+        model_tier,
         "--append-system-prompt",
         system_prompt,
     ]
-    if allowed_tools:
-        cmd += ["--allowedTools", allowed_tools]
+    if sound_file:
+        # --sound-fileはinvoke-agent.sh側でharness=agyへ強制されるため、agyがdieする
+        # --allowed-builtinsは渡さない(#14増分5・chat_invoke.pyと同じ制約)。
+        cmd += ["--sound-file", sound_file, "--agent-site", mode]
+    elif allowed_builtins:
+        cmd += ["--allowed-builtins", allowed_builtins]
+    if allowed_mcp_tools:
+        cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
+    if mcp_servers:
+        cmd += ["--mcp-servers", " ".join(mcp_servers)]
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
-    if mcp_config:
-        cmd += ["--mcp-config", mcp_config]
+    if content_json_path is not None:
+        cmd += ["--content-json", f"@{content_json_path}"]
+    cmd.append(user_prompt)
     return cmd
+
+
+def _invoke_agent_model_tier(selected_model: str) -> tuple[str, str | None]:
+    if selected_model == "sonnet":
+        return "default", None
+    if selected_model == "haiku":
+        return "lite", None
+    return "default", selected_model
+
+
+def _write_invoke_agent_content_json(content_blocks: list[dict[str, Any]], env: dict[str, str], mode: str) -> str:
+    tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
+    os.makedirs(tmp_dir, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix=f"{mode}-content-", suffix=".json", dir=tmp_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(content_blocks, fh, ensure_ascii=False)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def invoke_loop_claude(
@@ -216,36 +233,61 @@ def invoke_loop_claude(
     content_blocks: list[dict[str, Any]] | None = None,
     facts_file: str | None = None,
     model: str | None = None,
+    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
     run=subprocess.run,
 ) -> str:
     """Claude Codeをstream-jsonで呼び、最後のresult payloadを返す。"""
     env = build_loop_claude_env(environ, actor=None if mode == "observe" else "loop")
     script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
-    claude_bin = env.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
     selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
-    mcp_config = build_mcp_config(script_dir=script_dir, mcp_servers=mcp_servers, env=env, run=run)
-    cmd = build_loop_claude_command(
-        claude_bin=claude_bin,
-        model=selected_model,
-        mode=mode,
-        allowed_tools=allowed_tools,
-        system_prompt=system_prompt,
-        mcp_config=mcp_config,
-        response_schema=response_schema,
-    )
-    cwd = env.get("EHA_CLAUDE_CWD") or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
-    result = run(
-        cmd,
-        input=build_message_envelope(user_prompt, content_blocks),
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        env=env,
-    )
-    if facts_file:
-        write_facts_file(facts_file, extract_facts_from_stream_text(result.stdout))
-    return stream_result_payload(result.stdout)
+    content_json_path = None
+    try:
+        model_tier, model_override = _invoke_agent_model_tier(selected_model)
+        # sound_file時はagyがdieするため--content-jsonを渡さない(観測カメラ画像等の
+        # content_blocksはこのターンでは黙って落とす。#14増分5・chat_invoke.pyと同じ
+        # 既知のトレードオフ)。
+        if content_blocks is not None and not sound_file:
+            content_json_path = _write_invoke_agent_content_json(content_blocks, env, mode)
+        cmd = build_invoke_agent_loop_command(
+            script_dir=script_dir,
+            mode=mode,
+            model_tier=model_tier,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            content_json_path=content_json_path,
+            sound_file=sound_file,
+            response_schema=response_schema,
+        )
+        if model_override is not None:
+            env["EHA_CLAUDE_MODEL_DEFAULT"] = model_override
+        cwd = (
+            env.get("EHA_AGENT_CWD")
+            or env.get("EHA_CLAUDE_CWD")
+            or os.path.join(env.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+        )
+        run_kwargs: dict[str, Any] = {
+            "capture_output": True,
+            "text": True,
+            "cwd": cwd,
+            "env": env,
+        }
+        result = run(cmd, **run_kwargs)
+        if result.returncode != 0 or not result.stdout.strip():
+            print(f"[loop][invoke-agent] 呼び出し失敗 returncode={result.returncode}", file=sys.stderr)
+            if result.stderr.strip():
+                print(f"[loop][invoke-agent][stderr] {result.stderr.strip()[-400:]}", file=sys.stderr)
+        if facts_file:
+            write_facts_file(facts_file, extract_facts_from_stream_text(result.stderr))
+        return result.stdout
+    finally:
+        if content_json_path:
+            try:
+                os.unlink(content_json_path)
+            except OSError:
+                pass
 
 
 def loop_introspection_state(parsed: dict[str, Any]) -> dict[str, str]:
@@ -833,8 +875,6 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
 
 def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run) -> dict[str, Any]:
     environ = dict(environ if environ is not None else os.environ)
-    if os.path.basename(environ.get("EHA_SESSION_BIN", "")) == "agy":
-        raise SystemExit("loop.py does not implement EHA_SESSION_BIN=agy; cutover is blocked until invoke-agent.sh parity exists")
     cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
     paths = resolve_paths(cfg)
     Path(paths.log_dir).mkdir(parents=True, exist_ok=True)
@@ -862,6 +902,7 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             content_blocks=content_blocks,
             facts_file=facts_file,
             model="sonnet" if context["mode"] == "observe" else None,
+            sound_file=context.get("queued_listen_file"),
             response_schema=loop_schema(context["mode"]),
             run=run_subprocess,
         )

@@ -8,6 +8,7 @@ chat_invoke.build_chat_prompt() の出力を直接比較する。副作用（sub
 安全に実行できる（body_state.py/json_schemas.py の import と、
 try/exceptで包まれたlocation_belief.json/preferences.jsonの読み取りのみ）。
 """
+import io
 import json
 import sys
 import tempfile
@@ -216,99 +217,333 @@ class BuildClaudeEnvTests(unittest.TestCase):
         self.assertIn("/usr/bin", env["PATH"])
 
 
-class BuildClaudeCommandTests(unittest.TestCase):
-    def test_no_script_dir_omits_tool_flags(self):
-        cmd = chat_invoke.build_claude_command(
-            chat_source="chat", script_dir="", claude_env={}, run_mcp_config=lambda *a, **k: None,
+def _arg_after(cmd, flag):
+    return cmd[cmd.index(flag) + 1]
+
+
+class InvokeAgentChatPathTests(unittest.TestCase):
+    def test_command_splits_builtin_and_mcp_tools_for_chat(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
         )
-        self.assertNotIn("--allowedTools", cmd)
-        self.assertNotIn("--mcp-config", cmd)
+        self.assertEqual(cmd[:4], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh"), "--model", "default"])
+        self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
 
-    def test_mcp_config_missing_after_run_omits_tool_flags(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            missing_path = Path(tmp) / "mcp_chat.json"  # run_mcp_configが何も作らない想定
-            cmd = chat_invoke.build_claude_command(
-                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(missing_path), run_mcp_config=lambda *a, **k: None,
+        allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+        common_mcp_tools = {
+            item for item in chat_invoke._COMMON_TOOLS.split(",")
+            if item.startswith("mcp__")
+        }
+        self.assertTrue(common_mcp_tools.issubset(allowed_mcp_tools))
+        self.assertIn("mcp__audio__speak", allowed_mcp_tools)
+        self.assertNotIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+
+        self.assertEqual(
+            _arg_after(cmd, "--mcp-servers"),
+            "memory ha sociality hacontrol camera audio body sensors http lounge game song",
+        )
+        self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
+
+    def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
+        # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで
+        # invoke-agent.sh経由に移行した。ただしsound_fileを渡さない場合は
+        # 通常のinvoke-agent.sh呼び出しとして--allowed-builtins/--allowed-mcp-toolsを
+        # 使い、--sound-fileは付かないことを確認する。
+        calls = []
+
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            payload = {"reply": "queued reply"}
+            return Result(stdout=json.dumps(payload, ensure_ascii=False))
+
+        response = chat_invoke.invoke_chat_claude(
+            chat_source="chat",
+            prompt="こんにちは",
+            prefix_blocks=None,
+            script_dir=str(EMBODIED_HA_DIR),
+            claude_env={},
+            cwd="/tmp",
+            claude_bin="/bin/claude",
+            is_queued_listen=True,
+            run=fake_run,
+        )
+
+        self.assertEqual(json.loads(response)["reply"], "queued reply")
+        self.assertEqual(len(calls), 1)
+        cmd, kwargs = calls[0]
+        self.assertEqual(cmd[:2], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh")])
+        self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
+        self.assertNotIn("--sound-file", cmd)
+        self.assertNotIn("input", kwargs)
+
+    def test_command_for_sound_file_uses_agy_compatible_flags(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+            sound_file="/tmp/queued.wav",
+        )
+
+        self.assertEqual(_arg_after(cmd, "--sound-file"), "/tmp/queued.wav")
+        self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
+        self.assertNotIn("--allowed-builtins", cmd)
+        self.assertIn("--allowed-mcp-tools", cmd)
+        self.assertIn("--mcp-servers", cmd)
+
+    def test_command_rejects_sound_file_with_content_json(self):
+        # sol reviewの指摘(2026-07-17): run_agy()は--content-jsonで即死するため、
+        # 呼び出し側の不備でsound_file/content_json_pathが両方渡っても
+        # ビルダー自身が防御的にfail-loudすることを確認する。
+        with self.assertRaises(ValueError):
+            chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat",
+                script_dir=str(EMBODIED_HA_DIR),
+                user_prompt="こんにちは",
+                sound_file="/tmp/queued.wav",
+                content_json_path="/tmp/content.json",
             )
-            self.assertNotIn("--allowedTools", cmd)
 
-    def test_voice_adds_speaker_tools(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mcp_path = Path(tmp) / "mcp_chat.json"
-            mcp_path.write_text("{}", encoding="utf-8")
-            cmd = chat_invoke.build_claude_command(
-                chat_source="voice", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(mcp_path), run_mcp_config=lambda *a, **k: None,
-            )
-            idx = cmd.index("--allowedTools")
-            self.assertIn("mcp__audio__use_device_speaker", cmd[idx + 1])
+    def test_command_adds_voice_speaker_tool(self):
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="voice",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+        )
+        allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+        self.assertIn("mcp__audio__speak", allowed_mcp_tools)
+        self.assertIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+        self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=True))
 
-    def test_chat_omits_use_device_speaker(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mcp_path = Path(tmp) / "mcp_chat.json"
-            mcp_path.write_text("{}", encoding="utf-8")
-            cmd = chat_invoke.build_claude_command(
-                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), claude_env={},
-                mcp_config_path=str(mcp_path), run_mcp_config=lambda *a, **k: None,
-            )
-            idx = cmd.index("--allowedTools")
-            self.assertNotIn("mcp__audio__use_device_speaker", cmd[idx + 1])
-            self.assertIn("mcp__audio__speak", cmd[idx + 1])
-
-
-class BuildMessageEnvelopeTests(unittest.TestCase):
-    def test_no_prefix_blocks_yields_single_text_block(self):
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは"))
-        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
-
-    def test_prefix_blocks_come_before_prompt_text(self):
-        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[image_block]))
-        content = envelope["message"]["content"]
-        self.assertEqual(content[0], image_block)
-        self.assertEqual(content[-1], {"type": "text", "text": "こんにちは"})
-
-    def test_empty_prefix_blocks_list_behaves_like_none(self):
-        envelope = json.loads(chat_invoke.build_message_envelope("こんにちは", prefix_blocks=[]))
-        self.assertEqual(envelope["message"]["content"], [{"type": "text", "text": "こんにちは"}])
-
-
-class InvokeClaudeTests(unittest.TestCase):
-    def test_delegates_to_run_with_expected_kwargs(self):
+    def test_prefix_blocks_are_written_as_content_json_and_removed(self):
         captured = {}
+        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = "raw stream"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            path = Path(_arg_after(cmd, "--content-json")[1:])
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            captured["path"] = path
+            captured["content"] = json.loads(path.read_text(encoding="utf-8"))
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[image_block],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={"EHA_TMP_DIR": tmp},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertEqual(captured["content"], [image_block, {"type": "text", "text": "こんにちは"}])
+        self.assertFalse(captured["path"].exists())
+        self.assertNotIn("input", captured["kwargs"])
+        self.assertEqual(captured["kwargs"]["env"]["EHA_ACTOR"], "chat")
+        self.assertTrue(_arg_after(captured["cmd"], "--content-json").startswith("@"))
+
+    def test_sound_file_with_prefix_blocks_omits_content_json(self):
+        captured = {}
+        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
 
         def fake_run(cmd, **kwargs):
             captured["cmd"] = cmd
             captured["kwargs"] = kwargs
-            return "FAKE_RESULT"
+            return Result()
 
-        result = chat_invoke.invoke_claude(["claude", "-p"], "msg", "/some/cwd", {"A": "1"}, run=fake_run)
-        self.assertEqual(result, "FAKE_RESULT")
-        self.assertEqual(captured["cmd"], ["claude", "-p"])
-        self.assertEqual(captured["kwargs"]["input"], "msg")
-        self.assertEqual(captured["kwargs"]["cwd"], "/some/cwd")
-        self.assertEqual(captured["kwargs"]["env"], {"A": "1"})
-        self.assertTrue(captured["kwargs"]["capture_output"])
-        self.assertTrue(captured["kwargs"]["text"])
+        with tempfile.TemporaryDirectory() as tmp:
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[image_block],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={"EHA_TMP_DIR": tmp},
+                cwd="/tmp",
+                sound_file="/tmp/queued.wav",
+                run=fake_run,
+            )
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertIn("--sound-file", captured["cmd"])
+        self.assertNotIn("--content-json", captured["cmd"])
+        self.assertNotIn("--allowed-builtins", captured["cmd"])
+
+    def test_without_prefix_blocks_omits_content_json(self):
+        captured = {}
+
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return Result()
+
+        response = chat_invoke.invoke_chat_claude(
+            chat_source="chat",
+            prompt="こんにちは",
+            prefix_blocks=[],
+            script_dir=str(EMBODIED_HA_DIR),
+            claude_env={},
+            cwd="/tmp",
+            run=fake_run,
+        )
+
+        self.assertEqual(response, '{"reply":"ok"}')
+        self.assertNotIn("--content-json", captured["cmd"])
+        self.assertNotIn("input", captured["kwargs"])
+
+    def test_invoke_chat_claude_logs_returncode_and_stderr_on_failure(self):
+        class Result:
+            stdout = ""
+            stderr = "invoke-agent.sh: something went wrong\n"
+            returncode = 1
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=1", logged)
+        self.assertIn("something went wrong", logged)
+
+    def test_invoke_chat_claude_logs_on_blank_stdout_even_with_zero_returncode(self):
+        # returncode==0だがstdoutが空/空白のみ(agyの応答形式不備等)というORのもう一方の
+        # 分岐を独立に確認する(gpt-5.6-solレビュー指摘、2026-07-17)。
+        class Result:
+            stdout = "   "
+            stderr = "invoke-agent.sh: empty result event\n"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            response = chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(response, "   ")
+        logged = stderr_capture.getvalue()
+        self.assertIn("returncode=0", logged)
+        self.assertIn("empty result event", logged)
+
+    def test_invoke_chat_claude_logs_tool_use_audit_from_stderr(self):
+        # 増分7で失われたchat経路のツール操作監査ログ([chat][tool])の復元
+        # (PR#2最終レビュー指摘)。invoke-agent.sh経由では生stream-jsonが
+        # stderrへ流れるため、そこからtool_useを抽出して出力する。
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
+            }, ensure_ascii=False) + "\n"
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        logged = stderr_capture.getvalue()
+        self.assertIn("[chat][tool] recall", logged)
+        self.assertIn("エアコン", logged)
+        self.assertNotIn("呼び出し失敗", logged)
+
+    def test_invoke_chat_claude_stays_silent_on_success(self):
+        class Result:
+            stdout = '{"reply":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with patch("sys.stderr", stderr_capture):
+            chat_invoke.invoke_chat_claude(
+                chat_source="chat",
+                prompt="こんにちは",
+                prefix_blocks=[],
+                script_dir=str(EMBODIED_HA_DIR),
+                claude_env={},
+                cwd="/tmp",
+                run=fake_run,
+            )
+
+        self.assertEqual(stderr_capture.getvalue(), "")
 
 
 class LogToolUseDiagnosticsTests(unittest.TestCase):
+    # 増分7で削除→PR#2最終レビュー指摘で復元(入力は旧stdoutから
+    # invoke-agent.sh契約のstderrへ変更、パース自体は同一)
     def test_prints_tool_use_details(self):
         printed = []
-        stdout = json.dumps({
+        stream_text = json.dumps({
             "type": "assistant",
             "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
         }, ensure_ascii=False)
-        chat_invoke.log_tool_use_diagnostics(stdout, print_fn=printed.append)
+        chat_invoke.log_tool_use_diagnostics(stream_text, print_fn=printed.append)
         self.assertEqual(len(printed), 1)
         self.assertIn("recall", printed[0])
         self.assertIn("エアコン", printed[0])
 
     def test_ignores_non_assistant_lines(self):
         printed = []
-        stdout = json.dumps({"type": "result", "result": "ok"}, ensure_ascii=False)
-        chat_invoke.log_tool_use_diagnostics(stdout, print_fn=printed.append)
+        stream_text = json.dumps({"type": "result", "result": "ok"}, ensure_ascii=False)
+        chat_invoke.log_tool_use_diagnostics(stream_text, print_fn=printed.append)
         self.assertEqual(printed, [])
 
     def test_malformed_lines_are_skipped(self):
@@ -317,34 +552,41 @@ class LogToolUseDiagnosticsTests(unittest.TestCase):
         self.assertEqual(printed, [])
 
 
-class ExtractResponseTextTests(unittest.TestCase):
-    def test_normal_result_returns_text_without_diagnostics(self):
-        printed = []
-        stdout = json.dumps({"type": "result", "result": '{"reply": "こんにちは"}'}, ensure_ascii=False)
-        result = chat_invoke.extract_response_text(stdout, "", 0, print_fn=printed.append)
-        self.assertEqual(result, '{"reply": "こんにちは"}')
-        self.assertEqual(printed, [])
-
-    def test_empty_response_prints_diagnostics(self):
-        printed = []
-        result = chat_invoke.extract_response_text("", "some claude stderr", 1, print_fn=printed.append)
-        self.assertEqual(result, "")
-        self.assertTrue(any("returncode=1" in p for p in printed))
-        self.assertTrue(any("some claude stderr" in p for p in printed))
-
-    def test_empty_response_with_no_stderr_only_prints_returncode_line(self):
-        printed = []
-        chat_invoke.extract_response_text("", "", 0, print_fn=printed.append)
-        self.assertEqual(len(printed), 1)
-
-
 class AllowedToolsHttpPostTests(unittest.TestCase):
-    def test_http_post_is_present_in_allowed_tools(self):
-        # http_post自体の有効/無効はmcp-config.py(preferences.jsonのhttp_post_enabled)
-        # 側のMCPサーバー側ゲートで制御する。ここではClaude CLI側の--allowedToolsに
-        # 名前が載っていること(=許可リスト不足による「権限が無い」エラーにならないこと)
-        # だけを確認する。
-        self.assertIn("mcp__http__http_post", chat_invoke._COMMON_TOOLS)
+    # 仕様変更(2026-07-16、#14増分4の実CLI検証で発見・ゆの承認済み): 以前はhttp_postの
+    # 有効/無効判定をmcp-config.py側のMCPサーバーゲートのみに委ね、_COMMON_TOOLSは
+    # 無条件でhttp_postを含んでいた(下のtest_http_post_absent_from_common_toolsが示す通り)。
+    # Claude CLI旧経路の--allowedToolsはtool名の実在確認をしないため、これは無害だった。
+    # しかしinvoke-agent.sh新経路の--allowed-mcp-toolsはmcp-config.pyの厳格な存在検証を
+    # 通すため、http_post_enabled=falseの環境で「無条件に許可を申告しているが実際には
+    # 存在しないtool」としてfail-closedで即エラーになる。これを避けるため、caller側
+    # (_allowed_tools_for_chat_source)でもmcp-config.pyの_http_tools()と同じ条件を
+    # 再現するよう変更した。
+    def test_http_post_absent_from_common_tools(self):
+        self.assertNotIn("mcp__http__http_post", chat_invoke._COMMON_TOOLS)
+
+    def test_http_post_included_only_when_preference_enabled(self):
+        disabled = chat_invoke._allowed_tools_for_chat_source("chat", http_post_enabled=False)
+        enabled = chat_invoke._allowed_tools_for_chat_source("chat", http_post_enabled=True)
+
+        self.assertNotIn("mcp__http__http_post", disabled)
+        self.assertIn("mcp__http__http_post", enabled)
+
+    def test_read_http_post_enabled_mirrors_mcp_config_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            enabled_path = Path(tmp) / "enabled.json"
+            enabled_path.write_text(json.dumps({"http_post_enabled": True}), encoding="utf-8")
+            disabled_path = Path(tmp) / "disabled.json"
+            disabled_path.write_text(json.dumps({"http_post_enabled": False}), encoding="utf-8")
+            missing_key_path = Path(tmp) / "missing_key.json"
+            missing_key_path.write_text(json.dumps({}), encoding="utf-8")
+
+            self.assertTrue(chat_invoke._read_http_post_enabled(str(enabled_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(disabled_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(missing_key_path)))
+            self.assertFalse(chat_invoke._read_http_post_enabled(str(Path(tmp) / "nonexistent.json")))
+            self.assertFalse(chat_invoke._read_http_post_enabled(None))
+            self.assertFalse(chat_invoke._read_http_post_enabled(""))
 
 
 if __name__ == "__main__":

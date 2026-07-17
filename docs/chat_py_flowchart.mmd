@@ -29,7 +29,7 @@ flowchart TD
     G8b --> G9["queued listen(深聴き予約)解決\n(あればenv継承)"]
 
     G9 --> H["プロンプト構築\nbuild_chat_prompt()"]
-    H --> I["Claude CLI起動\ninvoke_claude()"]
+    H --> I["Claude CLI起動\ninvoke_chat_claude()\n(invoke-agent.sh経由)"]
     I --> J["レスポンス抽出\nchat_extract()"]
 
     J --> K1["紹介済み機能を記録"]
