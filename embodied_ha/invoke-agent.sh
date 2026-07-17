@@ -204,7 +204,7 @@ if [[ -n "$sound_file" ]]; then
   # あれば--dangerously-skip-permissions無しでも安全にview_fileへ直行できることを確認済み
   # (指示が無いと、モデルがls/file等のcommand権限ツールを試みてheadlessモードで自動拒否
   # されるか、Pythonスクリプトを自前で書いて外部STT APIへ投げる誤動作を起こす)。
-  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"command/shell/Pythonなどの実行ツールや外部スクリプトは使わず、view_fileだけで下記の音声ファイルを直接読み込んで内容を理解してください。"$'\n'"@${sound_file_webm}"
+  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"view_fileで下記の音声ファイルを読み込んで内容を理解してください"$'\n'"command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です"$'\n'"@${sound_file_webm}"
 fi
 
 selected_harness="${EHA_AGENT_HARNESS:-claude}"

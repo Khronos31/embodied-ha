@@ -658,8 +658,8 @@ class InvokeAgentTests(unittest.TestCase):
             args = payload["args"]
             self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (High)")
             prompt = args[args.index("-p") + 1]
-            self.assertIn("実行ツールや外部スクリプトは使わず", prompt)
-            self.assertIn("view_file", prompt)
+            self.assertIn("view_fileで下記の音声ファイルを読み込んで内容を理解してください", prompt)
+            self.assertIn("command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です", prompt)
             self.assertNotIn(wav_path.as_posix(), prompt)
             self.assertRegex(prompt, r"@\S+\.webm")
 
@@ -699,7 +699,7 @@ class InvokeAgentTests(unittest.TestCase):
             args = payload["args"]
             self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (Low)")
             prompt = args[args.index("-p") + 1]
-            self.assertIn("実行ツールや外部スクリプトは使わず", prompt)
+            self.assertIn("command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です", prompt)
             self.assertRegex(prompt, r"@\S+\.webm")
 
     def test_sound_file_missing_dies(self):
