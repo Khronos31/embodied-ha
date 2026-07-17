@@ -83,9 +83,16 @@ tools/list`という一連のハンドシェイクシーケンスを固定する
 
 詳細・再現実験の全記録は[[embodied_ha_camera_mcp_hangs_with_sound_file_2026-07-17]]参照。
 
-**現時点のステータス**: コード修正・単体テスト・独立レビュー(gpt-5.6-sol、指摘なし)は完了。
-**実CLI検証(camera単体→フル12サーバー構成)はまだ実施していない**——「修正済み」と
-「実agy環境での最終検証済み」は区別して扱う。増分8はこの実CLI検証が終わるまで未完了のまま。
+**現時点のステータス(2026-07-17更新)**: コード修正・単体テスト・独立レビュー
+(gpt-5.6-sol、指摘なし)に加え、隔離環境での実CLI検証(`invoke-agent.sh`直接呼び出し、
+外側でreturncode/stdout/stderr捕捉)まで完了。camera単体(6.6秒)、chat.py本番相当フル
+12サーバー構成(9.9秒)、loop.py observe相当フル9サーバー構成(9.9秒)のいずれも
+returncode 0・音声内容を正しく反映したJSON応答・プロセス残留なしを確認済み。
+詳細は[[embodied_ha_camera_mcp_hangs_with_sound_file_2026-07-17]]参照。
+
+**まだ完了していない**: `chat.py`/`loop.py`のPython subprocess経由(caller E2E)での
+最終検証と、呼び出し失敗時の診断情報喪失問題([[embodied_ha_increment567_rereview_findings_2026-07-17]])
+への対応判断。増分8はこれらが終わるまで未完了のまま。
 
 ## 2026-07-17: 「実機での本番相当smoke test」の範囲確定
 
