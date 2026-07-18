@@ -1,55 +1,60 @@
-# loop.py Migration Runtime Contracts
+# loop.py移行 ランタイム契約
 
-`loop.py` migration switched the production daemon path from `loop.sh` to
-`loop.py` on 2026-07-16 after the separate cutover red-team pass and follow-up
-verification were completed. `loop.sh` remains in the repository for rollback.
+loop.py移行は2026-07-16、専用のカットオーバーred-teamパスとフォローアップ検証の
+完了を経て、本番daemonの経路を`loop.sh`から`loop.py`へ切り替えた。`loop.sh`は
+ロールバック用としてリポジトリに残している。
 
-This document tracks runtime files whose shape must remain compatible while the
-Python port is shadow-tested against the shell loop.
+本ドキュメントは、この移行にあたり**形状(スキーマ)互換を維持しなければならない
+ランタイムファイル**を追跡する。shadow parityテスト自体は#14増分7で旧経路コードと
+ともに削除済み([[embodied_ha_phase1_shadow_parity_tests_obsolete_2026-07-17]])だが、
+ここに記す契約(書き手・読み手・保持フィールド)は現行実装にも引き続き適用される。
 
-## Cutover Blockers
+## カットオーバー状況
 
-- Cutover completed on 2026-07-16: `daemon.py` now invokes `loop.py` with
-  `python3`.
-- `loop.sh` is intentionally retained and must not be deleted yet; it is the
-  rollback path if the cutover has to be reverted.
-- Historical blockers are closed. `loop.py` was previously marked
-  not cutover-ready until all five modes passed end-to-end shadow parity tests.
-- **Resolved (2026-07-17, #14増分6)**: the `EHA_SESSION_BIN=agy` `SystemExit` guard
-  in `loop.py`'s `run()` has been removed. Antigravity audio support for loop.py's
-  queued-listen turns is now implemented via `invoke_loop_claude()` forwarding
-  `--sound-file`/`--agent-site <mode>` to `invoke-agent.sh` (mirroring `chat.py`'s
-  #14増分5). `EHA_SESSION_BIN` itself is a legacy variable
-  ([[embodied_ha_invoke_agent_caller_argument_open_items_2026-07-15]] item 9,
-  slated for removal) that `loop.py` no longer reads for harness selection —
-  harness selection is `invoke-agent.sh`'s responsibility via `EHA_AGENT_HARNESS`,
-  which `--sound-file` always forces to `agy` regardless of caller intent.
-- After cutover, keep re-verifying that `agy --project <uuid>` / `agy --new-project`
-  still behave as documented in the `invoke-agent.sh` MCP allow-list design
-  (workspace-local `.agents/mcp_config.json` resolution, `--project`
-  idempotency), and that Antigravity's `includeTools` actually restricts tool
-  visibility in a live test. These behaviors were confirmed by empirical
-  testing against a specific Antigravity CLI version, not from official
-  documentation, and may have changed.
+- カットオーバーは2026-07-16に完了: `daemon.py`は`python3`で`loop.py`を起動する。
+- `loop.sh`は意図的に温存しており、まだ削除してはならない。カットオーバーを
+  巻き戻す場合のロールバック経路である。
+- 過去のブロッカーはすべてクローズ済み。`loop.py`はかつて、5モード全てが
+  end-to-endのshadow parityテストに合格するまでカットオーバー不可
+  (not cutover-ready)とマークされていた。
+- **解決済み(2026-07-17、#14増分6)**: `loop.py`の`run()`にあった`EHA_SESSION_BIN=agy`
+  時の`SystemExit`ガードは撤去された。loop.pyのqueued listenターンにおける
+  Antigravity音声対応は、`invoke_loop_claude()`が`--sound-file`/`--agent-site <mode>`を
+  `invoke-agent.sh`へ転送する方式で実装済み(`chat.py`の#14増分5と同型)。
+  `EHA_SESSION_BIN`自体はレガシー変数
+  ([[embodied_ha_invoke_agent_caller_argument_open_items_2026-07-15]]項目9、削除予定)
+  であり、`loop.py`はもうハーネス選択にこれを読まない——ハーネス選択は
+  `EHA_AGENT_HARNESS`を介した`invoke-agent.sh`の責務であり、`--sound-file`指定時は
+  呼び出し元の意図に関わらず常に`agy`が強制される。
+- カットオーバー後も、`agy --project <uuid>` / `agy --new-project`が
+  `invoke-agent.sh`のMCP allowlist設計に記録したとおりに振る舞うこと
+  (ワークスペースローカルな`.agents/mcp_config.json`の解決、`--project`の冪等性)、
+  およびAntigravityの`includeTools`が実際にツール可視性を制限することを、実機テストで
+  再確認し続けること。これらの挙動は特定バージョンのAntigravity CLIに対する実機検証で
+  確認したものであり、公式ドキュメント由来ではないため、変わっている可能性がある。
 
-## Consumer Inventory
+## 読み書きインベントリ
 
-| File | Writers | Consumers | Contract notes |
+| ファイル | 書き手 | 読み手 | 契約 |
 |---|---|---|---|
-| `observations.jsonl` | `loop.sh` observe, future `loop.py` observe, `chat.sh` context paths | `chat_context.py`, `recent_chat_context.py`, `recall.sh`, `daybook_rollup.py`, `web/server.py`, memory tests | JSONL. Preserve `timestamp`, `emotion`, `private`; optional `facts`, `ungrounded_speech_claim`, `ungrounded_visual_claim`. Parse failures must not be written here. |
-| `explore.jsonl` | `loop.sh` non-observe modes, future `loop.py` non-observe modes | `chat_context.py`, `recent_chat_context.py`, `recall.sh`, `web/server.py` | JSONL. Preserve `timestamp`, `mode`, `emotion`, `private`, `topic`; optional grounding flags. Parse failures must not be written here. |
-| `loop_parse_errors.jsonl` | `loop.sh`, future `loop.py` | diagnostics/tests | JSONL. Preserve `timestamp`, `mode`, `reason`, `raw`. This is the only place raw parse-failure text may be persisted. |
-| `pending_proposal.json` | `loop.sh`, future `loop.py` | `chat_context.py`, `chat_postprocess.py`, chat prompt assembly | JSON object. Preserve `timestamp`, `proposal`, `action`. Write only when action has `domain`, `service`, and `entity_id`. |
-| `chat_log.jsonl` | `loop.sh`, `chat.py`/`chat.sh`, `audio-mcp.py` | `recent_chat_context.py`, `chat_context.py`, `recall.sh`, `web/server.py` | JSONL. Loop-origin records preserve `timestamp`, `source`, `claude`, `user: null`. |
-| observe scene/watch artifacts | `loop.sh` observe, future `loop.py` observe | `scene_state.py`, memory scene ingestion, observe tests | Preserve `scene_objects`, `scene_people`, `scene_changes` ingestion behavior. Watch reports are prompt context, not normal memory rows by themselves. |
-| sociality state and relationship logs | sociality MCP, future social loop path | `sociality-mcp.py`, sociality tests, future prompt context | Keep strict tool argument validation. Invalid payloads are diagnostic-only and must not mutate relationship state. |
+| `observations.jsonl` | `loop.py` observe(現行)、`chat.py`系コンテキスト経路、ロールバック温存の`loop.sh`/`chat.sh` | `chat_context.py`、`recent_chat_context.py`、`recall.sh`、`daybook_rollup.py`、`web/server.py`、memory系テスト | JSONL。`timestamp`・`emotion`・`private`を保持。任意フィールド: `facts`・`ungrounded_speech_claim`・`ungrounded_visual_claim`。パース失敗をここへ書き込んではならない。 |
+| `explore.jsonl` | `loop.py`非observeモード(現行)、ロールバック温存の`loop.sh` | `chat_context.py`、`recent_chat_context.py`、`recall.sh`、`web/server.py` | JSONL。`timestamp`・`mode`・`emotion`・`private`・`topic`を保持。任意でgroundingフラグ。パース失敗をここへ書き込んではならない。 |
+| `loop_parse_errors.jsonl` | `loop.py`(現行)、ロールバック温存の`loop.sh` | 診断・テスト | JSONL。`timestamp`・`mode`・`reason`・`raw`を保持。パース失敗の生テキストを永続化してよいのはここだけ。 |
+| `pending_proposal.json` | `loop.py`(現行)、ロールバック温存の`loop.sh` | `chat_context.py`、`chat_postprocess.py`、chatプロンプト組み立て | JSONオブジェクト。`timestamp`・`proposal`・`action`を保持。actionが`domain`・`service`・`entity_id`を持つときのみ書き込む。 |
+| `chat_log.jsonl` | `loop.py`/`loop.sh`、`chat.py`/`chat.sh`、`audio-mcp.py` | `recent_chat_context.py`、`chat_context.py`、`recall.sh`、`web/server.py` | JSONL。ループ由来レコードは`timestamp`・`source`・`claude`・`user: null`を保持。 |
+| observeのscene/watch成果物 | `loop.py` observe(現行)、ロールバック温存の`loop.sh` | `scene_state.py`、memoryのscene取り込み、observe系テスト | `scene_objects`・`scene_people`・`scene_changes`の取り込み挙動を保持。見守り(watch)レポートはプロンプトコンテキストであり、それ単体では通常のmemory行にしない。 |
+| socialityの状態・関係性ログ | sociality MCP、将来のsocialループ経路 | `sociality-mcp.py`、sociality系テスト、将来のプロンプトコンテキスト | ツール引数の厳格な検証を維持する。不正なペイロードは診断のみに留め、関係性の状態を変更してはならない。 |
 
-## Shadow Parity Scope
+## shadow parityの比較範囲(履歴)
 
-Each migrated mode must compare the real shell path and Python path with the
-same fixture inputs:
+Phase1(カットオーバー前)では、移行した各モードについて実shell経路とPython経路を
+同一のfixture入力で比較していた:
 
-- Claude argv and key environment values.
-- MCP config generator inputs.
-- Runtime side effects in the files listed above.
-- Absence of normal persistence when parsing fails or introspection is empty.
+- Claudeのargvと主要な環境変数値。
+- MCP設定生成器への入力。
+- 上記ファイル群へのランタイム副作用。
+- パース失敗時・内省が空のときに通常の永続化が起きないこと。
+
+この比較テスト群は、旧経路(直接claude呼び出し)の削除(#14増分7)に伴い、比較対象が
+存在しなくなったため削除された。経緯は
+[[embodied_ha_phase1_shadow_parity_tests_obsolete_2026-07-17]]を参照。
