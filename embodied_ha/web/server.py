@@ -378,6 +378,8 @@ _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
 _CODEX_INSTALL_LOCK = threading.Lock()
+_CODEX_LOGIN_TIMEOUT = 16 * 60
+_CODEX_LOGIN_POLL_INTERVAL = 1
 _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
 
@@ -1182,6 +1184,107 @@ class Handler(BaseHTTPRequestHandler):
             if not worker_owns_lock:
                 _CODEX_INSTALL_LOCK.release()
 
+    def _serve_setup_codex_login(self):
+        """Start Codex device auth and stream its URL/code without using a PTY."""
+        import subprocess as _sp
+
+        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b'event: error\ndata: {"error": "Codex setup is busy"}\n\n')
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        proc = None
+        reader = None
+        error = None
+        lines: queue.Queue = queue.Queue(maxsize=200)
+        reader_done = threading.Event()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            if codex_setup is None:
+                raise RuntimeError("Codex helpers unavailable")
+            if not codex_setup.is_installed():
+                raise RuntimeError("Codex CLI is not installed")
+            os.makedirs(codex_setup.home_dir(), exist_ok=True)
+            proc = _sp.Popen(
+                [codex_setup.binary_path(), "login", "--device-auth"],
+                stdin=_sp.DEVNULL, stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                text=True, bufsize=1, env=codex_setup.subprocess_env(),
+            )
+
+            def read_stdout():
+                try:
+                    assert proc is not None and proc.stdout is not None
+                    for raw_line in proc.stdout:
+                        display_line = codex_setup.device_auth_display_line(raw_line)
+                        if display_line:
+                            lines.put(display_line)
+                finally:
+                    reader_done.set()
+
+            reader = threading.Thread(target=read_stdout, daemon=True)
+            reader.start()
+            deadline = time.monotonic() + _CODEX_LOGIN_TIMEOUT
+            while True:
+                if codex_setup.is_authenticated():
+                    self.wfile.write(b'event: done\ndata: {"authenticated": true}\n\n')
+                    self.wfile.flush()
+                    return
+                try:
+                    line = lines.get(timeout=_CODEX_LOGIN_POLL_INTERVAL)
+                    msg = f"event: line\ndata: {json.dumps({'text': line}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                except queue.Empty:
+                    # keepalive: 書き込みがないとクライアント切断を検知できず、
+                    # 子プロセスとmutation lockがタイムアウトまで残る(実E2Eで確認)
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Codex device authentication timed out")
+                if proc.poll() is not None and reader_done.is_set() and lines.empty():
+                    # 承認成功時、codexはauth.jsonを書いて自ら即終了する(status 0、
+                    # 実ブラウザ承認E2Eで確認)。死亡判定の前に認証完了を再確認しないと
+                    # 「auth.jsonチェック→queue待ち→死亡チェック」の隙間で誤errorになる。
+                    if codex_setup.is_authenticated():
+                        self.wfile.write(b'event: done\ndata: {"authenticated": true}\n\n')
+                        self.wfile.flush()
+                        return
+                    raise RuntimeError(f"Codex login exited before authentication completed (status {proc.returncode})")
+        except Exception as e:
+            error = str(e)
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except _sp.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            if reader is not None:
+                reader.join(timeout=1)
+            if proc is not None and proc.stdout is not None:
+                proc.stdout.close()
+            _CODEX_INSTALL_LOCK.release()
+        if error is not None:
+            try:
+                msg = f"event: error\ndata: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+
     def _serve_setup_antigravity_login(self):
         """Antigravity auth login を PTY で起動し、URL と完了状態だけを SSE 配信する。"""
         import subprocess as _sp, pty, select, re as _re
@@ -1715,6 +1818,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/codex/install":
             self._serve_setup_codex_install()
+        elif path == "/api/setup/codex/login":
+            self._serve_setup_codex_login()
         elif path == "/api/setup/codex/uninstall":
             if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
                 self.send_json({"error": "Codex install is running"}, 409)
