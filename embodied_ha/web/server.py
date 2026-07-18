@@ -20,6 +20,10 @@ try:
     import codex_setup  # type: ignore
 except Exception:
     codex_setup = None
+try:
+    import claude_setup  # type: ignore
+except Exception:
+    claude_setup = None
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -371,8 +375,6 @@ HA_URL    = os.environ["HA_URL"]
 HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
-CLAUDE_CONFIG_DIR_PATH = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
-
 _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
@@ -385,16 +387,8 @@ _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
 
 def is_authenticated() -> bool:
-    # APIキー認証
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # サブスク認証は OAuthトークン本体 .credentials.json の有無で判定する。
-    # （.claude.json の userID は「ログイン記録」であって認証実体ではない。
-    #   userID があってもトークンが無ければ claude は "Not logged in" になる）
-    for fname in (".credentials.json", "credentials.json"):
-        if os.path.exists(os.path.join(CLAUDE_CONFIG_DIR_PATH, fname)):
-            return True
-    return False
+    """Compatibility wrapper for the existing Claude setup/login flow."""
+    return claude_setup.is_authenticated() if claude_setup is not None else False
 
 
 def antigravity_status() -> dict:
@@ -1631,11 +1625,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(antigravity_status())
         elif path == "/api/setup/codex/status":
             self.send_json(codex_status())
+        elif path == "/api/setup/claude/status":
+            if claude_setup is None:
+                self.send_json({"error": "claude helpers unavailable"}, 500)
+            else:
+                self.send_json(claude_setup.state())
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
             self._serve_setup_antigravity_login()
-        elif path == "/api/setup/login":
+        elif path in ("/api/setup/login", "/api/setup/claude/login"):
             self._serve_setup_login()
         elif path == "/api/preferences":
             filepath = PREFS_FILE
@@ -1800,7 +1799,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-        elif path == "/api/setup/login-code":
+        elif path in ("/api/setup/login-code", "/api/setup/claude/login-code"):
             length = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(length))
@@ -1815,6 +1814,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 os.write(fd, (code + "\r").encode())
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/claude/clear-auth":
+            try:
+                if claude_setup is None:
+                    self.send_json({"error": "claude helpers unavailable"}, 500)
+                    return
+                result = claude_setup.clear_auth()
+                self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":
