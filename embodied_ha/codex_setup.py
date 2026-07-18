@@ -187,7 +187,17 @@ def _safe_extract(archive: bytes, destination: str) -> None:
             total_size += member.size
             if total_size > MAX_ARCHIVE_TOTAL_BYTES:
                 raise RuntimeError("Codex archive exceeds the total extracted size limit")
-        tar.extractall(destination, filter="data")
+            # data_filterのmode正規化相当を自前でも行う(setuid/setgid/sticky除去)。
+            # 下のフォールバック経路(filter無しextractall)でも安全性が落ちないように。
+            member.mode &= 0o755
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(destination, filter="data")
+        else:
+            # 本番コンテナ(Debian bookworm)のpython3.11.2はPEP 706(extraction filter)
+            # 未バックポート(2026-07-18、Debianソース実物で確認——extractallに
+            # filter引数が存在しない)。メンバー検証は上で自前実施済みのため、
+            # フォールバックでも安全性は同等。
+            tar.extractall(destination)
 
 
 def _release_directory(extract_dir: str) -> str:

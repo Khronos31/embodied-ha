@@ -60,6 +60,10 @@ class ClaudeSetupTests(unittest.TestCase):
 
 class ClaudeSetupEndpointTests(unittest.TestCase):
     def setUp(self):
+        self.setup_guard_env = mock.patch.dict(
+            os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False
+        )
+        self.setup_guard_env.start()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
@@ -69,6 +73,7 @@ class ClaudeSetupEndpointTests(unittest.TestCase):
         self.httpd.shutdown()
         self.thread.join()
         self.httpd.server_close()
+        self.setup_guard_env.stop()
 
     def _get_json(self, path):
         with urllib.request.urlopen(self.base_url + path) as response:

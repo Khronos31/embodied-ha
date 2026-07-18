@@ -41,6 +41,13 @@ export CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 export EHA_TOOLS_PATH="${EHA_TOOLS_PATH:-/usr/local/bin}"
 export PATH="${EHA_TOOLS_PATH}:${PATH}"
 
+# --- Codex CLI（Web UIで任意導入）---
+# 認証はCLIの有無にかかわらず永続領域へ統一する。invoke-agent.shもこの値を見る。
+export CODEX_HOME="/data/codex-home"
+if [ -x /data/codex-cli/bin/codex ]; then
+    export EHA_CODEX_BIN="/data/codex-cli/bin/codex"
+fi
+
 # --- PulseAudio（audio: true で注入されるソケット）---
 # HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。
 # libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。

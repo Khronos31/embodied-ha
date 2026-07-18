@@ -20,10 +20,10 @@ try:
     import codex_setup  # type: ignore
 except Exception:
     codex_setup = None
-try:
-    import claude_setup  # type: ignore
-except Exception:
-    claude_setup = None
+# claude_setupはagy/codexと違い、本番実績のある既存経路(旧/api/setup/*とログイン
+# 完了検知)が依存する。import失敗を握り潰すと既存機能が黙って未認証扱いに退行する
+# ため、必須importとして失敗時は起動時に大きく落とす(sol指摘 2026-07-18)。
+import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -385,10 +385,36 @@ _CODEX_LOGIN_POLL_INTERVAL = 1
 _CODEX_LOGIN_QUEUE_PUT_TIMEOUT = 0.1
 _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
+# Setup mutation routes are intentionally centralized so new aliases cannot
+# accidentally bypass the ingress-only boundary. Status reads are not included.
+_SETUP_MUTATION_PATHS = frozenset({
+    "/api/setup/login", "/api/setup/login-code",
+    "/api/setup/claude/login", "/api/setup/claude/login-code",
+    "/api/setup/claude/clear-auth",
+    "/api/setup/antigravity/install", "/api/setup/antigravity/login",
+    "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
+    "/api/setup/antigravity/uninstall", "/api/setup/antigravity/clear-auth",
+    "/api/setup/codex/install", "/api/setup/codex/login",
+    "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
+})
+_SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
+
+
+def setup_guard(client_address) -> bool:
+    """Return whether a setup mutation is allowed for this peer address.
+
+    Supervisor ingress connects from outside the add-on container. The emergency
+    override is deliberately read for every request so an add-on restart with
+    EHA_SETUP_GUARD=off can recover if that deployment assumption is wrong.
+    """
+    if os.environ.get("EHA_SETUP_GUARD", "").lower() == "off":
+        return True
+    return client_address[0] not in {"127.0.0.1", "::1"}
+
 
 def is_authenticated() -> bool:
     """Compatibility wrapper for the existing Claude setup/login flow."""
-    return claude_setup.is_authenticated() if claude_setup is not None else False
+    return claude_setup.is_authenticated()
 
 
 def antigravity_status() -> dict:
@@ -882,6 +908,13 @@ class Handler(BaseHTTPRequestHandler):
             path = path[len(base):]
         return path or "/"
 
+    def _block_loopback_setup_mutation(self, path: str) -> bool:
+        """Send the common ingress-only rejection for guarded setup routes."""
+        if path not in _SETUP_MUTATION_PATHS or setup_guard(self.client_address):
+            return False
+        self.send_json({"error": _SETUP_GUARD_ERROR}, 403)
+        return True
+
     def serve_index(self):
         """index.html に window.INGRESS_PATH を注入して返す。"""
         # 本番は HA ingress が X-Ingress-Path を付与する。ローカルプレビュー
@@ -1060,9 +1093,7 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(home_dir, exist_ok=True)
                 os.makedirs(bin_dir, exist_ok=True)
                 script = antigravity_setup.fetch_install_script(timeout=60)
-                env = os.environ.copy()
-                env["HOME"] = home_dir
-                env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+                env = antigravity_setup.subprocess_env()
                 proc = _sp.Popen(
                     ["bash", "-s", "--", "--dir", bin_dir],
                     stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.STDOUT,
@@ -1516,6 +1547,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
 
+        if self._block_loopback_setup_mutation(path):
+            return
+
         if path in ("/", ""):
             self.serve_index()
         elif path == "/style.css":
@@ -1626,10 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/codex/status":
             self.send_json(codex_status())
         elif path == "/api/setup/claude/status":
-            if claude_setup is None:
-                self.send_json({"error": "claude helpers unavailable"}, 500)
-            else:
-                self.send_json(claude_setup.state())
+            self.send_json(claude_setup.state())
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
@@ -1769,6 +1800,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
 
+        if self._block_loopback_setup_mutation(path):
+            return
+
         if path == "/api/status":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -1818,11 +1852,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/claude/clear-auth":
             try:
-                if claude_setup is None:
-                    self.send_json({"error": "claude helpers unavailable"}, 500)
-                    return
                 result = claude_setup.clear_auth()
-                self.send_json({"ok": True, **result})
+                if result.get("errors"):
+                    # 部分成功を握り潰さない: 消えたファイルと失敗理由を両方返す
+                    self.send_json({"ok": False, **result}, 500)
+                else:
+                    self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":

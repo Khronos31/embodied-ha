@@ -120,6 +120,36 @@ class CodexSetupTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Unsafe path"):
                     codex_setup._safe_extract(linked_archive_bytes(link_type), temp)
 
+    def test_safe_extract_works_without_pep706_filter_and_strips_setuid(self):
+        # 本番コンテナ(bookworm python3.11.2)はextractallにfilter引数が無い。
+        # hasattr(tarfile, "data_filter")フォールバックの動作と、
+        # フォールバック経路でもsetuid/setgidが剥がれることを固定する。
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode="w:gz") as tar:
+            info = tarfile.TarInfo("bin")
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            tar.addfile(info)
+            info = tarfile.TarInfo("bin/codex")
+            payload = b"#!/bin/sh\n"
+            info.size = len(payload)
+            info.mode = 0o4755  # setuid付き
+            tar.addfile(info, io.BytesIO(payload))
+        archive = out.getvalue()
+        for simulate_old_python in (False, True):
+            with tempfile.TemporaryDirectory() as temp:
+                if simulate_old_python:
+                    original = tarfile.data_filter
+                    del tarfile.data_filter
+                    try:
+                        codex_setup._safe_extract(archive, temp)
+                    finally:
+                        tarfile.data_filter = original
+                else:
+                    codex_setup._safe_extract(archive, temp)
+                mode = os.stat(Path(temp) / "bin" / "codex").st_mode & 0o7777
+                self.assertEqual(mode, 0o755, f"simulate_old_python={simulate_old_python}")
+
     def test_read_url_enforces_advertised_and_actual_sizes(self):
         with mock.patch.object(codex_setup, "MAX_DOWNLOAD_BYTES", 4), \
              mock.patch.object(codex_setup, "urlopen", return_value=FakeUrlResponse(b"ok", "5")):
@@ -235,6 +265,15 @@ class CodexSetupTests(unittest.TestCase):
 
 
 class CodexSetupEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.setup_guard_env = mock.patch.dict(
+            os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False
+        )
+        self.setup_guard_env.start()
+
+    def tearDown(self):
+        self.setup_guard_env.stop()
+
     def _with_server(self, fake, assertion, expect_lock_released=True):
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
