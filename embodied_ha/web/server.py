@@ -16,6 +16,10 @@ try:
     import antigravity_setup  # type: ignore
 except Exception:
     antigravity_setup = None
+try:
+    import codex_setup  # type: ignore
+except Exception:
+    codex_setup = None
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -373,6 +377,7 @@ _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
+_CODEX_INSTALL_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
 
@@ -405,6 +410,22 @@ def antigravity_status() -> dict:
     state = antigravity_setup.state()
     state["installing"] = _ANTIGRAVITY_INSTALL_LOCK.locked()
     state["login_active"] = _ANTIGRAVITY_LOGIN_SESSION_LOCK.locked()
+    return state
+
+
+def codex_status() -> dict:
+    if codex_setup is None:
+        return {
+            "installed": False,
+            "authenticated": False,
+            "installing": False,
+            "install_root": os.environ.get("EHA_CODEX_INSTALL_ROOT", "/data/codex-cli"),
+            "home_dir": os.environ.get("EHA_CODEX_HOME", "/data/codex-home"),
+            "binary_path": "",
+            "auth_path": "",
+        }
+    state = codex_setup.state()
+    state["installing"] = _CODEX_INSTALL_LOCK.locked()
     return state
 
 
@@ -1101,6 +1122,61 @@ class Handler(BaseHTTPRequestHandler):
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"])
 
+    def _serve_setup_codex_install(self):
+        """Codex CLI を GitHub Releases から導入し、進捗を SSE 配信する。"""
+        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': 'Codex install is already running'}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        q: queue.Queue = queue.Queue(maxsize=200)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def run_install():
+            try:
+                if codex_setup is None:
+                    raise RuntimeError("Codex helpers unavailable")
+                result = codex_setup.install(progress=lambda text: q.put(("line", text)))
+                q.put(("done", result))
+            except Exception as e:
+                q.put(("error", str(e)))
+            finally:
+                _CODEX_INSTALL_LOCK.release()
+
+        threading.Thread(target=run_install, daemon=True).start()
+        try:
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+
     def _serve_setup_antigravity_login(self):
         """Antigravity auth login を PTY で起動し、URL と完了状態だけを SSE 配信する。"""
         import subprocess as _sp, pty, select, re as _re
@@ -1417,6 +1493,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"authenticated": is_authenticated(), "antigravity": antigravity_status()})
         elif path == "/api/setup/antigravity/status":
             self.send_json(antigravity_status())
+        elif path == "/api/setup/codex/status":
+            self.send_json(codex_status())
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
@@ -1627,6 +1705,26 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
                     return
                 result = antigravity_setup.clear_auth()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/codex/install":
+            self._serve_setup_codex_install()
+        elif path == "/api/setup/codex/uninstall":
+            try:
+                if codex_setup is None:
+                    self.send_json({"error": "Codex helpers unavailable"}, 500)
+                    return
+                result = codex_setup.uninstall()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/codex/clear-auth":
+            try:
+                if codex_setup is None:
+                    self.send_json({"error": "Codex helpers unavailable"}, 500)
+                    return
+                result = codex_setup.clear_auth()
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

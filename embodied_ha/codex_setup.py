@@ -1,0 +1,259 @@
+"""Helpers for optional Codex CLI installation and auth state."""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import platform
+import shutil
+import tarfile
+import tempfile
+from pathlib import PurePosixPath
+from urllib.request import urlopen
+
+RELEASES_URL = "https://api.github.com/repos/openai/codex/releases"
+INSTALL_ROOT_ENV = "EHA_CODEX_INSTALL_ROOT"
+HOME_ENV = "EHA_CODEX_HOME"
+MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+
+
+def install_root() -> str:
+    return os.environ.get(INSTALL_ROOT_ENV, "/data/codex-cli")
+
+
+def home_dir() -> str:
+    return os.environ.get(HOME_ENV, "/data/codex-home")
+
+
+def bin_dir() -> str:
+    return os.path.join(install_root(), "bin")
+
+
+def binary_path() -> str:
+    return os.path.join(bin_dir(), "codex")
+
+
+def auth_path() -> str:
+    return os.path.join(home_dir(), "auth.json")
+
+
+def is_installed() -> bool:
+    path = binary_path()
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def is_authenticated() -> bool:
+    return os.path.exists(auth_path())
+
+
+def subprocess_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Return the minimal non-secret environment for Codex subprocesses.
+
+    The installer currently uses no subprocess, but device login and version
+    checks need this allow-list rather than inheriting add-on credentials.
+    """
+    env = {
+        "HOME": home_dir(),
+        "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+    if extra:
+        env.update(extra)
+    return env
+
+
+def platform_target(machine: str | None = None) -> str:
+    machine = (machine or platform.machine()).lower()
+    if machine in ("x86_64", "amd64"):
+        return "x86_64-unknown-linux-musl"
+    if machine in ("aarch64", "arm64"):
+        return "aarch64-unknown-linux-musl"
+    raise RuntimeError(f"Unsupported architecture: {machine}")
+
+
+def package_asset_name(target: str) -> str:
+    return f"codex-package-{target}.tar.gz"
+
+
+def checksum_asset_name() -> str:
+    return "codex-package_SHA256SUMS"
+
+
+def _read_url(url: str, timeout: int = 60) -> bytes:
+    with urlopen(url, timeout=timeout) as res:
+        content_length = res.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_DOWNLOAD_BYTES:
+            raise RuntimeError("Codex download exceeds the size limit")
+        data = res.read(MAX_DOWNLOAD_BYTES + 1)
+    if len(data) > MAX_DOWNLOAD_BYTES:
+        raise RuntimeError("Codex download exceeds the size limit")
+    return data
+
+
+def _release_url(version: str) -> str:
+    if version == "latest":
+        return f"{RELEASES_URL}/latest"
+    return f"{RELEASES_URL}/tags/rust-v{version}"
+
+
+def resolve_release(version: str = "latest", timeout: int = 60) -> dict:
+    """Fetch and validate the release metadata for latest or a Rust version."""
+    try:
+        release = json.loads(_read_url(_release_url(version), timeout).decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"Could not fetch Codex release metadata: {exc}") from exc
+    tag = release.get("tag_name", "")
+    if not isinstance(tag, str) or not tag.startswith("rust-v") or not tag[6:]:
+        raise RuntimeError("Codex release metadata has no rust-v tag")
+    if version != "latest" and tag != f"rust-v{version}":
+        raise RuntimeError("Codex release metadata tag did not match requested version")
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("Codex release metadata has no assets")
+    return {"version": tag[6:], "assets": assets}
+
+
+def _asset(release: dict, name: str) -> dict:
+    for asset in release["assets"]:
+        if isinstance(asset, dict) and asset.get("name") == name:
+            if isinstance(asset.get("browser_download_url"), str):
+                return asset
+    raise RuntimeError(f"Could not find release asset {name}")
+
+
+def expected_sha256(checksums: bytes, asset_name: str) -> str:
+    """Read an archive checksum from the official release checksum manifest."""
+    try:
+        text = checksums.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("Codex checksum manifest was not UTF-8") from exc
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].lstrip("*") == asset_name:
+            digest = parts[0].lower()
+            if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+                return digest
+    raise RuntimeError(f"Could not find SHA-256 digest for {asset_name}")
+
+
+def verify_sha256(data: bytes, expected: str) -> None:
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected.lower():
+        raise RuntimeError("Downloaded Codex archive checksum did not match expected digest")
+
+
+def _safe_extract(archive: bytes, destination: str) -> None:
+    """Extract a tar archive without links or paths outside destination."""
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk():
+                raise RuntimeError(f"Unsafe path in Codex archive: {member.name}")
+            if not (member.isdir() or member.isfile()):
+                raise RuntimeError(f"Unsupported entry in Codex archive: {member.name}")
+        tar.extractall(destination, filter="data")
+
+
+def _release_directory(extract_dir: str) -> str:
+    # 実配布のcodex-packageはアーカイブ直下がリリースルート(bin/codex等)。
+    # 2026-07-18のrust-v0.144.5実物で確認。バージョンディレクトリ入れ子の
+    # 配布に変わった場合に備え、単一サブディレクトリのフォールバックも残す。
+    if os.path.isfile(os.path.join(extract_dir, "bin", "codex")):
+        return extract_dir
+    candidates = []
+    for entry in os.scandir(extract_dir):
+        if entry.is_dir() and os.path.isfile(os.path.join(entry.path, "bin", "codex")):
+            candidates.append(entry.path)
+    if len(candidates) != 1:
+        raise RuntimeError("Codex archive did not contain one release directory")
+    return candidates[0]
+
+
+def _replace_install_root(staged_root: str, root: str) -> None:
+    parent = os.path.dirname(root) or "."
+    backup = tempfile.mkdtemp(prefix=".codex-backup-", dir=parent)
+    os.rmdir(backup)
+    moved_old = False
+    try:
+        if os.path.lexists(root):
+            os.replace(root, backup)
+            moved_old = True
+        os.replace(staged_root, root)
+    except Exception:
+        if moved_old and not os.path.lexists(root):
+            os.replace(backup, root)
+        raise
+    finally:
+        if os.path.exists(backup):
+            if os.path.isdir(backup) and not os.path.islink(backup):
+                shutil.rmtree(backup)
+            else:
+                os.remove(backup)
+
+
+def install(version: str = "latest", timeout: int = 60, progress=None) -> dict:
+    """Download, verify, and atomically install a Codex release from GitHub."""
+    report = progress or (lambda _message: None)
+    report("Resolving Codex release")
+    release = resolve_release(version, timeout)
+    target = platform_target()
+    archive_name = package_asset_name(target)
+    archive_asset = _asset(release, archive_name)
+    checksum_asset = _asset(release, checksum_asset_name())
+    report(f"Downloading Codex {release['version']} for {target}")
+    checksums = _read_url(checksum_asset["browser_download_url"], timeout)
+    expected = expected_sha256(checksums, archive_name)
+    archive = _read_url(archive_asset["browser_download_url"], timeout)
+    verify_sha256(archive, expected)
+    report("Verified SHA-256 checksum")
+
+    root = os.path.abspath(install_root())
+    parent = os.path.dirname(root) or "."
+    os.makedirs(parent, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".codex-install-", dir=parent) as temp_dir:
+        extract_dir = os.path.join(temp_dir, "extract")
+        os.mkdir(extract_dir)
+        _safe_extract(archive, extract_dir)
+        staged_root = _release_directory(extract_dir)
+        binary = os.path.join(staged_root, "bin", "codex")
+        if not os.path.isfile(binary):
+            raise RuntimeError("Codex archive did not contain bin/codex")
+        os.chmod(binary, os.stat(binary).st_mode | 0o111)
+        _replace_install_root(staged_root, root)
+    report("Codex installation complete")
+    return {"version": release["version"], "target": target, "checksum_verified": True, "binary_path": binary_path()}
+
+
+def state() -> dict:
+    return {
+        "installed": is_installed(),
+        "authenticated": is_authenticated(),
+        "install_root": install_root(),
+        "home_dir": home_dir(),
+        "bin_dir": bin_dir(),
+        "binary_path": binary_path(),
+        "auth_path": auth_path(),
+        "checksum_source": "codex-package_SHA256SUMS",
+    }
+
+
+def clear_auth() -> dict:
+    removed_files = []
+    path = auth_path()
+    if os.path.exists(path):
+        os.remove(path)
+        removed_files.append(path)
+    return {"removed_files": removed_files}
+
+
+def uninstall() -> dict:
+    removed_files = []
+    root = os.path.abspath(install_root())
+    if root == os.path.sep:
+        raise RuntimeError("Refusing to uninstall Codex from filesystem root")
+    if os.path.exists(root):
+        shutil.rmtree(root)
+        removed_files.append(root)
+    removed_files.extend(clear_auth()["removed_files"])
+    return {"removed_files": removed_files}
