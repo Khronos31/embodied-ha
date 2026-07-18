@@ -62,15 +62,16 @@ class FakeUrlResponse:
 
 
 class CodexSetupTests(unittest.TestCase):
-    def test_device_auth_display_line_strips_ansi_and_filters_noise(self):
-        url = "\x1b[1;36mOpen https://auth.openai.com/codex/device\x1b[0m"
-        code = "\x1b[1mYour code is ABCD-12345\x1b[0m"
+    def test_device_auth_values_extract_only_strict_url_and_code(self):
+        url = "\x1b[1;36mOpen https://auth.openai.com/codex/device?flow=1\x1b[0m diagnostic"
+        code = "\x1b[1mYour code is ABCD-12345\x1b[0m extra diagnostic"
         self.assertEqual(
-            codex_setup.device_auth_display_line(url),
-            "Open https://auth.openai.com/codex/device",
+            codex_setup.device_auth_values(url),
+            ["https://auth.openai.com/codex/device?flow=1"],
         )
-        self.assertEqual(codex_setup.device_auth_display_line(code), "Your code is ABCD-12345")
-        self.assertIsNone(codex_setup.device_auth_display_line("Waiting for approval..."))
+        self.assertEqual(codex_setup.device_auth_values(code), ["ABCD-12345"])
+        self.assertEqual(codex_setup.device_auth_values("Waiting for approval..."), [])
+        self.assertEqual(codex_setup.device_auth_values("https://auth.openai.com/codex/deviceevil"), [])
 
     def test_platform_assets_and_release_resolution(self):
         self.assertEqual(codex_setup.platform_target("x86_64"), "x86_64-unknown-linux-musl")
@@ -271,6 +272,26 @@ class CodexSetupEndpointTests(unittest.TestCase):
         return "".join(lines)
 
     @staticmethod
+    def _sse_until(response, predicate):
+        lines = []
+        while True:
+            line = response.readline().decode("utf-8")
+            if not line:
+                raise AssertionError("SSE stream ended before the expected event")
+            lines.append(line)
+            body = "".join(lines)
+            if predicate(body):
+                return body
+
+    @staticmethod
+    def _wait_for_path(path):
+        for _ in range(100):
+            if path.exists():
+                return
+            time.sleep(0.01)
+        raise AssertionError(f"timed out waiting for {path}")
+
+    @staticmethod
     def _fake_codex(path, program):
         path.write_text("#!/bin/sh\n" + program, encoding="utf-8")
         path.chmod(0o755)
@@ -280,18 +301,78 @@ class CodexSetupEndpointTests(unittest.TestCase):
             root, home = Path(temp) / "cli", Path(temp) / "home"
             binary = root / "bin" / "codex"
             binary.parent.mkdir(parents=True)
-            self._fake_codex(binary, "printf '\\033[36mOpen https://auth.openai.com/codex/device\\033[0m\\n'\nprintf '\\033[1mEnter code ABCD-12345\\033[0m\\n'\nsleep 0.1\ntouch \"$CODEX_HOME/auth.json\"\nwhile :; do sleep 1; done\n")
+            self._fake_codex(binary, "printf '\\033[36mOpen https://auth.openai.com/codex/device?flow=1 diagnostic-only\\033]0;private-title\\007\\033[0m\\n'\nprintf '\\033[1mEnter code ABCD-12345 internal-detail\\033[0m\\n'\nwhile [ ! -e \"$CODEX_HOME/approve\" ]; do sleep 0.01; done\ntouch \"$CODEX_HOME/auth.json\"\nwhile :; do sleep 1; done\n")
             with mock.patch.dict(os.environ, {
                 "EHA_CODEX_INSTALL_ROOT": str(root), "EHA_CODEX_HOME": str(home),
             }, clear=False):
                 def assertion(base_url):
                     with self._post(f"{base_url}/api/setup/codex/login") as response:
-                        body = self._sse_body(response)
+                        body = self._sse_until(
+                            response,
+                            lambda value: "https://auth.openai.com/codex/device?flow=1" in value
+                            and "ABCD-12345" in value,
+                        )
+                        (home / "approve").touch()
+                        body += self._sse_body(response)
                     self.assertIn("event: line", body)
-                    self.assertIn("https://auth.openai.com/codex/device", body)
+                    self.assertIn("https://auth.openai.com/codex/device?flow=1", body)
                     self.assertIn("ABCD-12345", body)
+                    self.assertNotIn("diagnostic-only", body)
+                    self.assertNotIn("internal-detail", body)
+                    self.assertNotIn("private-title", body)
                     self.assertIn('event: done\ndata: {"authenticated": true}', body)
                 self._with_server(codex_setup, assertion)
+
+    def test_codex_login_reader_error_streams_error_and_reaps_child(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root, home = Path(temp) / "cli", Path(temp) / "home"
+            binary = root / "bin" / "codex"
+            terminated = Path(temp) / "terminated"
+            binary.parent.mkdir(parents=True)
+            self._fake_codex(binary, f"trap 'touch {terminated}; exit 0' TERM\necho line\nwhile :; do sleep 1; done\n")
+            with mock.patch.dict(os.environ, {
+                "EHA_CODEX_INSTALL_ROOT": str(root), "EHA_CODEX_HOME": str(home),
+            }, clear=False), mock.patch.object(
+                codex_setup, "device_auth_values", side_effect=ValueError("decode broke")
+            ):
+                def assertion(base_url):
+                    with self._post(f"{base_url}/api/setup/codex/login") as response:
+                        body = self._sse_body(response)
+                    self.assertIn("event: error", body)
+                    self.assertIn("output reader failed: decode broke", body)
+                self._with_server(codex_setup, assertion)
+            self._wait_for_path(terminated)
+
+    def test_codex_login_full_queue_disconnect_stops_reader(self):
+        class DisconnectingWriter:
+            def write(self, _data):
+                # Let the child fill the bounded queue before simulating a
+                # client disconnect while the main loop is writing an SSE line.
+                time.sleep(0.1)
+                raise BrokenPipeError("client disconnected")
+
+            def flush(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temp:
+            root, home = Path(temp) / "cli", Path(temp) / "home"
+            binary = root / "bin" / "codex"
+            terminated = Path(temp) / "terminated"
+            binary.parent.mkdir(parents=True)
+            self._fake_codex(binary, f"trap 'touch {terminated}; exit 0' TERM\ni=0\nwhile [ $i -lt 500 ]; do printf 'ABCD-%05d\\n' $i; i=$((i + 1)); done\nwhile :; do sleep 1; done\n")
+            handler = object.__new__(server.Handler)
+            handler.send_response = lambda *_args: None
+            handler.send_header = lambda *_args: None
+            handler.end_headers = lambda: None
+            handler.wfile = DisconnectingWriter()
+            with mock.patch.dict(os.environ, {
+                "EHA_CODEX_INSTALL_ROOT": str(root), "EHA_CODEX_HOME": str(home),
+            }, clear=False):
+                handler._serve_setup_codex_login()
+            self.assertFalse(server._CODEX_INSTALL_LOCK.locked())
+            self._wait_for_path(terminated)
+            self.assertFalse(any(thread.name == "codex-login-reader" and thread.is_alive()
+                                 for thread in threading.enumerate()))
 
     def test_codex_login_done_when_process_exits_after_writing_auth(self):
         # 実挙動(実ブラウザ承認E2E 2026-07-18): 承認成功時、codexはauth.jsonを

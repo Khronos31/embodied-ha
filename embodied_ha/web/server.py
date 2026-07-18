@@ -380,6 +380,7 @@ _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
 _CODEX_INSTALL_LOCK = threading.Lock()
 _CODEX_LOGIN_TIMEOUT = 16 * 60
 _CODEX_LOGIN_POLL_INTERVAL = 1
+_CODEX_LOGIN_QUEUE_PUT_TIMEOUT = 0.1
 _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 
 
@@ -1206,6 +1207,9 @@ class Handler(BaseHTTPRequestHandler):
         error = None
         lines: queue.Queue = queue.Queue(maxsize=200)
         reader_done = threading.Event()
+        reader_stop = threading.Event()
+        reader_error = threading.Event()
+        reader_error_text = []
         try:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -1227,23 +1231,45 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     assert proc is not None and proc.stdout is not None
                     for raw_line in proc.stdout:
-                        display_line = codex_setup.device_auth_display_line(raw_line)
-                        if display_line:
-                            lines.put(display_line)
+                        for value in codex_setup.device_auth_values(raw_line):
+                            while not reader_stop.is_set():
+                                try:
+                                    lines.put(("line", value), timeout=_CODEX_LOGIN_QUEUE_PUT_TIMEOUT)
+                                    break
+                                except queue.Full:
+                                    pass
+                except Exception as exc:
+                    # The main loop owns process cleanup and SSE output.  Do not
+                    # let reader failures turn into a full login-timeout wait.
+                    reader_error_text.append(f"Codex login output reader failed: {exc}")
+                    reader_error.set()
+                    while not reader_stop.is_set():
+                        try:
+                            lines.put(("error", reader_error_text[0]),
+                                      timeout=_CODEX_LOGIN_QUEUE_PUT_TIMEOUT)
+                            break
+                        except queue.Full:
+                            pass
                 finally:
                     reader_done.set()
 
-            reader = threading.Thread(target=read_stdout, daemon=True)
+            reader = threading.Thread(target=read_stdout, name="codex-login-reader", daemon=True)
             reader.start()
             deadline = time.monotonic() + _CODEX_LOGIN_TIMEOUT
             while True:
+                if reader_error.is_set():
+                    raise RuntimeError(reader_error_text[0])
                 if codex_setup.is_authenticated():
                     self.wfile.write(b'event: done\ndata: {"authenticated": true}\n\n')
                     self.wfile.flush()
                     return
                 try:
-                    line = lines.get(timeout=_CODEX_LOGIN_POLL_INTERVAL)
-                    msg = f"event: line\ndata: {json.dumps({'text': line}, ensure_ascii=False)}\n\n"
+                    event, value = lines.get(timeout=_CODEX_LOGIN_POLL_INTERVAL)
+                    if reader_error.is_set():
+                        raise RuntimeError(reader_error_text[0])
+                    if event == "error":
+                        raise RuntimeError(value)
+                    msg = f"event: line\ndata: {json.dumps({'text': value}, ensure_ascii=False)}\n\n"
                     self.wfile.write(msg.encode())
                     self.wfile.flush()
                 except queue.Empty:
@@ -1251,8 +1277,6 @@ class Handler(BaseHTTPRequestHandler):
                     # 子プロセスとmutation lockがタイムアウトまで残る(実E2Eで確認)
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Codex device authentication timed out")
                 if proc.poll() is not None and reader_done.is_set() and lines.empty():
                     # 承認成功時、codexはauth.jsonを書いて自ら即終了する(status 0、
                     # 実ブラウザ承認E2Eで確認)。死亡判定の前に認証完了を再確認しないと
@@ -1262,9 +1286,13 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.flush()
                         return
                     raise RuntimeError(f"Codex login exited before authentication completed (status {proc.returncode})")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Codex device authentication timed out")
         except Exception as e:
             error = str(e)
         finally:
+            # Wake a reader blocked on a full queue before waiting for it.
+            reader_stop.set()
             if proc is not None and proc.poll() is None:
                 proc.terminate()
                 try:
@@ -1273,7 +1301,7 @@ class Handler(BaseHTTPRequestHandler):
                     proc.kill()
                     proc.wait()
             if reader is not None:
-                reader.join(timeout=1)
+                reader.join()
             if proc is not None and proc.stdout is not None:
                 proc.stdout.close()
             _CODEX_INSTALL_LOCK.release()

@@ -24,7 +24,10 @@ MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|[0-9])")
-_DEVICE_AUTH_URL_RE = re.compile(r"https://auth\.openai\.com/codex/device(?:\?[^\s]*)?")
+_DEVICE_AUTH_URL_RE = re.compile(
+    r"https://auth\.openai\.com/codex/device"
+    r"(?:\?[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]*)?(?=$|\s)"
+)
 _DEVICE_AUTH_CODE_RE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{5}\b")
 
 
@@ -74,12 +77,16 @@ def subprocess_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def device_auth_display_line(line: str) -> str | None:
-    """Return a safe, displayable device-auth line, or ``None`` if irrelevant."""
-    clean = _ANSI_ESCAPE_RE.sub("", line).replace("\r", "").strip()
-    if _DEVICE_AUTH_URL_RE.search(clean) or _DEVICE_AUTH_CODE_RE.search(clean):
-        return clean
-    return None
+def device_auth_values(line: str) -> list[str]:
+    """Extract only device-auth URL and code values safe to send to the browser.
+
+    Do not forward the CLI line itself: future versions could add diagnostics or
+    terminal control sequences alongside the device-auth details.
+    """
+    clean = _ANSI_ESCAPE_RE.sub("", line).replace("\r", "")
+    return [match.group(0) for match in _DEVICE_AUTH_URL_RE.finditer(clean)] + [
+        match.group(0) for match in _DEVICE_AUTH_CODE_RE.finditer(clean)
+    ]
 
 
 def platform_target(machine: str | None = None) -> str:
