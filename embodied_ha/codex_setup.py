@@ -16,6 +16,11 @@ RELEASES_URL = "https://api.github.com/repos/openai/codex/releases"
 INSTALL_ROOT_ENV = "EHA_CODEX_INSTALL_ROOT"
 HOME_ENV = "EHA_CODEX_HOME"
 MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
+# The current Codex package has roughly 11 members and expands to about 50 MiB.
+# Keep ample room for normal growth while bounding decompression resource use.
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
 
 
 def install_root() -> str:
@@ -146,12 +151,21 @@ def verify_sha256(data: bytes, expected: str) -> None:
 def _safe_extract(archive: bytes, destination: str) -> None:
     """Extract a tar archive without links or paths outside destination."""
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        if len(members) > MAX_ARCHIVE_MEMBERS:
+            raise RuntimeError("Codex archive exceeds the member count limit")
+        total_size = 0
+        for member in members:
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk():
                 raise RuntimeError(f"Unsafe path in Codex archive: {member.name}")
             if not (member.isdir() or member.isfile()):
                 raise RuntimeError(f"Unsupported entry in Codex archive: {member.name}")
+            if member.size > MAX_ARCHIVE_MEMBER_BYTES:
+                raise RuntimeError(f"Codex archive member exceeds the size limit: {member.name}")
+            total_size += member.size
+            if total_size > MAX_ARCHIVE_TOTAL_BYTES:
+                raise RuntimeError("Codex archive exceeds the total extracted size limit")
         tar.extractall(destination, filter="data")
 
 
@@ -175,17 +189,27 @@ def _replace_install_root(staged_root: str, root: str) -> None:
     backup = tempfile.mkdtemp(prefix=".codex-backup-", dir=parent)
     os.rmdir(backup)
     moved_old = False
+    installed = False
+    restored = False
     try:
         if os.path.lexists(root):
             os.replace(root, backup)
             moved_old = True
         os.replace(staged_root, root)
-    except Exception:
+        installed = True
+    except Exception as exc:
         if moved_old and not os.path.lexists(root):
-            os.replace(backup, root)
+            try:
+                os.replace(backup, root)
+                restored = True
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    "Codex installation failed and the previous installation could not be restored; "
+                    f"backup remains at {backup}: {restore_exc}"
+                ) from exc
         raise
     finally:
-        if os.path.exists(backup):
+        if (installed or restored) and os.path.exists(backup):
             if os.path.isdir(backup) and not os.path.islink(backup):
                 shutil.rmtree(backup)
             else:

@@ -6,7 +6,9 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -32,6 +34,31 @@ def archive_bytes(members: dict[str, bytes]) -> bytes:
             info.mode = 0o755 if name.endswith("/bin/codex") else 0o644
             tar.addfile(info, io.BytesIO(data))
     return out.getvalue()
+
+
+def linked_archive_bytes(kind: bytes) -> bytes:
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz") as tar:
+        info = tarfile.TarInfo("link")
+        info.type = kind
+        info.linkname = "target"
+        tar.addfile(info)
+    return out.getvalue()
+
+
+class FakeUrlResponse:
+    def __init__(self, data: bytes, content_length: str | None = None):
+        self.data = data
+        self.headers = {} if content_length is None else {"Content-Length": content_length}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _size=-1):
+        return self.data
 
 
 class CodexSetupTests(unittest.TestCase):
@@ -61,6 +88,56 @@ class CodexSetupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Unsafe path"):
                 codex_setup._safe_extract(malicious, temp)
             self.assertFalse((Path(temp).parent / "outside").exists())
+
+    def test_tar_limits_reject_member_and_total_size(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(codex_setup, "MAX_ARCHIVE_MEMBER_BYTES", 4):
+            with self.assertRaisesRegex(RuntimeError, "member exceeds"):
+                codex_setup._safe_extract(archive_bytes({"large": b"12345"}), temp)
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(codex_setup, "MAX_ARCHIVE_TOTAL_BYTES", 5):
+            with self.assertRaisesRegex(RuntimeError, "total extracted"):
+                codex_setup._safe_extract(archive_bytes({"one": b"123", "two": b"456"}), temp)
+
+    def test_tar_member_count_and_links_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.object(codex_setup, "MAX_ARCHIVE_MEMBERS", 1):
+            with self.assertRaisesRegex(RuntimeError, "member count"):
+                codex_setup._safe_extract(archive_bytes({"one": b"", "two": b""}), temp)
+        for link_type in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+            with tempfile.TemporaryDirectory() as temp:
+                with self.assertRaisesRegex(RuntimeError, "Unsafe path"):
+                    codex_setup._safe_extract(linked_archive_bytes(link_type), temp)
+
+    def test_read_url_enforces_advertised_and_actual_sizes(self):
+        with mock.patch.object(codex_setup, "MAX_DOWNLOAD_BYTES", 4), \
+             mock.patch.object(codex_setup, "urlopen", return_value=FakeUrlResponse(b"ok", "5")):
+            with self.assertRaisesRegex(RuntimeError, "size limit"):
+                codex_setup._read_url("https://example.invalid")
+        with mock.patch.object(codex_setup, "MAX_DOWNLOAD_BYTES", 4), \
+             mock.patch.object(codex_setup, "urlopen", return_value=FakeUrlResponse(b"12345")):
+            with self.assertRaisesRegex(RuntimeError, "size limit"):
+                codex_setup._read_url("https://example.invalid")
+
+    def test_replace_install_root_preserves_backup_when_restore_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "codex-cli"
+            root.mkdir()
+            staged = Path(temp) / "staged"
+            staged.mkdir()
+            original_replace = os.replace
+
+            def fail_new_install(source, destination):
+                if source == str(staged) or destination == str(root):
+                    raise OSError("replace failed")
+                return original_replace(source, destination)
+
+            with mock.patch.object(codex_setup.os, "replace", side_effect=fail_new_install):
+                with self.assertRaisesRegex(RuntimeError, "backup remains at") as raised:
+                    codex_setup._replace_install_root(str(staged), str(root))
+            backup = Path(str(raised.exception).split("backup remains at ", 1)[1].split(": ", 1)[0])
+            self.assertTrue(backup.is_dir())
+            self.assertFalse(root.exists())
 
     def test_install_is_atomic_when_staging_fails(self):
         target = "x86_64-unknown-linux-musl"
@@ -147,6 +224,29 @@ class CodexSetupTests(unittest.TestCase):
 
 
 class CodexSetupEndpointTests(unittest.TestCase):
+    def _with_server(self, fake, assertion, expect_lock_released=True):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        with mock.patch.object(server, "codex_setup", fake):
+            thread.start()
+            try:
+                assertion(f"http://127.0.0.1:{httpd.server_address[1]}")
+                if expect_lock_released:
+                    for _ in range(50):
+                        if not server._CODEX_INSTALL_LOCK.locked():
+                            break
+                        time.sleep(0.01)
+                    self.assertFalse(server._CODEX_INSTALL_LOCK.locked())
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=5)
+                httpd.server_close()
+
+    @staticmethod
+    def _post(url):
+        request = urllib.request.Request(url, data=b"", method="POST")
+        return urllib.request.urlopen(request, timeout=5)
+
     def test_install_post_dispatches_sse(self):
         fake = SimpleNamespace(
             install=lambda progress: (progress("downloaded") or {"checksum_verified": True}),
@@ -154,22 +254,77 @@ class CodexSetupEndpointTests(unittest.TestCase):
             uninstall=lambda: {"removed_files": []},
             clear_auth=lambda: {"removed_files": []},
         )
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        with mock.patch.object(server, "codex_setup", fake):
-            thread.start()
-            try:
-                url = f"http://127.0.0.1:{httpd.server_address[1]}/api/setup/codex/install"
-                request = urllib.request.Request(url, data=b"", method="POST")
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    body = "".join(response.readline().decode("utf-8") for _ in range(6))
-                self.assertIn("event: line", body)
-                self.assertIn("event: done", body)
-                self.assertIn("checksum_verified", body)
-            finally:
-                httpd.shutdown()
-                thread.join(timeout=5)
-                httpd.server_close()
+        def assertion(base_url):
+            with self._post(f"{base_url}/api/setup/codex/install") as response:
+                body = "".join(response.readline().decode("utf-8") for _ in range(6))
+            self.assertIn("event: line", body)
+            self.assertIn("event: done", body)
+            self.assertIn("checksum_verified", body)
+
+        self._with_server(fake, assertion)
+
+    def test_uninstall_and_clear_auth_dispatch(self):
+        fake = SimpleNamespace(
+            uninstall=lambda: {"removed_files": ["install"]},
+            clear_auth=lambda: {"removed_files": ["auth"]},
+        )
+
+        def assertion(base_url):
+            with self._post(f"{base_url}/api/setup/codex/uninstall") as response:
+                self.assertEqual(json.loads(response.read()), {"ok": True, "removed_files": ["install"]})
+            with self._post(f"{base_url}/api/setup/codex/clear-auth") as response:
+                self.assertEqual(json.loads(response.read()), {"ok": True, "removed_files": ["auth"]})
+
+        self._with_server(fake, assertion)
+
+    def test_mutations_return_409_while_install_is_running(self):
+        fake = SimpleNamespace(uninstall=lambda: {}, clear_auth=lambda: {})
+
+        def assertion(base_url):
+            for endpoint in ("uninstall", "clear-auth"):
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    self._post(f"{base_url}/api/setup/codex/{endpoint}")
+                self.assertEqual(raised.exception.code, 409)
+                self.assertEqual(json.loads(raised.exception.read()), {"error": "Codex install is running"})
+
+        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        try:
+            self._with_server(fake, assertion, expect_lock_released=False)
+        finally:
+            server._CODEX_INSTALL_LOCK.release()
+
+    def test_second_install_returns_sse_error(self):
+        fake = SimpleNamespace()
+
+        def assertion(base_url):
+            with self._post(f"{base_url}/api/setup/codex/install") as response:
+                body = "".join(response.readline().decode("utf-8") for _ in range(2))
+            self.assertIn("event: error", body)
+            self.assertIn("already running", body)
+
+        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        try:
+            self._with_server(fake, assertion, expect_lock_released=False)
+        finally:
+            server._CODEX_INSTALL_LOCK.release()
+
+    def test_install_failure_is_sent_as_sse_error(self):
+        fake = SimpleNamespace(install=mock.Mock(side_effect=RuntimeError("download failed")))
+
+        def assertion(base_url):
+            with self._post(f"{base_url}/api/setup/codex/install") as response:
+                body = "".join(response.readline().decode("utf-8") for _ in range(2))
+            self.assertIn("event: error", body)
+            self.assertIn("download failed", body)
+
+        self._with_server(fake, assertion)
+
+    def test_install_releases_lock_when_sse_headers_fail(self):
+        handler = object.__new__(server.Handler)
+        with mock.patch.object(handler, "send_response", side_effect=BrokenPipeError):
+            handler._serve_setup_codex_install()
+        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        server._CODEX_INSTALL_LOCK.release()
 
 
 if __name__ == "__main__":

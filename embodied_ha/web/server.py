@@ -1138,26 +1138,28 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
 
-        q: queue.Queue = queue.Queue(maxsize=200)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-
-        def run_install():
-            try:
-                if codex_setup is None:
-                    raise RuntimeError("Codex helpers unavailable")
-                result = codex_setup.install(progress=lambda text: q.put(("line", text)))
-                q.put(("done", result))
-            except Exception as e:
-                q.put(("error", str(e)))
-            finally:
-                _CODEX_INSTALL_LOCK.release()
-
-        threading.Thread(target=run_install, daemon=True).start()
+        worker_owns_lock = False
         try:
+            q: queue.Queue = queue.Queue(maxsize=200)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def run_install():
+                try:
+                    if codex_setup is None:
+                        raise RuntimeError("Codex helpers unavailable")
+                    result = codex_setup.install(progress=lambda text: q.put(("line", text)))
+                    q.put(("done", result))
+                except Exception as e:
+                    q.put(("error", str(e)))
+                finally:
+                    _CODEX_INSTALL_LOCK.release()
+
+            threading.Thread(target=run_install, daemon=True).start()
+            worker_owns_lock = True
             while True:
                 try:
                     etype, data = q.get(timeout=2)
@@ -1176,6 +1178,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except Exception:
             pass
+        finally:
+            if not worker_owns_lock:
+                _CODEX_INSTALL_LOCK.release()
 
     def _serve_setup_antigravity_login(self):
         """Antigravity auth login を PTY で起動し、URL と完了状態だけを SSE 配信する。"""
@@ -1711,6 +1716,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/codex/install":
             self._serve_setup_codex_install()
         elif path == "/api/setup/codex/uninstall":
+            if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Codex install is running"}, 409)
+                return
             try:
                 if codex_setup is None:
                     self.send_json({"error": "Codex helpers unavailable"}, 500)
@@ -1719,7 +1727,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _CODEX_INSTALL_LOCK.release()
         elif path == "/api/setup/codex/clear-auth":
+            if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Codex install is running"}, 409)
+                return
             try:
                 if codex_setup is None:
                     self.send_json({"error": "Codex helpers unavailable"}, 500)
@@ -1728,6 +1741,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _CODEX_INSTALL_LOCK.release()
         elif path == "/api/send":
             length = int(self.headers.get("Content-Length", 0))
             try:
