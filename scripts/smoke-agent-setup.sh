@@ -5,6 +5,8 @@
 #
 # This verifies: Codex DIY install/version, device-auth SSE URL+code emission
 # and disconnect cleanup, plus the old/new setup and Claude status shapes.
+# The temporary EHA_CODEX_INSTALL_ROOT below tests the downloader only; it
+# cannot emulate the add-on boot path /data/codex-cli used by invoke-agent.sh.
 # It deliberately does not approve the browser login. To complete it manually,
 # open the displayed URL, enter the displayed code, then wait for SSE "done".
 set -euo pipefail
@@ -38,6 +40,16 @@ mkdir -p "$EHA_CODEX_HOME" "$EHA_DATA_DIR" "$EHA_LOG_DIR" \
 echo '[smoke] install Codex via the DIY release downloader'
 PYTHONPATH="$APP_DIR" python3 -c 'import codex_setup; codex_setup.install(progress=print)'
 "$EHA_CODEX_INSTALL_ROOT/bin/codex" --version
+
+# Boot-env resolution: leave EHA_CODEX_BIN/CODEX_BIN unset.  The runtime
+# fallback itself is observable only when the fixed add-on path exists; this
+# isolated smoke intentionally does not create or modify /data/codex-cli.
+unset EHA_CODEX_BIN CODEX_BIN
+if [ -x /data/codex-cli/bin/codex ]; then
+    echo '[smoke] boot-env known-path fallback is available: /data/codex-cli/bin/codex'
+else
+    echo '[smoke] boot-env known-path fallback skipped: /data/codex-cli/bin/codex is absent (temporary install root only tests downloader)'
+fi
 
 PORT="$(python3 -c 'import socket; sock=socket.socket(); sock.bind(("127.0.0.1", 0)); print(sock.getsockname()[1]); sock.close()')"
 export INGRESS_PORT="$PORT"
@@ -75,5 +87,17 @@ done
 if kill -0 "$CODEX_PID" 2>/dev/null; then
     echo "[smoke] device-auth child still running: $CODEX_PID" >&2
     exit 1
+fi
+
+# Optional boot-env round trip. First approve device auth through the setup UI;
+# that creates /data/codex-home/auth.json. Browser approval is intentionally
+# not automated by this smoke. This step neither runs nor exposes credentials
+# unless both the real boot path and its auth file already exist.
+if [ -x /data/codex-cli/bin/codex ] && [ -f /data/codex-home/auth.json ]; then
+    echo '[smoke] authenticated boot-env invoke-agent.sh Codex prompt round trip'
+    EHA_AGENT_HARNESS=codex CODEX_HOME=/data/codex-home "$APP_DIR/invoke-agent.sh" --model lite \
+        'Reply with exactly: EHA smoke OK' | grep -Fx 'EHA smoke OK'
+else
+    echo '[smoke] authenticated boot-env round trip skipped: install to /data and approve device auth in a browser first'
 fi
 echo '[smoke] OK'

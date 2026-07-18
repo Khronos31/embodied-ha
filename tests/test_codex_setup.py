@@ -448,13 +448,13 @@ class CodexSetupEndpointTests(unittest.TestCase):
             with self._post(f"{base_url}/api/setup/codex/login") as response:
                 body = self._sse_body(response)
             self.assertIn("event: error", body)
-            self.assertIn("busy", body)
+            self.assertIn("Codex install is running", body)
 
-        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        self.assertTrue(server._acquire_codex_mutation("install"))
         try:
             self._with_server(SimpleNamespace(), assertion, expect_lock_released=False)
         finally:
-            server._CODEX_INSTALL_LOCK.release()
+            server._release_codex_mutation()
 
     def test_codex_login_timeout_and_exit_release_lock(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -541,11 +541,11 @@ class CodexSetupEndpointTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 409)
                 self.assertEqual(json.loads(raised.exception.read()), {"error": "Codex install is running"})
 
-        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        self.assertTrue(server._acquire_codex_mutation("install"))
         try:
             self._with_server(fake, assertion, expect_lock_released=False)
         finally:
-            server._CODEX_INSTALL_LOCK.release()
+            server._release_codex_mutation()
 
     def test_second_install_returns_sse_error(self):
         fake = SimpleNamespace()
@@ -554,13 +554,13 @@ class CodexSetupEndpointTests(unittest.TestCase):
             with self._post(f"{base_url}/api/setup/codex/install") as response:
                 body = "".join(response.readline().decode("utf-8") for _ in range(2))
             self.assertIn("event: error", body)
-            self.assertIn("already running", body)
+            self.assertIn("Codex install is running", body)
 
-        self.assertTrue(server._CODEX_INSTALL_LOCK.acquire(blocking=False))
+        self.assertTrue(server._acquire_codex_mutation("install"))
         try:
             self._with_server(fake, assertion, expect_lock_released=False)
         finally:
-            server._CODEX_INSTALL_LOCK.release()
+            server._release_codex_mutation()
 
     def test_install_failure_is_sent_as_sse_error(self):
         fake = SimpleNamespace(install=mock.Mock(side_effect=RuntimeError("download failed")))

@@ -484,7 +484,14 @@ run_codex() {
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
   [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
-  local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-codex}}"
+  local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-}}"
+  if [[ -z "$bin" ]]; then
+    if [[ -x /data/codex-cli/bin/codex ]]; then
+      bin="/data/codex-cli/bin/codex"
+    else
+      bin="codex"
+    fi
+  fi
   local cwd="${EHA_AGENT_CWD:-${EHA_CODEX_CWD:-$PWD}}"
   local full_prompt="$prompt"
   local profile_name=""

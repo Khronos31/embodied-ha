@@ -379,7 +379,10 @@ _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
+_CLAUDE_MUTATION_LOCK = threading.Lock()
 _CODEX_INSTALL_LOCK = threading.Lock()
+_CODEX_ACTIVE_OPERATION: list = [None]  # [str | None]
+_CODEX_ACTIVE_OPERATION_LOCK = threading.Lock()
 _CODEX_LOGIN_TIMEOUT = 16 * 60
 _CODEX_LOGIN_POLL_INTERVAL = 1
 _CODEX_LOGIN_QUEUE_PUT_TIMEOUT = 0.1
@@ -403,13 +406,66 @@ _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress
 def setup_guard(client_address) -> bool:
     """Return whether a setup mutation is allowed for this peer address.
 
-    Supervisor ingress connects from outside the add-on container. The emergency
-    override is deliberately read for every request so an add-on restart with
-    EHA_SETUP_GUARD=off can recover if that deployment assumption is wrong.
+    172.30.32.2 is the fixed ingress-proxy source documented by Home Assistant.
+    Verify it on the deployed appliance; if that assumption changes, recover
+    with EHA_INGRESS_SOURCE (one or more comma-separated sources) or the
+    EHA_SETUP_GUARD=off emergency override.  The override is deliberately read
+    for every request so an add-on restart can recover from a bad deployment
+    assumption.
     """
     if os.environ.get("EHA_SETUP_GUARD", "").lower() == "off":
         return True
-    return client_address[0] not in {"127.0.0.1", "::1"}
+    sources = {
+        source.strip()
+        for source in os.environ.get("EHA_INGRESS_SOURCE", "172.30.32.2").split(",")
+        if source.strip()
+    }
+    return client_address[0] in sources
+
+
+def _codex_active_operation() -> str | None:
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        return _CODEX_ACTIVE_OPERATION[0]
+
+
+def _acquire_codex_mutation(operation: str) -> bool:
+    """Acquire Codex's shared mutation lock and record its actual operation.
+
+    取得と操作名設定を同一クリティカルセクションで行う——分離すると
+    「lock取得済み・操作名未設定」の瞬間にbusyメッセージが実操作名を
+    含められない競合窓ができる(sol再レビュー指摘)。解放側も同様。
+    """
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+            return False
+        _CODEX_ACTIVE_OPERATION[0] = operation
+        return True
+
+
+def _release_codex_mutation() -> None:
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        _CODEX_ACTIVE_OPERATION[0] = None
+        _CODEX_INSTALL_LOCK.release()
+
+
+def _codex_busy_error() -> str:
+    operation = _codex_active_operation()
+    return f"Codex {operation or 'setup'} is running"
+
+
+def _acquire_antigravity_destructive_locks() -> bool:
+    """Exclude uninstall/clear-auth from both active Antigravity sessions."""
+    if not _ANTIGRAVITY_INSTALL_LOCK.acquire(blocking=False):
+        return False
+    if _ANTIGRAVITY_LOGIN_SESSION_LOCK.acquire(blocking=False):
+        return True
+    _ANTIGRAVITY_INSTALL_LOCK.release()
+    return False
+
+
+def _release_antigravity_destructive_locks() -> None:
+    _ANTIGRAVITY_LOGIN_SESSION_LOCK.release()
+    _ANTIGRAVITY_INSTALL_LOCK.release()
 
 
 def is_authenticated() -> bool:
@@ -442,13 +498,16 @@ def codex_status() -> dict:
             "installed": False,
             "authenticated": False,
             "installing": False,
+            "active_operation": None,
             "install_root": os.environ.get("EHA_CODEX_INSTALL_ROOT", "/data/codex-cli"),
             "home_dir": os.environ.get("EHA_CODEX_HOME", "/data/codex-home"),
             "binary_path": "",
             "auth_path": "",
         }
     state = codex_setup.state()
-    state["installing"] = _CODEX_INSTALL_LOCK.locked()
+    operation = _codex_active_operation()
+    state["installing"] = operation == "install"
+    state["active_operation"] = operation
     return state
 
 
@@ -956,13 +1015,21 @@ class Handler(BaseHTTPRequestHandler):
         URL 表示後はユーザーが取得したコードを POST /api/setup/login-code で送り返す。"""
         import subprocess as _sp, pty, select, re as _re
 
-        q: queue.Queue = queue.Queue(maxsize=200)
+        if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b'event: error\ndata: {"error": "Claude login is busy"}\n\n')
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
+        q: queue.Queue = queue.Queue(maxsize=200)
+        worker_owns_lock = False
 
         def run_login():
             master_fd = None
@@ -1032,10 +1099,18 @@ class Handler(BaseHTTPRequestHandler):
                 if master_fd is not None:
                     try: os.close(master_fd)
                     except OSError: pass
-
-        threading.Thread(target=run_login, daemon=True).start()
+                _CLAUDE_MUTATION_LOCK.release()
 
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            threading.Thread(target=run_login, daemon=True).start()
+            # From here the worker owns the lock until its finally block.  This
+            # prevents a second login from overwriting the shared PTY FD.
+            worker_owns_lock = True
             while True:
                 try:
                     etype, data = q.get(timeout=2)
@@ -1054,6 +1129,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except Exception:
             pass
+        finally:
+            if not worker_owns_lock:
+                _CLAUDE_MUTATION_LOCK.release()
 
     def _serve_setup_antigravity_install(self):
         """Antigravity CLI を公式 install.sh からオンデマンド導入し、進捗を SSE 配信する。"""
@@ -1152,13 +1230,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_setup_codex_install(self):
         """Codex CLI を GitHub Releases から導入し、進捗を SSE 配信する。"""
-        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+        if not _acquire_codex_mutation("install"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
-            msg = f"event: error\ndata: {json.dumps({'error': 'Codex install is already running'}, ensure_ascii=False)}\n\n"
+            msg = f"event: error\ndata: {json.dumps({'error': _codex_busy_error()}, ensure_ascii=False)}\n\n"
             try:
                 self.wfile.write(msg.encode())
                 self.wfile.flush()
@@ -1184,7 +1262,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     q.put(("error", str(e)))
                 finally:
-                    _CODEX_INSTALL_LOCK.release()
+                    _release_codex_mutation()
 
             threading.Thread(target=run_install, daemon=True).start()
             worker_owns_lock = True
@@ -1208,20 +1286,21 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             if not worker_owns_lock:
-                _CODEX_INSTALL_LOCK.release()
+                _release_codex_mutation()
 
     def _serve_setup_codex_login(self):
         """Start Codex device auth and stream its URL/code without using a PTY."""
         import subprocess as _sp
 
-        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+        if not _acquire_codex_mutation("login"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
             try:
-                self.wfile.write(b'event: error\ndata: {"error": "Codex setup is busy"}\n\n')
+                msg = f"event: error\ndata: {json.dumps({'error': _codex_busy_error()})}\n\n"
+                self.wfile.write(msg.encode())
                 self.wfile.flush()
             except Exception:
                 pass
@@ -1329,7 +1408,7 @@ class Handler(BaseHTTPRequestHandler):
                 reader.join()
             if proc is not None and proc.stdout is not None:
                 proc.stdout.close()
-            _CODEX_INSTALL_LOCK.release()
+            _release_codex_mutation()
         if error is not None:
             try:
                 msg = f"event: error\ndata: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
@@ -1851,6 +1930,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/claude/clear-auth":
+            if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Claude login is busy"}, 409)
+                return
             try:
                 result = claude_setup.clear_auth()
                 if result.get("errors"):
@@ -1860,6 +1942,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _CLAUDE_MUTATION_LOCK.release()
         elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -1870,6 +1954,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/uninstall":
+            if not _acquire_antigravity_destructive_locks():
+                self.send_json({"error": "Antigravity setup is busy"}, 409)
+                return
             try:
                 if antigravity_setup is None:
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
@@ -1878,7 +1965,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_antigravity_destructive_locks()
         elif path == "/api/setup/antigravity/clear-auth":
+            if not _acquire_antigravity_destructive_locks():
+                self.send_json({"error": "Antigravity setup is busy"}, 409)
+                return
             try:
                 if antigravity_setup is None:
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
@@ -1887,13 +1979,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_antigravity_destructive_locks()
         elif path == "/api/setup/codex/install":
             self._serve_setup_codex_install()
         elif path == "/api/setup/codex/login":
             self._serve_setup_codex_login()
         elif path == "/api/setup/codex/uninstall":
-            if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
-                self.send_json({"error": "Codex install is running"}, 409)
+            if not _acquire_codex_mutation("uninstall"):
+                self.send_json({"error": _codex_busy_error()}, 409)
                 return
             try:
                 if codex_setup is None:
@@ -1904,10 +1998,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             finally:
-                _CODEX_INSTALL_LOCK.release()
+                _release_codex_mutation()
         elif path == "/api/setup/codex/clear-auth":
-            if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
-                self.send_json({"error": "Codex install is running"}, 409)
+            if not _acquire_codex_mutation("clear-auth"):
+                self.send_json({"error": _codex_busy_error()}, 409)
                 return
             try:
                 if codex_setup is None:
@@ -1918,7 +2012,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             finally:
-                _CODEX_INSTALL_LOCK.release()
+                _release_codex_mutation()
         elif path == "/api/send":
             length = int(self.headers.get("Content-Length", 0))
             try:

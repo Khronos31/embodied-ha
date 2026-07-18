@@ -19,6 +19,26 @@ import server  # noqa: E402
 
 
 class SetupGuardTests(unittest.TestCase):
+    # Deliberately independent from server._SETUP_MUTATION_PATHS: adding a
+    # dispatch route but forgetting the guard set must fail this test.
+    MUTATION_ROUTES = (
+        ("GET", "/api/setup/login"),
+        ("POST", "/api/setup/login-code"),
+        ("GET", "/api/setup/claude/login"),
+        ("POST", "/api/setup/claude/login-code"),
+        ("POST", "/api/setup/claude/clear-auth"),
+        ("GET", "/api/setup/antigravity/install"),
+        ("GET", "/api/setup/antigravity/login"),
+        ("POST", "/api/setup/antigravity/input"),
+        ("POST", "/api/setup/antigravity/login-code"),
+        ("POST", "/api/setup/antigravity/uninstall"),
+        ("POST", "/api/setup/antigravity/clear-auth"),
+        ("POST", "/api/setup/codex/install"),
+        ("POST", "/api/setup/codex/login"),
+        ("POST", "/api/setup/codex/uninstall"),
+        ("POST", "/api/setup/codex/clear-auth"),
+    )
+
     def setUp(self):
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -30,8 +50,7 @@ class SetupGuardTests(unittest.TestCase):
         self.thread.join()
         self.httpd.server_close()
 
-    def _request(self, path):
-        method = "GET" if path.endswith(("/install", "/login")) else "POST"
+    def _request(self, method, path):
         data = None if method == "GET" else b"{}"
         return urllib.request.urlopen(
             urllib.request.Request(self.base_url + path, data=data, method=method), timeout=3
@@ -39,15 +58,15 @@ class SetupGuardTests(unittest.TestCase):
 
     def test_loopback_rejects_every_setup_mutation_alias(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            for path in server._SETUP_MUTATION_PATHS:
-                with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as raised:
-                    self._request(path)
+            for method, path in self.MUTATION_ROUTES:
+                with self.subTest(method=method, path=path), self.assertRaises(urllib.error.HTTPError) as raised:
+                    self._request(method, path)
                 self.assertEqual(raised.exception.code, 403)
                 self.assertEqual(
                     json.loads(raised.exception.read()), {"error": server._SETUP_GUARD_ERROR}
                 )
 
-    def test_non_loopback_client_address_and_off_override_are_allowed(self):
+    def test_only_ingress_source_is_allowed_unless_overridden_or_disabled(self):
         handler = object.__new__(server.Handler)
         handler.send_json = mock.Mock()
 
@@ -56,9 +75,21 @@ class SetupGuardTests(unittest.TestCase):
             self.assertFalse(handler._block_loopback_setup_mutation("/api/setup/codex/uninstall"))
             self.assertTrue(server.setup_guard(handler.client_address))
 
+            handler.client_address = ("172.30.33.7", 12345)
+            self.assertTrue(handler._block_loopback_setup_mutation("/api/setup/codex/uninstall"))
+
             handler.client_address = ("127.0.0.1", 12345)
             self.assertTrue(handler._block_loopback_setup_mutation("/api/setup/codex/uninstall"))
-            handler.send_json.assert_called_once_with({"error": server._SETUP_GUARD_ERROR}, 403)
+            self.assertEqual(handler.send_json.call_count, 2)
+
+        handler.send_json.reset_mock()
+        with mock.patch.dict(os.environ, {"EHA_INGRESS_SOURCE": "10.0.0.1, 2001:db8::1"}, clear=True):
+            handler.client_address = ("10.0.0.1", 12345)
+            self.assertFalse(handler._block_loopback_setup_mutation("/api/setup/codex/uninstall"))
+            handler.client_address = ("2001:db8::1", 12345)
+            self.assertTrue(server.setup_guard(handler.client_address))
+            handler.client_address = ("172.30.32.2", 12345)
+            self.assertTrue(handler._block_loopback_setup_mutation("/api/setup/codex/uninstall"))
 
         handler.send_json.reset_mock()
         with mock.patch.dict(os.environ, {"EHA_SETUP_GUARD": "off"}, clear=True):
