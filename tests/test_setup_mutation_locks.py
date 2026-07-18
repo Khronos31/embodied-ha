@@ -69,21 +69,26 @@ class SetupMutationLockTests(unittest.TestCase):
                 finally:
                     lock.release()
 
+            # 応答返却とハンドラのfinally(ロック解放)は非同期。連続する成功
+            # リクエストの間でも解放前に次が始まると409で落ちるため、
+            # 各成功応答の後に毎回解放を待つ(solフレーク指摘の完全対応)
+            def wait_for_release():
+                for _ in range(100):
+                    if not (server._ANTIGRAVITY_INSTALL_LOCK.locked()
+                            or server._ANTIGRAVITY_LOGIN_SESSION_LOCK.locked()):
+                        return
+                    time.sleep(0.01)
+
             self.assertEqual(
                 self._post_json("/api/setup/antigravity/uninstall"),
                 {"ok": True, "removed_files": ["bin"]},
             )
+            wait_for_release()
             self.assertEqual(
                 self._post_json("/api/setup/antigravity/clear-auth"),
                 {"ok": True, "removed_files": ["auth"]},
             )
-        # 応答返却とハンドラのfinally(ロック解放)は非同期——解放を待ってから確認する
-        # (sol再レビューで9回目に再現したフレークの対策)
-        for _ in range(100):
-            if not (server._ANTIGRAVITY_INSTALL_LOCK.locked()
-                    or server._ANTIGRAVITY_LOGIN_SESSION_LOCK.locked()):
-                break
-            time.sleep(0.01)
+            wait_for_release()
         self.assertFalse(server._ANTIGRAVITY_INSTALL_LOCK.locked())
         self.assertFalse(server._ANTIGRAVITY_LOGIN_SESSION_LOCK.locked())
 
