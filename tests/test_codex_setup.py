@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -282,6 +283,15 @@ class CodexSetupEndpointTests(unittest.TestCase):
             os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False
         )
         self.setup_guard_env.start()
+        self.harness_flag_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.harness_flag_dir)
+        self.harness_flag_env = mock.patch.dict(
+            os.environ,
+            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            clear=False,
+        )
+        self.harness_flag_env.start()
+        self.addCleanup(self.harness_flag_env.stop)
 
     def tearDown(self):
         self.setup_guard_env.stop()

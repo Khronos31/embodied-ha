@@ -62,6 +62,14 @@ def binary_path() -> str:
     return os.path.join(bin_dir(), "claude")
 
 
+def resolve_claude_bin() -> str | None:
+    """Resolve the runnable Claude CLI: managed DIY binary, then PATH fallback."""
+    path = binary_path()
+    if os.path.isfile(path) and os.access(path, os.X_OK):
+        return path
+    return shutil.which("claude")
+
+
 def is_installed() -> bool:
     """Return whether the independently installed CLI is executable."""
     path = binary_path()

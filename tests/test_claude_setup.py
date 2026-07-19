@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -297,6 +298,15 @@ class ClaudeSetupEndpointTests(unittest.TestCase):
             os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False
         )
         self.setup_guard_env.start()
+        self.harness_flag_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.harness_flag_dir)
+        self.harness_flag_env = mock.patch.dict(
+            os.environ,
+            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            clear=False,
+        )
+        self.harness_flag_env.start()
+        self.addCleanup(self.harness_flag_env.stop)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()

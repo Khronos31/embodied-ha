@@ -24,6 +24,7 @@ except Exception:
 # 完了検知)が依存する。import失敗を握り潰すと既存機能が黙って未認証扱いに退行する
 # ため、必須importとして失敗時は起動時に大きく落とす(sol指摘 2026-07-18)。
 import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -94,6 +95,14 @@ def _set_install_status(key: str, status: str, message: str) -> None:
 def _get_install_status(key: str) -> dict:
     with _install_status_lock:
         return dict(_install_status.get(key, {"status": "idle", "message": ""}))
+
+
+def _record_selected_harness(harness: str) -> None:
+    """Persist a successful harness installation without failing its request."""
+    try:
+        harness_state.set_selected_harness(harness)
+    except Exception:
+        print(f"[web] failed to record selected harness: {harness}", flush=True)
 
 
 def _start_install_thread(key: str, target) -> bool:
@@ -1190,6 +1199,8 @@ class Handler(BaseHTTPRequestHandler):
                         q.put(("line", line))
                 if not stop_event.is_set():
                     rc = proc.wait()
+                    if rc == 0:
+                        _record_selected_harness("agy")
                     q.put(("done", rc))
             except Exception as e:
                 if not stop_event.is_set():
@@ -1259,6 +1270,7 @@ class Handler(BaseHTTPRequestHandler):
                     if codex_setup is None:
                         raise RuntimeError("Codex helpers unavailable")
                     result = codex_setup.install(progress=lambda text: q.put(("line", text)))
+                    _record_selected_harness("codex")
                     q.put(("done", result))
                 except Exception as e:
                     q.put(("error", str(e)))
@@ -1317,6 +1329,7 @@ class Handler(BaseHTTPRequestHandler):
             def run_install():
                 try:
                     result = claude_setup.install(progress=lambda text: q.put(("line", text)))
+                    _record_selected_harness("claude")
                     q.put(("done", result))
                 except Exception as e:
                     q.put(("error", str(e)))

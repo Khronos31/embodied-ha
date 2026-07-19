@@ -1,7 +1,9 @@
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -114,6 +116,17 @@ class SetupGuardTests(unittest.TestCase):
 
 
 class AntigravityInstallEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        self.harness_flag_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.harness_flag_dir)
+        self.harness_flag_env = mock.patch.dict(
+            os.environ,
+            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            clear=False,
+        )
+        self.harness_flag_env.start()
+        self.addCleanup(self.harness_flag_env.stop)
+
     def test_install_script_child_env_excludes_secrets(self):
         class FakeProcess:
             def __init__(self):
