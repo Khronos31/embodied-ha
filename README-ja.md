@@ -63,7 +63,7 @@ https://github.com/Khronos31/embodied-ha
 |---|---|---|
 | `resident_name` | `ユーザー` | ユーザーの名前（エージェントが会話で使う） |
 | `claude_api_key` | （空） | Anthropic API キー。Claude.ai サブスクリプションの場合は空 |
-| `claude_config_dir` | （空） | Claude の設定ディレクトリのパス。空の場合は `/config/embodied-ha/.claude`（アンインストール後も保持）。Studio Code Server の Claude 認証を使い回す場合は `/config/.tools/claude-home` を指定 |
+| `claude_config_dir` | （空） | Claude の設定ディレクトリのパス。空の場合、既存の `<データディレクトリ>/.claude` に認証情報または `projects/` があればそれを継続使用（更新で認証・記憶を失わない）。無ければ新規は `/data/claude-home` を使い、これはアンインストールで削除される。Studio Code Server の Claude 認証を使い回す場合は `/config/.tools/claude-home` を指定 |
 | `claude_cwd` | （空） | Claude 起動時の作業ディレクトリ。`/config` を指定し `claude_config_dir=/config/.tools/claude-home` と組み合わせると、Studio Code Server 版の Claude Code とメモリを共有できる |
 | `autonomous_control` | `false` | `true` にすると、観察・探索ループでも自律的に家電を操作できるようになる |
 

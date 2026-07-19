@@ -24,6 +24,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
+import claude_setup
 from mcp_lib import serve, text
 
 # /data/python-packages に永続インストールされた gensim 等を参照
@@ -307,7 +308,7 @@ _CPU_MOVE_COUNTS: dict[str, int] = {}
 
 def _claude_env() -> dict[str, str]:
     env = {**os.environ}
-    env["CLAUDE_CONFIG_DIR"] = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
+    env["CLAUDE_CONFIG_DIR"] = claude_setup.config_dir()
     return env
 
 

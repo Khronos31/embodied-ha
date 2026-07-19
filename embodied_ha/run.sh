@@ -148,10 +148,15 @@ else:
 " 2>&1 || true
 
 # --- Claude 設定ディレクトリ ---
-# デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。
-# アンインストール時に /data/ が消えても記憶・認証が /config/ 側に残る。
-# options で claude_config_dir を指定した場合はそちらを優先。
-export CLAUDE_CONFIG_DIR="${_OPT_CONFIG_DIR:-${EHA_DATA_DIR}/.claude}"
+# 解決は claude_setup.resolve_config_dir に一本化(判断事項10改訂+グランドファザー)。
+# option指定 > 旧既定(実体あれば継続=既存あかね無移動) > 新既定 /data/claude-home。
+export CLAUDE_CONFIG_DIR
+CLAUDE_CONFIG_DIR=$(SCRIPT_DIR="$SCRIPT_DIR" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ.get('SCRIPT_DIR', '/app'))
+import claude_setup
+print(claude_setup.resolve_config_dir(sys.argv[1], sys.argv[2]))
+" "$_OPT_CONFIG_DIR" "$EHA_DATA_DIR") || CLAUDE_CONFIG_DIR="${EHA_DATA_DIR}/.claude"
 unset _OPT_CONFIG_DIR
 echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 
@@ -397,30 +402,6 @@ EHA_LOG_DIR="$EHA_LOG_DIR" python3 "$SCRIPT_DIR/init_fts.py" \
 echo "[run] daemon.py 起動（web + watchdog）"
 python3 "$SCRIPT_DIR/daemon.py" &
 DAEMON_PID=$!
-
-# --- 認証確認（未設定なら Web UI セットアップ完了まで待機）---
-_auth_ok() {
-    [ -n "${ANTHROPIC_API_KEY:-}" ] && return 0
-    # サブスク認証は OAuthトークン本体の有無で判定する。
-    # .claude.json の userID はログイン記録であって認証実体ではない（トークンが
-    # 無ければ claude は "Not logged in" になる）ので判定に使わない。
-    [ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ] && return 0
-    [ -f "${CLAUDE_CONFIG_DIR}/credentials.json" ] && return 0
-    return 1
-}
-if ! _auth_ok; then
-    echo "[run] Claude 未認証。Web UI でセットアップしてください（ポート ${INGRESS_PORT:-8099}）..."
-    until _auth_ok; do
-        sleep 5
-        echo "[auth] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} / files: $(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -printf '%f ' 2>/dev/null || echo '(ディレクトリなし)')"
-        if [ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]; then
-            echo "[auth] .credentials.json: あり（認証実体OK）"
-        else
-            echo "[auth] .credentials.json: なし（未認証。.claude.jsonのuserIDは認証実体ではない）"
-        fi
-    done
-    echo "[run] 認証完了。daemon 起動..."
-fi
 
 # --- daemon.py を監視し続ける ---
 wait "$DAEMON_PID"

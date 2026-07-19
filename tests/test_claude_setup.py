@@ -22,6 +22,52 @@ from web import server  # noqa: E402
 
 
 class ClaudeSetupTests(unittest.TestCase):
+    def test_resolve_config_dir_prefers_nonempty_option(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            option = os.path.join(temp, "configured-claude")
+            self.assertEqual(claude_setup.resolve_config_dir(option, data_dir), option)
+
+    def test_resolve_config_dir_grandfathers_legacy_credentials(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            legacy_dir = os.path.join(data_dir, ".claude")
+            os.makedirs(legacy_dir)
+            Path(legacy_dir, ".credentials.json").write_text("token", encoding="utf-8")
+            self.assertEqual(claude_setup.resolve_config_dir("", data_dir), legacy_dir)
+
+    def test_resolve_config_dir_grandfathers_legacy_projects(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            legacy_dir = os.path.join(data_dir, ".claude")
+            os.makedirs(os.path.join(legacy_dir, "projects"))
+            self.assertEqual(claude_setup.resolve_config_dir("", data_dir), legacy_dir)
+
+    def test_resolve_config_dir_uses_new_default_for_empty_legacy_dir(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            os.makedirs(os.path.join(data_dir, ".claude"))
+            self.assertEqual(
+                claude_setup.resolve_config_dir("", data_dir),
+                claude_setup.NEW_DEFAULT_CONFIG_DIR,
+            )
+
+    def test_resolve_config_dir_uses_new_default_for_missing_legacy_dir(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            self.assertEqual(
+                claude_setup.resolve_config_dir("", data_dir),
+                claude_setup.NEW_DEFAULT_CONFIG_DIR,
+            )
+
+    def test_resolve_config_dir_option_overrides_legacy_substance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            legacy_dir = os.path.join(data_dir, ".claude")
+            os.makedirs(os.path.join(legacy_dir, "projects"))
+            option = os.path.join(temp, "configured-claude")
+            self.assertEqual(claude_setup.resolve_config_dir(option, data_dir), option)
+
     def test_paths_auth_state_and_clear_auth_are_idempotent(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as root, mock.patch.dict(
             os.environ,

@@ -11,7 +11,8 @@ import tempfile
 from urllib.request import urlopen
 
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-DEFAULT_CONFIG_DIR = "/data/.claude"
+NEW_DEFAULT_CONFIG_DIR = "/data/claude-home"
+DEFAULT_CONFIG_DIR = NEW_DEFAULT_CONFIG_DIR
 _CREDENTIALS_FILENAMES = (".credentials.json", "credentials.json")
 RELEASES_URL = "https://downloads.claude.ai/claude-code-releases"
 INSTALL_ROOT_ENV = "EHA_CLAUDE_INSTALL_ROOT"
@@ -31,6 +32,28 @@ def config_dir() -> str:
     antigravity_setupの毎回解決方式と揃え、テスト容易性とimport順非依存を優先した。
     """
     return os.environ.get(CONFIG_DIR_ENV, DEFAULT_CONFIG_DIR)
+
+
+def _has_config_substance(path: str) -> bool:
+    """Return whether a Claude config directory has auth or persisted sessions."""
+    if any(os.path.exists(os.path.join(path, name)) for name in _CREDENTIALS_FILENAMES):
+        return True
+    return os.path.isdir(os.path.join(path, "projects"))
+
+
+def resolve_config_dir(option: str, data_dir: str) -> str:
+    """Resolve option, grandfathered legacy config, then the new default.
+
+    Existing instances keep the former ``<data_dir>/.claude`` location only
+    when it contains Claude authentication or persisted project state.
+    """
+    option = option.strip()
+    if option:
+        return option
+    legacy_dir = os.path.join(data_dir, ".claude")
+    if _has_config_substance(legacy_dir):
+        return legacy_dir
+    return NEW_DEFAULT_CONFIG_DIR
 
 
 def credentials_paths() -> tuple[str, ...]:

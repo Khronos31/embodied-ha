@@ -65,7 +65,7 @@ When the add-on starts, the Web UI opens through Ingress.
 |---|---|---|
 | `resident_name` | `ユーザー` | The resident's name, used by the agent in conversation |
 | `claude_api_key` | empty | Anthropic API key. Leave empty when using a Claude.ai subscription |
-| `claude_config_dir` | empty | Claude config directory path. If empty, defaults to `/config/embodied-ha/.claude` so it survives uninstall. To reuse Claude authentication from Studio Code Server, set `/config/.tools/claude-home` |
+| `claude_config_dir` | empty | Claude config directory path. If empty, an existing `<data dir>/.claude` that already holds credentials or a `projects/` folder is kept (so upgrades never lose authentication or memory); otherwise a fresh install uses `/data/claude-home`, which is removed when the add-on is uninstalled. To reuse Claude authentication from Studio Code Server, set `/config/.tools/claude-home` |
 | `claude_cwd` | empty | Working directory used when launching Claude. Setting this to `/config` together with `claude_config_dir=/config/.tools/claude-home` lets it share memory with the Studio Code Server version of Claude Code |
 | `autonomous_control` | `false` | When set to `true`, the autonomous loop (observe/explore) can also control home devices on its own |
 
