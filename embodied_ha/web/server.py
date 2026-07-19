@@ -393,6 +393,7 @@ _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
 _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/login", "/api/setup/login-code",
     "/api/setup/claude/login", "/api/setup/claude/login-code",
+    "/api/setup/claude/install", "/api/setup/claude/uninstall",
     "/api/setup/claude/clear-auth",
     "/api/setup/antigravity/install", "/api/setup/antigravity/login",
     "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
@@ -1288,6 +1289,64 @@ class Handler(BaseHTTPRequestHandler):
             if not worker_owns_lock:
                 _release_codex_mutation()
 
+    def _serve_setup_claude_install(self):
+        """Install Claude CLI from its verified release manifest via SSE."""
+        if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': 'Claude setup is busy'}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        worker_owns_lock = False
+        try:
+            q: queue.Queue = queue.Queue(maxsize=200)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def run_install():
+                try:
+                    result = claude_setup.install(progress=lambda text: q.put(("line", text)))
+                    q.put(("done", result))
+                except Exception as e:
+                    q.put(("error", str(e)))
+                finally:
+                    _CLAUDE_MUTATION_LOCK.release()
+
+            threading.Thread(target=run_install, daemon=True).start()
+            worker_owns_lock = True
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            if not worker_owns_lock:
+                _CLAUDE_MUTATION_LOCK.release()
+
     def _serve_setup_codex_login(self):
         """Start Codex device auth and stream its URL/code without using a PTY."""
         import subprocess as _sp
@@ -1929,6 +1988,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/claude/install":
+            self._serve_setup_claude_install()
+        elif path == "/api/setup/claude/uninstall":
+            if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Claude setup is busy"}, 409)
+                return
+            try:
+                result = claude_setup.uninstall()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            finally:
+                _CLAUDE_MUTATION_LOCK.release()
         elif path == "/api/setup/claude/clear-auth":
             if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
                 self.send_json({"error": "Claude login is busy"}, 409)

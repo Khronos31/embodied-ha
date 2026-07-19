@@ -1,8 +1,10 @@
+import hashlib
 import json
 import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -20,15 +22,24 @@ from web import server  # noqa: E402
 
 class ClaudeSetupTests(unittest.TestCase):
     def test_paths_auth_state_and_clear_auth_are_idempotent(self):
-        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(
-            os.environ, {"CLAUDE_CONFIG_DIR": temp}, clear=False
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as root, mock.patch.dict(
+            os.environ,
+            {"CLAUDE_CONFIG_DIR": temp, "EHA_CLAUDE_INSTALL_ROOT": root},
+            clear=False,
         ):
             primary, legacy = claude_setup.credentials_paths()
             self.assertEqual(primary, os.path.join(temp, ".credentials.json"))
             self.assertEqual(legacy, os.path.join(temp, "credentials.json"))
-            self.assertTrue(claude_setup.is_installed())
+            # is_installed() は DIY 配置バイナリの実チェック(増分1で定数True→実チェックへ)。
+            self.assertFalse(claude_setup.is_installed())
             self.assertFalse(claude_setup.is_authenticated())
             self.assertEqual(claude_setup.clear_auth(), {"removed_files": []})
+
+            # バイナリを配置すると is_installed() が True になる。
+            os.makedirs(claude_setup.bin_dir(), exist_ok=True)
+            Path(claude_setup.binary_path()).write_text("#!/bin/true\n", encoding="utf-8")
+            os.chmod(claude_setup.binary_path(), 0o755)
+            self.assertTrue(claude_setup.is_installed())
 
             Path(primary).write_text("token", encoding="utf-8")
             Path(legacy).write_text("token", encoding="utf-8")
@@ -38,6 +49,10 @@ class ClaudeSetupTests(unittest.TestCase):
                 {
                     "installed": True,
                     "authenticated": True,
+                    "install_root": claude_setup.install_root(),
+                    "bin_dir": claude_setup.bin_dir(),
+                    "binary_path": claude_setup.binary_path(),
+                    "checksum_source": "Claude release manifest checksum",
                     "config_dir": temp,
                     "credentials_paths": [primary, legacy],
                 },
@@ -56,6 +71,224 @@ class ClaudeSetupTests(unittest.TestCase):
             self.assertTrue(claude_setup.is_authenticated())
             claude_setup.clear_auth()
             self.assertTrue(claude_setup.is_authenticated())
+
+    def test_platform_target_and_manifest_resolution_use_glibc_releases(self):
+        self.assertEqual(claude_setup.platform_target("x86_64"), "linux-x64")
+        self.assertEqual(claude_setup.platform_target("amd64"), "linux-x64")
+        self.assertEqual(claude_setup.platform_target("aarch64"), "linux-arm64")
+        self.assertEqual(claude_setup.platform_target("arm64"), "linux-arm64")
+        with self.assertRaisesRegex(RuntimeError, "Unsupported architecture"):
+            claude_setup.platform_target("riscv64")
+
+        manifest = {"version": "2.1.205", "platforms": {"linux-x64": {}}}
+        with mock.patch.object(
+            claude_setup,
+            "_read_url",
+            side_effect=[b"2.1.205", json.dumps(manifest).encode()],
+        ):
+            self.assertEqual(
+                claude_setup.resolve_manifest(),
+                ("2.1.205", manifest),
+            )
+
+    def test_checksum_and_download_size_limits_are_enforced(self):
+        binary = b"\x7fELFmock-claude"
+        digest = hashlib.sha256(binary).hexdigest()
+        claude_setup.verify_sha256(binary, digest)
+        with self.assertRaisesRegex(RuntimeError, "checksum"):
+            claude_setup.verify_sha256(binary, "0" * 64)
+
+        asset = {
+            "binary": "claude",
+            "checksum": digest,
+            "size": claude_setup.MAX_DOWNLOAD_BYTES + 1,
+        }
+        with self.assertRaisesRegex(RuntimeError, "size limit"):
+            claude_setup._platform_asset({"platforms": {"linux-x64": asset}}, "linux-x64")
+
+        class Response:
+            headers = {"Content-Length": "5"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                return b"12345"
+
+        with mock.patch.object(claude_setup, "MAX_DOWNLOAD_BYTES", 4), \
+             mock.patch.object(claude_setup, "urlopen", return_value=Response()):
+            with self.assertRaisesRegex(RuntimeError, "size limit"):
+                claude_setup._read_url("https://example.invalid/claude")
+
+    def test_platform_asset_rejects_unsafe_binary_names_and_empty_binary(self):
+        digest = hashlib.sha256(b"binary").hexdigest()
+        for binary in (".", "..", "claude-old", "not-claude"):
+            asset = {"binary": binary, "checksum": digest, "size": 1}
+            with self.subTest(binary=binary), self.assertRaisesRegex(RuntimeError, "unsafe binary name"):
+                claude_setup._platform_asset({"platforms": {"linux-x64": asset}}, "linux-x64")
+
+        asset = {"binary": "claude", "checksum": digest, "size": 0}
+        with self.assertRaisesRegex(RuntimeError, "invalid binary size"):
+            claude_setup._platform_asset({"platforms": {"linux-x64": asset}}, "linux-x64")
+
+    def test_install_verifies_manifest_and_atomically_installs_binary(self):
+        binary = b"\x7fELFmock-claude"
+        digest = hashlib.sha256(binary).hexdigest()
+        manifest = {
+            "version": "2.1.205",
+            "platforms": {
+                "linux-x64": {"binary": "claude", "checksum": digest, "size": len(binary)},
+            },
+        }
+        messages = []
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            with mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": str(root)}, clear=False), \
+                 mock.patch.object(claude_setup, "platform_target", return_value="linux-x64"), \
+                 mock.patch.object(
+                     claude_setup,
+                     "_read_url",
+                     side_effect=[b"2.1.205", json.dumps(manifest).encode(), binary],
+                 ):
+                result = claude_setup.install(progress=messages.append)
+            installed_binary = root / "bin" / "claude"
+            self.assertEqual(installed_binary.read_bytes(), binary)
+            self.assertTrue(os.access(installed_binary, os.X_OK))
+            self.assertEqual(
+                result,
+                {
+                    "version": "2.1.205",
+                    "platform": "linux-x64",
+                    "checksum_verified": True,
+                    "binary_path": str(installed_binary),
+                },
+            )
+        self.assertEqual(messages[-1], "Claude installation complete")
+
+    def test_install_failure_preserves_existing_binary(self):
+        replacement = b"\x7fELFbad-claude"
+        manifest = {
+            "version": "2.1.205",
+            "platforms": {
+                "linux-x64": {
+                    "binary": "claude",
+                    "checksum": "0" * 64,
+                    "size": len(replacement),
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            old_binary = root / "bin" / "claude"
+            old_binary.parent.mkdir(parents=True)
+            old_binary.write_bytes(b"old")
+            old_binary.chmod(0o755)
+            with mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": str(root)}, clear=False), \
+                 mock.patch.object(claude_setup, "platform_target", return_value="linux-x64"), \
+                 mock.patch.object(
+                     claude_setup,
+                     "_read_url",
+                     side_effect=[b"2.1.205", json.dumps(manifest).encode(), replacement],
+                 ):
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    claude_setup.install()
+            self.assertEqual(old_binary.read_bytes(), b"old")
+
+    def test_install_replace_failure_restores_existing_binary(self):
+        binary = b"\x7fELFmock-claude"
+        digest = hashlib.sha256(binary).hexdigest()
+        manifest = {
+            "version": "2.1.205",
+            "platforms": {
+                "linux-x64": {"binary": "claude", "checksum": digest, "size": len(binary)},
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            old_binary = root / "bin" / "claude"
+            old_binary.parent.mkdir(parents=True)
+            old_binary.write_bytes(b"old")
+            old_binary.chmod(0o755)
+            original_replace = os.replace
+
+            def fail_new_install(source, destination):
+                if source.endswith("/claude-cli") and destination == str(root):
+                    raise OSError("replace failed")
+                return original_replace(source, destination)
+
+            with mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": str(root)}, clear=False), \
+                 mock.patch.object(claude_setup, "platform_target", return_value="linux-x64"), \
+                 mock.patch.object(
+                     claude_setup,
+                     "_read_url",
+                     side_effect=[b"2.1.205", json.dumps(manifest).encode(), binary],
+                 ), \
+                 mock.patch.object(claude_setup.os, "replace", side_effect=fail_new_install):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    claude_setup.install()
+            self.assertEqual(old_binary.read_bytes(), b"old")
+
+    def test_uninstall_keeps_credentials_and_rejects_filesystem_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            binary = root / "bin" / "claude"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"binary")
+            credentials = Path(temp) / ".credentials.json"
+            credentials.write_text("token", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {"EHA_CLAUDE_INSTALL_ROOT": str(root), "CLAUDE_CONFIG_DIR": temp},
+                clear=False,
+            ):
+                self.assertEqual(claude_setup.uninstall(), {"removed_files": [str(root)]})
+                self.assertFalse(root.exists())
+                self.assertTrue(credentials.exists())
+                self.assertEqual(claude_setup.uninstall(), {"removed_files": []})
+            with mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": os.path.sep}, clear=False):
+                with self.assertRaisesRegex(RuntimeError, "filesystem root"):
+                    claude_setup.uninstall()
+
+    def test_uninstall_rejects_unsafe_install_roots_without_removal(self):
+        for root in ("/", "//", "/./", "/tmp/..", "", ".", "relative/path"):
+            with self.subTest(root=root), \
+                 mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": root}, clear=False), \
+                 mock.patch.object(claude_setup.shutil, "rmtree") as rmtree:
+                with self.assertRaises(RuntimeError):
+                    claude_setup.uninstall()
+                rmtree.assert_not_called()
+
+    def test_is_installed_checks_diy_binary_and_runtime_env_has_no_secrets(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            binary = root / "bin" / "claude"
+            with mock.patch.dict(os.environ, {
+                "EHA_CLAUDE_INSTALL_ROOT": str(root),
+                "SUPERVISOR_TOKEN": "secret",
+                "ANTHROPIC_API_KEY": "secret",
+            }, clear=False):
+                self.assertFalse(claude_setup.is_installed())
+                binary.parent.mkdir(parents=True)
+                binary.write_bytes(b"binary")
+                binary.chmod(0o755)
+                self.assertTrue(claude_setup.is_installed())
+                env = claude_setup.runtime_env({"DISABLE_UPDATES": "0"})
+                self.assertEqual(env["DISABLE_UPDATES"], "1")
+                self.assertNotIn("SUPERVISOR_TOKEN", env)
+                self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+    def test_state_reports_diy_install_locations_and_manifest_checksum_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "claude-cli"
+            with mock.patch.dict(os.environ, {"EHA_CLAUDE_INSTALL_ROOT": str(root)}, clear=False):
+                state = claude_setup.state()
+            self.assertEqual(state["install_root"], str(root))
+            self.assertEqual(state["bin_dir"], str(root / "bin"))
+            self.assertEqual(state["binary_path"], str(root / "bin" / "claude"))
+            self.assertEqual(state["checksum_source"], "Claude release manifest checksum")
 
 
 class ClaudeSetupEndpointTests(unittest.TestCase):
@@ -117,6 +350,39 @@ class ClaudeSetupEndpointTests(unittest.TestCase):
             self.assertEqual(
                 self._post_json("/api/setup/claude/clear-auth"),
                 {"ok": True, "removed_files": ["/tmp/.credentials.json"]},
+            )
+
+    def test_claude_install_sse_and_uninstall_dispatch(self):
+        result = {
+            "version": "2.1.205",
+            "platform": "linux-x64",
+            "checksum_verified": True,
+            "binary_path": "/tmp/claude",
+        }
+        fake = mock.Mock(uninstall=lambda: {"removed_files": ["/tmp/claude-cli"]})
+
+        def install(*, progress):
+            progress("Resolving Claude release")
+            return result
+
+        fake.install.side_effect = install
+        request = urllib.request.Request(
+            self.base_url + "/api/setup/claude/install", data=b"{}", method="POST"
+        )
+        with mock.patch.object(server, "claude_setup", fake):
+            with urllib.request.urlopen(request) as response:
+                body = "".join(response.readline().decode("utf-8") for _ in range(6))
+            self.assertIn("event: line", body)
+            self.assertIn("Resolving Claude release", body)
+            self.assertIn('event: done\ndata: {"version": "2.1.205"', body)
+            for _ in range(100):
+                if not server._CLAUDE_MUTATION_LOCK.locked():
+                    break
+                time.sleep(0.01)
+            self.assertFalse(server._CLAUDE_MUTATION_LOCK.locked())
+            self.assertEqual(
+                self._post_json("/api/setup/claude/uninstall"),
+                {"ok": True, "removed_files": ["/tmp/claude-cli"]},
             )
 
 

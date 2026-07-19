@@ -176,6 +176,43 @@ class SetupMutationLockTests(unittest.TestCase):
             self.assertTrue(server._CLAUDE_MUTATION_LOCK.acquire(blocking=False))
             server._CLAUDE_MUTATION_LOCK.release()
 
+    def test_claude_install_lock_blocks_mutations_and_releases_after_failure(self):
+        fake = SimpleNamespace(
+            install=mock.Mock(side_effect=RuntimeError("installation failed")),
+            uninstall=mock.Mock(return_value={"removed_files": []}),
+            clear_auth=mock.Mock(return_value={"removed_files": []}),
+        )
+        with mock.patch.object(server, "claude_setup", fake):
+            self.assertTrue(server._CLAUDE_MUTATION_LOCK.acquire(blocking=False))
+            try:
+                for endpoint, error in (
+                    ("uninstall", "Claude setup is busy"),
+                    ("clear-auth", "Claude login is busy"),
+                ):
+                    with self.subTest(endpoint=endpoint), self.assertRaises(urllib.error.HTTPError) as raised:
+                        self._post_json(f"/api/setup/claude/{endpoint}")
+                    self.assertEqual(raised.exception.code, 409)
+                    self.assertEqual(json.loads(raised.exception.read()), {"error": error})
+                fake.uninstall.assert_not_called()
+                fake.clear_auth.assert_not_called()
+            finally:
+                server._CLAUDE_MUTATION_LOCK.release()
+
+            request = urllib.request.Request(
+                self.base_url + "/api/setup/claude/install", data=b"{}", method="POST"
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                events = "".join(response.readline().decode() for _ in range(2))
+            self.assertIn("event: error", events)
+            self.assertIn("installation failed", events)
+
+        for _ in range(100):
+            if not server._CLAUDE_MUTATION_LOCK.locked():
+                break
+            time.sleep(0.01)
+        self.assertTrue(server._CLAUDE_MUTATION_LOCK.acquire(blocking=False))
+        server._CLAUDE_MUTATION_LOCK.release()
+
 
 if __name__ == "__main__":
     unittest.main()

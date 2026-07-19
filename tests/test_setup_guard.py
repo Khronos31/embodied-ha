@@ -26,6 +26,8 @@ class SetupGuardTests(unittest.TestCase):
         ("POST", "/api/setup/login-code"),
         ("GET", "/api/setup/claude/login"),
         ("POST", "/api/setup/claude/login-code"),
+        ("POST", "/api/setup/claude/install"),
+        ("POST", "/api/setup/claude/uninstall"),
         ("POST", "/api/setup/claude/clear-auth"),
         ("GET", "/api/setup/antigravity/install"),
         ("GET", "/api/setup/antigravity/login"),

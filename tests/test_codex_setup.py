@@ -180,6 +180,18 @@ class CodexSetupTests(unittest.TestCase):
             self.assertTrue(backup.is_dir())
             self.assertFalse(root.exists())
 
+    def test_uninstall_rejects_unsafe_install_roots(self):
+        # `os.path.abspath('//')` は `//` を返し `== os.path.sep` を通過するため、
+        # realpath ベースの検証で `/`・`//`・空・相対がルート削除に到達しないことを固定する。
+        for unsafe in ("/", "//", "/./", "/tmp/..", "", ".", "relative/path"):
+            with self.subTest(root=unsafe):
+                with mock.patch.dict(
+                    os.environ, {"EHA_CODEX_INSTALL_ROOT": unsafe}, clear=False
+                ), mock.patch.object(codex_setup.shutil, "rmtree") as rmtree:
+                    with self.assertRaises(RuntimeError):
+                        codex_setup.uninstall()
+                    rmtree.assert_not_called()
+
     def test_install_is_atomic_when_staging_fails(self):
         target = "x86_64-unknown-linux-musl"
         name = codex_setup.package_asset_name(target)

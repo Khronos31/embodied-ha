@@ -35,6 +35,22 @@ def install_root() -> str:
     return os.environ.get(INSTALL_ROOT_ENV, "/data/codex-cli")
 
 
+def _resolved_install_root() -> str:
+    """Return a safe, canonical install root for filesystem mutations.
+
+    空文字・空白・相対パス、および realpath が `/` になる指定を拒否する。
+    os.path.abspath は `//` を `//` のまま返し `== os.path.sep` を通過するため、
+    realpath による正規化と絶対パス検証で削除・配置がルートに到達するのを防ぐ。
+    """
+    root = install_root()
+    if not root or not root.strip() or not os.path.isabs(root):
+        raise RuntimeError("Codex install root must be a non-empty absolute path")
+    resolved = os.path.realpath(root)
+    if resolved == os.path.sep:
+        raise RuntimeError("Refusing to install or uninstall Codex from filesystem root")
+    return resolved
+
+
 def home_dir() -> str:
     return os.environ.get(HOME_ENV, "/data/codex-home")
 
@@ -263,7 +279,7 @@ def install(version: str = "latest", timeout: int = 60, progress=None) -> dict:
     verify_sha256(archive, expected)
     report("Verified SHA-256 checksum")
 
-    root = os.path.abspath(install_root())
+    root = _resolved_install_root()
     parent = os.path.dirname(root) or "."
     os.makedirs(parent, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".codex-install-", dir=parent) as temp_dir:
@@ -304,9 +320,7 @@ def clear_auth() -> dict:
 
 def uninstall() -> dict:
     removed_files = []
-    root = os.path.abspath(install_root())
-    if root == os.path.sep:
-        raise RuntimeError("Refusing to uninstall Codex from filesystem root")
+    root = _resolved_install_root()
     if os.path.exists(root):
         shutil.rmtree(root)
         removed_files.append(root)
