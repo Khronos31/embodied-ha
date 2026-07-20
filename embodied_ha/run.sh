@@ -57,6 +57,21 @@ if [ -x /data/codex-cli/bin/codex ]; then
     export EHA_CODEX_BIN="/data/codex-cli/bin/codex"
 fi
 
+# --- 選択ハーネスを実行時ハーネスへ配線（Step4増分1a）---
+# /data/selected_harness が valid なら EHA_AGENT_HARNESS へ充当し、invoke-agent.sh が
+# 選択した CLI を起動する。missing/invalid なら未設定のまま = invoke-agent.sh の claude 既定
+# （旧個体グランドファザー）。valid フラグは既存 env より優先（effective_harness 単一規則）。
+_SELECTED_HARNESS=$(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import harness_state; print(harness_state.get_selected_harness() or '')" 2>/dev/null || true)
+if [ -n "${_SELECTED_HARNESS:-}" ]; then
+    export EHA_AGENT_HARNESS="$_SELECTED_HARNESS"
+    echo "[run] 選択ハーネス: EHA_AGENT_HARNESS=${_SELECTED_HARNESS}"
+else
+    # valid フラグが無ければ invoke-agent.sh の claude 既定に委ねる。継承された古い値を
+    # 残すと valid フラグ優先が崩れる(sol 1a-review Med3)ため、明示的に外す。
+    unset EHA_AGENT_HARNESS
+fi
+unset _SELECTED_HARNESS
+
 # --- PulseAudio（audio: true で注入されるソケット）---
 # HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。
 # libasound2-plugins の ALSA→Pulse ブリッジはこの変数を参照する。

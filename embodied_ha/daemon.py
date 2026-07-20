@@ -23,6 +23,7 @@ import antigravity_setup
 import claude_setup
 import codex_setup
 import harness_state
+import harness_status
 from instance_identity import MQTT_PREFIX
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,13 +114,10 @@ def harness_ready() -> bool:
                 selected = "claude"
             else:
                 return False
-    if selected == "claude":
-        return claude_setup.is_authenticated() and claude_setup.resolve_claude_bin() is not None
-    if selected == "codex":
-        return codex_setup.is_installed() and codex_setup.is_authenticated()
-    if selected == "agy":
-        return antigravity_setup.is_installed() and antigravity_setup.is_authenticated()
-    return False
+    # Per-harness readiness is defined once in harness_status (shared with the
+    # web overview) so the two never drift (sol R5). Migration above stays a
+    # daemon-only side effect.
+    return harness_status.readiness(selected)
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -676,6 +674,19 @@ def start_runtime_threads():
     with _runtime_lock:
         if _runtime_started.is_set():
             return
+        # 選択ハーネスを実行時ハーネスへ配線(Step4増分1a)。ポーラの harness_ready() 判定と
+        # 起動の間にフラグ/認証が変わる競合(sol 1a-review High)を避けるため、ここで1回だけ
+        # snapshot を取り、その snapshot が ready を認めた effective harness だけを export する
+        # (judge した値と実行する値を同一 read に固定)。起動直前に未準備へ変わっていたら
+        # 壊れたハーネスで起動せず見送る(ポーラが次周期で再試行/待機に戻る)。
+        snap = harness_status.snapshot()
+        if not snap["ready"]:
+            print("[daemon] runtime 開始直前に harness 未準備を検出。起動を見送ります", flush=True)
+            return
+        # effective は valid→選択ハーネス、missing/移行→claude。初回選択(再起動なし)でも
+        # 以降 spawn する loop/chat 子プロセスが継承する。継承された古い EHA_AGENT_HARNESS が
+        # あっても effective で明示上書きし、valid フラグ優先を貫徹する(sol 1a-review Med3)。
+        os.environ["EHA_AGENT_HARNESS"] = snap["effective"]
         if MQTT_HOST:
             threading.Thread(
                 target=mqtt_listen,

@@ -29,6 +29,7 @@ except Exception:
 # ため、必須importとして失敗時は起動時に大きく落とす(sol指摘 2026-07-18)。
 import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
@@ -550,31 +551,11 @@ def _selected_harness_ready() -> bool:
 
     Read-only mirror of daemon.harness_ready().  The daemon remains the source
     of truth; unlike its legacy migration path, the web server never writes a
-    grandfathered Claude selection flag.
+    grandfathered Claude selection flag.  Readiness is defined once in
+    harness_status.snapshot() so this mirror can never drift from the daemon
+    (sol R5).
     """
-    selection_state, selected = harness_state.read_selection()
-    if selection_state == "missing":
-        selected = "claude" if claude_setup.is_authenticated() else None
-    elif selection_state != "valid":
-        return False
-    if selected == "claude":
-        return (
-            claude_setup.is_authenticated()
-            and claude_setup.resolve_claude_bin() is not None
-        )
-    if selected == "codex":
-        return (
-            codex_setup is not None
-            and codex_setup.is_installed()
-            and codex_setup.is_authenticated()
-        )
-    if selected == "agy":
-        return (
-            antigravity_setup is not None
-            and antigravity_setup.is_installed()
-            and antigravity_setup.is_authenticated()
-        )
-    return False
+    return harness_status.snapshot()["ready"]
 
 
 def is_authenticated() -> bool:
@@ -1934,6 +1915,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(codex_status())
         elif path == "/api/setup/claude/status":
             self.send_json(claude_setup.state())
+        elif path == "/api/setup/overview":
+            # 集約 readiness(Step4増分1a)。フロント gate はこれ1本でピッカー/再開/通常モードを
+            # 分岐できる。読み取りのみ・公開schema固定(path/token/version を載せない・sol L11)。
+            self.send_json(harness_status.snapshot())
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
