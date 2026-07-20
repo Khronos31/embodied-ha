@@ -97,6 +97,7 @@ mkdir -p /data/embodied-ha
 # から記憶・ログ・設定を直接閲覧・編集でき、HAバックアップにも含まれる。
 # （config:rw マウント前提。未マウント環境では /data にフォールバック）
 export EHA_DATA_DIR="${EHA_DATA_DIR:-/config/embodied-ha}"
+export EHA_MQTT_PREFIX="${EHA_MQTT_PREFIX:-embodied_ha}"
 if ! mkdir -p "$EHA_DATA_DIR" 2>/dev/null; then
     EHA_DATA_DIR="/data/embodied-ha"
     mkdir -p "$EHA_DATA_DIR"
@@ -337,20 +338,20 @@ print(d.get("host",""), d.get("port", 1883), d.get("username",""), d.get("passwo
     }
 
     # 内省ログ（loop/observe ループが書き込む）
-    _pub -t "homeassistant/sensor/embodied_ha_observation/config" -m \
-        '{"name":"Embodied HA 内省","unique_id":"embodied_ha_observation","state_topic":"embodied_ha/observation/state","icon":"mdi:thought-bubble","entity_category":"diagnostic"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_observation/config" -m \
+        '{"name":"Embodied HA 内省","unique_id":"'"${EHA_MQTT_PREFIX}"'_observation","state_topic":"'"${EHA_MQTT_PREFIX}"'/observation/state","icon":"mdi:thought-bubble","entity_category":"diagnostic"}'
 
     # 直近の発話
-    _pub -t "homeassistant/sensor/embodied_ha_last_speak/config" -m \
-        '{"name":"Embodied HA 発話","unique_id":"embodied_ha_last_speak","state_topic":"embodied_ha/last_speak/state","icon":"mdi:message-text"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_last_speak/config" -m \
+        '{"name":"Embodied HA 発話","unique_id":"'"${EHA_MQTT_PREFIX}"'_last_speak","state_topic":"'"${EHA_MQTT_PREFIX}"'/last_speak/state","icon":"mdi:message-text"}'
 
     # 感情（照明の色変え等の自動化に使える）
-    _pub -t "homeassistant/sensor/embodied_ha_emotion/config" -m \
-        '{"name":"Embodied HA 感情","unique_id":"embodied_ha_emotion","state_topic":"embodied_ha/emotion/state","icon":"mdi:heart"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_emotion/config" -m \
+        '{"name":"Embodied HA 感情","unique_id":"'"${EHA_MQTT_PREFIX}"'_emotion","state_topic":"'"${EHA_MQTT_PREFIX}"'/emotion/state","icon":"mdi:heart"}'
 
     # チャット入力（HA UI → アドオン）
-    _pub -t "homeassistant/text/embodied_ha_chat/config" -m \
-        '{"name":"Embodied HA チャット入力","unique_id":"embodied_ha_chat","command_topic":"embodied_ha/chat/set","state_topic":"embodied_ha/chat/state","icon":"mdi:chat","max":500}'
+    _pub -t "homeassistant/text/${EHA_MQTT_PREFIX}_chat/config" -m \
+        '{"name":"Embodied HA チャット入力","unique_id":"'"${EHA_MQTT_PREFIX}"'_chat","command_topic":"'"${EHA_MQTT_PREFIX}"'/chat/set","state_topic":"'"${EHA_MQTT_PREFIX}"'/chat/state","icon":"mdi:chat","max":500}'
 
     CHARACTER_LABEL=$(python3 - <<'PYEOF'
 import json, os
@@ -369,31 +370,33 @@ PYEOF
     export CHARACTER_LABEL
 
     # 観察トリガーボタン
-    _pub -t "homeassistant/button/embodied_ha_observe/config" -m \
-        '{"name":"Embodied HA ループ","unique_id":"embodied_ha_loop","command_topic":"embodied_ha/loop/trigger","icon":"mdi:eye","payload_press":"LOOP"}'
+    _pub -t "homeassistant/button/${EHA_MQTT_PREFIX}_observe/config" -m \
+        '{"name":"Embodied HA ループ","unique_id":"'"${EHA_MQTT_PREFIX}"'_loop","command_topic":"'"${EHA_MQTT_PREFIX}"'/loop/trigger","icon":"mdi:eye","payload_press":"LOOP"}'
 
-    _pub -t "homeassistant/sensor/embodied_ha_body_physical_room/config" -m \
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_body_physical_room/config" -m \
         "$(python3 - <<'PYEOF'
 import json, os
 name = os.environ.get('CHARACTER_LABEL', 'Claude')
+prefix = os.environ['EHA_MQTT_PREFIX']
 payload = {
   'name': f'Embodied HA {name}の身体がある場所',
-  'unique_id': 'embodied_ha_body_physical_room',
-  'state_topic': 'embodied_ha/body/physical_room/state',
+  'unique_id': f'{prefix}_body_physical_room',
+  'state_topic': f'{prefix}/body/physical_room/state',
   'icon': 'mdi:map-marker',
 }
 print(json.dumps(payload, ensure_ascii=False))
 PYEOF
 )"
 
-    _pub -t "homeassistant/sensor/embodied_ha_body_current_place/config" -m \
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_body_current_place/config" -m \
         "$(python3 - <<'PYEOF'
 import json, os
 name = os.environ.get('CHARACTER_LABEL', 'Claude')
+prefix = os.environ['EHA_MQTT_PREFIX']
 payload = {
   'name': f'Embodied HA {name}のいる場所',
-  'unique_id': 'embodied_ha_body_current_place',
-  'state_topic': 'embodied_ha/body/current_place/state',
+  'unique_id': f'{prefix}_body_current_place',
+  'state_topic': f'{prefix}/body/current_place/state',
   'icon': 'mdi:radar',
 }
 print(json.dumps(payload, ensure_ascii=False))

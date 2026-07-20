@@ -23,6 +23,7 @@ import antigravity_setup
 import claude_setup
 import codex_setup
 import harness_state
+from instance_identity import MQTT_PREFIX
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
@@ -63,7 +64,7 @@ _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "bo
 _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
 _setup_wait_notification_sent = False
 _setup_wait_notification_lock = threading.Lock()
-_SETUP_WAIT_NOTIFICATION_ID = "embodied_ha_harness_setup_required"
+_SETUP_WAIT_NOTIFICATION_ID = f"{MQTT_PREFIX}_harness_setup_required"
 
 
 def load_enabled_mics() -> list[dict]:
@@ -406,7 +407,7 @@ def on_loop_trigger(payload):
 
 def run_chat(message, source="chat"):
     # MQTT text エンティティの state_topic に echo して HA の表示を同期
-    mqtt_pub("embodied_ha/chat/state", message)
+    mqtt_pub(f"{MQTT_PREFIX}/chat/state", message)
     if not _chat_lock.acquire(blocking=False):
         print("[daemon] chat already running, skip", flush=True)
         return
@@ -678,12 +679,12 @@ def start_runtime_threads():
         if MQTT_HOST:
             threading.Thread(
                 target=mqtt_listen,
-                args=("embodied_ha/chat/set", on_chat_trigger, "mqtt-chat"),
+                args=(f"{MQTT_PREFIX}/chat/set", on_chat_trigger, "mqtt-chat"),
                 daemon=True,
             ).start()
             threading.Thread(
                 target=mqtt_listen,
-                args=("embodied_ha/loop/trigger", on_loop_trigger, "mqtt-loop"),
+                args=(f"{MQTT_PREFIX}/loop/trigger", on_loop_trigger, "mqtt-loop"),
                 daemon=True,
             ).start()
             print(f"[daemon] MQTT I/O started ({MQTT_HOST}:{MQTT_PORT})", flush=True)

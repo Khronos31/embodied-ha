@@ -29,6 +29,7 @@ except Exception:
 # ため、必須importとして失敗時は起動時に大きく落とす(sol指摘 2026-07-18)。
 import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -1026,12 +1027,12 @@ def send_chat(message: str, source: str = "chat"):
         subprocess.run(
             ["mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT,
              "-u", MQTT_USER, "-P", MQTT_PASS,
-             "-t", "embodied_ha/chat/set", "-m", json.dumps({"message": message, "source": source}, ensure_ascii=False)],
+             "-t", f"{MQTT_PREFIX}/chat/set", "-m", json.dumps({"message": message, "source": source}, ensure_ascii=False)],
             capture_output=True, timeout=5
         )
     else:
         payload = json.dumps(
-            {"entity_id": "input_text.embodied_ha_chat_input", "value": message[:100]},
+            {"entity_id": f"input_text.{MQTT_PREFIX}_chat_input", "value": message[:100]},
             ensure_ascii=False
         )
         subprocess.run([

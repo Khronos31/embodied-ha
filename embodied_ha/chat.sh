@@ -883,15 +883,17 @@ fi
 # --- private 内省を内省センサーに反映（MQTT。loop/exploreと同じ embodied_ha/observation/state）---
 # 会話中の内省も観察ループと同じ内省センサーに集約する。
 # 返答(reply)は Web UI が chat_log.jsonl から表示するため HA エンティティには出さない。
-PARSED_FILE="$PARSED_FILE" python3 << 'PYEOF' 2>/dev/null || true
+: "${EHA_MQTT_PREFIX:=embodied_ha}"
+PARSED_FILE="$PARSED_FILE" EHA_MQTT_PREFIX="$EHA_MQTT_PREFIX" python3 << 'PYEOF' 2>/dev/null || true
 import json, os, subprocess
 d = json.load(open(os.environ["PARSED_FILE"], encoding="utf-8"))
 p = d.get("private")
 mqtt_host = os.environ.get("MQTT_HOST", "")
+prefix = os.environ.get("EHA_MQTT_PREFIX") or "embodied_ha"
 if p and mqtt_host:
     subprocess.run(
         ["mosquitto_pub", "-h", mqtt_host, "-p", os.environ.get("MQTT_PORT", "1883"),
          "-u", os.environ.get("MQTT_USER", ""), "-P", os.environ.get("MQTT_PASS", ""),
-         "-r", "-t", "embodied_ha/observation/state", "-m", p[:255]],
+         "-r", "-t", f"{prefix}/observation/state", "-m", p[:255]],
         capture_output=True, timeout=5)
 PYEOF

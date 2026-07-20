@@ -14,6 +14,7 @@ import threading
 from typing import Any
 
 from embodied_action import action_fields_for_move, apply_action_to_body_state
+from instance_identity import MQTT_PREFIX
 from mcp_lib import serve, text
 from room_graph import data_dir as _data_dir
 from room_graph import (
@@ -187,8 +188,8 @@ def publish_body_presence(state: dict[str, Any]) -> None:
     if mqtt_pass:
         base.extend(["-P", mqtt_pass])
     for topic, payload in (
-        ("embodied_ha/body/physical_room/state", physical_room),
-        ("embodied_ha/body/current_place/state", current_place),
+        (f"{MQTT_PREFIX}/body/physical_room/state", physical_room),
+        (f"{MQTT_PREFIX}/body/current_place/state", current_place),
     ):
         try:
             subprocess.run(base + ["-r", "-t", topic, "-m", payload], capture_output=True, text=True, timeout=5)

@@ -24,6 +24,8 @@ import json
 import os
 import subprocess
 
+from instance_identity import MQTT_PREFIX
+
 
 def record_presented_features(parsed, script_dir, run=subprocess.run):
     """feature_presented を feature-flags.py add へ記録する（chat.sh:660-671と同一契約）。
@@ -87,7 +89,7 @@ def publish_private_to_mqtt(parsed, mqtt_host, mqtt_port="1883", mqtt_user="", m
             run(
                 ["mosquitto_pub", "-h", mqtt_host, "-p", str(mqtt_port),
                  "-u", mqtt_user, "-P", mqtt_pass,
-                 "-r", "-t", "embodied_ha/observation/state", "-m", p[:255]],
+                 "-r", "-t", f"{MQTT_PREFIX}/observation/state", "-m", p[:255]],
                 capture_output=True, timeout=5,
             )
     except Exception:
