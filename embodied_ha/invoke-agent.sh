@@ -435,7 +435,19 @@ print(json.dumps({"type": "user", "message": {"role": "user", "content": content
 }
 
 run_claude() {
-  local bin="${EHA_CLAUDE_BIN:-${CLAUDE_BIN:-claude}}"
+  # 同梱廃止(増分5a): claudeバイナリを実在確認しながら解決する。優先順位は
+  # resolve_claude_bin()(ready判定・login・game-mcpと同じ)と一致させる:
+  # EHA_CLAUDE_BIN(実在) > CLAUDE_BIN(実在) > 既知DIYパス(実在) > PATHのclaude。
+  # env値が存在しないパスを指していても(run.shは未配置時に将来のDIYパスを指す)、実在確認で
+  # 読み飛ばしてDIY/PATHへフォールバックするため、readinessが見る実体と食い違わない。
+  # 実在確認は resolve_claude_bin() の isfile+X_OK と一致させる(-f で実行可能ディレクトリを弾く)。
+  # DIY 既知パスは EHA_CLAUDE_INSTALL_ROOT を尊重(run.sh/claude_setup.install_root と同じ既定)。
+  local bin="" _cand
+  local _diy="${EHA_CLAUDE_INSTALL_ROOT:-/data/claude-cli}/bin/claude"
+  for _cand in "${EHA_CLAUDE_BIN:-}" "${CLAUDE_BIN:-}" "$_diy"; do
+    if [[ -n "$_cand" && -f "$_cand" && -x "$_cand" ]]; then bin="$_cand"; break; fi
+  done
+  [[ -n "$bin" ]] || bin="claude"
   local cwd="${EHA_AGENT_CWD:-${EHA_CLAUDE_CWD:-$PWD}}"
   local stdout
   local mcp_config_arg="$mcp_config"

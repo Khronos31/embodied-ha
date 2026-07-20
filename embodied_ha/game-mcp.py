@@ -313,7 +313,9 @@ def _claude_env() -> dict[str, str]:
 
 
 def _claude_bin() -> str:
-    return shutil.which("claude") or "claude"
+    # 同梱廃止(増分5a)後、claudeはPATHに無くDIY配置(/data/claude-cli/bin/claude)。
+    # ready判定・login・通常ターンと同じ resolve_claude_bin()(DIY実在>PATH)で解決する。
+    return claude_setup.resolve_claude_bin() or shutil.which("claude") or "claude"
 
 
 def _run_claude_once(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:

@@ -1148,6 +1148,8 @@ class Handler(BaseHTTPRequestHandler):
                 # OAuthコード交換後に .credentials.json を永続化しないため不可
                 # （userIDは書くがトークン本体が書かれない）。auth login はウィザード
                 # 不要・URLが1行・コード送信1秒後に .credentials.json を書く。
+                # CLAUDE_BIN は run.sh が DIY 配置先(binary_path)へ配線済み。
+                # EHA_CLAUDE_BIN も同値を継承するため、通常ターン・ready判定と同一実体を指す。
                 proc = _sp.Popen(
                     [CLAUDE_BIN, "auth", "login", "--claudeai"],
                     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,

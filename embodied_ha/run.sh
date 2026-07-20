@@ -37,7 +37,16 @@ export HA_URL="${HA_URL:-http://supervisor/core/api}"
 
 # --- Claude CLI ---
 _OPT_CONFIG_DIR=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_config_dir',''))" 2>/dev/null || echo "")
-export CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+# 同梱廃止(増分5a): claudeはWeb UIからDIY配置先(binary_path、既定 /data/claude-cli/bin/claude)へ
+# インストールされる。コンテナ内の配置先は常にこのDIYパスなので、それをCLAUDE_BINへ配線する
+# (未配置でも将来のパスを指すだけ。runtimeは resolve_claude_bin() の実在確認でreadyになってから
+#  起動するため、未配置パスを実行することはない)。resolve_claude_bin()ではなくbinary_pathを使うのは、
+# 起動時にPATH版claudeを拾って絶対パスで固定してしまう(後のDIYインストールとdesyncする)のを避けるため。
+# EHA_CLAUDE_BIN(invoke-agent.sh優先)はCLAUDE_BINを継承し、両者が食い違わないようにする。
+_CLAUDE_BIN_TARGET=$(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import claude_setup; print(claude_setup.binary_path())" 2>/dev/null || echo "/data/claude-cli/bin/claude")
+export CLAUDE_BIN="${CLAUDE_BIN:-$_CLAUDE_BIN_TARGET}"
+export EHA_CLAUDE_BIN="${EHA_CLAUDE_BIN:-$CLAUDE_BIN}"
+unset _CLAUDE_BIN_TARGET
 export EHA_TOOLS_PATH="${EHA_TOOLS_PATH:-/usr/local/bin}"
 export PATH="${EHA_TOOLS_PATH}:${PATH}"
 

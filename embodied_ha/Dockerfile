@@ -10,8 +10,8 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper
 RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad==3.2.0" \
     && python3 -c "from pysilero_vad import SileroVoiceActivityDetector; SileroVoiceActivityDetector()"
 
-# Claude CLI（node:22-slim に npm が入っているのでそのまま使う）
-RUN npm install -g @anthropic-ai/claude-code
+# Claude CLI は同梱しない（増分5a）。Web UI から DIY 配置（/data/claude-cli/bin/claude、
+# claude_setup.install() 経由）する。run.sh が CLAUDE_BIN/EHA_CLAUDE_BIN を配置先へ配線する。
 
 # スクリプト一式をコンテナに含める
 COPY . /app/
@@ -22,9 +22,9 @@ RUN chmod +x /app/run.sh /app/loop.sh /app/chat.sh \
     && ln -s /app/loops.sh   /usr/local/bin/loops \
     && ln -s /app/recall.sh  /usr/local/bin/recall
 
-# コンテナ内ではシステムの claude を使う。
-# CLAUDE_CONFIG_DIR は /data に設定するので run.sh 側のデフォルトを上書き。
-ENV CLAUDE_BIN=claude
+# CLAUDE_BIN は同梱前提の直呼び（=claude）を廃止（増分5a）。run.sh が DIY 配置先を
+# 解決して CLAUDE_BIN/EHA_CLAUDE_BIN へ配線するため、ここでは固定しない
+# （固定すると run.sh/invoke-agent.sh の DIY フォールバックを shadow してしまう）。
 ENV EHA_TOOLS_PATH=/usr/local/bin
 
 CMD ["bash", "/app/run.sh"]
