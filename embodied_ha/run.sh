@@ -141,6 +141,18 @@ mkdir -p "$EHA_ANTIGRAVITY_HOME" "$EHA_ANTIGRAVITY_BIN_DIR"
 echo "[run] Antigravity home: ${EHA_ANTIGRAVITY_HOME}"
 echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
 
+# --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
+# agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
+# （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
+#  Fable 実機レビュー 2026-07-20）。未インストール時は念のため残存リダイレクトを掃除する
+# （通常はコンテナ再作成で /etc/hosts が再生成されるため不要だが冪等・防御的に）。
+if python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import antigravity_setup; sys.exit(0 if antigravity_setup.is_installed() else 1)" 2>/dev/null; then
+    python3 "$SCRIPT_DIR/agy_update_freeze.py" add 2>&1 | sed 's/^/[run] /' \
+        || echo "[run] agy-freeze: hosts リダイレクト追加失敗（凍結なしで続行）"
+else
+    python3 "$SCRIPT_DIR/agy_update_freeze.py" remove 2>&1 | sed 's/^/[run] /' || true
+fi
+
 # --- agy 用 MCP config 生成（Antigravityが音声解析セッションで使うMCPサーバー設定）---
 python3 -c "
 import os, sys

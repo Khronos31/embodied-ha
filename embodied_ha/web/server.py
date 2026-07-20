@@ -17,6 +17,10 @@ try:
 except Exception:
     antigravity_setup = None
 try:
+    import agy_update_freeze  # type: ignore
+except Exception:
+    agy_update_freeze = None
+try:
     import codex_setup  # type: ignore
 except Exception:
     codex_setup = None
@@ -1269,6 +1273,19 @@ class Handler(BaseHTTPRequestHandler):
 
         def run_install():
             proc = None
+            # 凍結中(hosts リダイレクト有効)はバイナリ DL 元も同じ更新ホストなので、
+            # install の間だけリダイレクトを一時解除する(スクリプト取得〜バイナリ配置完了まで)。
+            # finally で agy がインストール済みなら再凍結する。⚠️この解除窓に別の agy ターンが
+            # 走ると、その bg-updater が実ホストへ到達し更新が成功しうる(凍結の破れ)。緩和は
+            # (a)install は手動・稀 (b)UI は導入済みなら install を隠す (c)agy 自身の 15 分
+            # 更新チェックスロットルで窓中に bg-updater が発火する確率が下がる、の 3 点。install
+            # エンドポイント自体はスロットルせず窓を強制もしないため、厳密化には install 中の
+            # agy 起動ブロックが別途必要(Phase 1 では許容。Fable/sol レビュー 2026-07-20)。
+            if agy_update_freeze is not None:
+                try:
+                    agy_update_freeze.remove_hosts_redirect()
+                except Exception as _e:
+                    print(f"[agy-freeze] install前のリダイレクト解除に失敗: {_e}", file=sys.stderr)
             try:
                 if antigravity_setup is None:
                     raise RuntimeError("antigravity helpers unavailable")
@@ -1303,6 +1320,14 @@ class Handler(BaseHTTPRequestHandler):
                     q.put(("error", str(e)))
             finally:
                 _stop_antigravity_process(proc)
+                # agy がインストール済みなら再凍結する(新規 install 成功時もここで初回凍結)。
+                # 失敗しても install 自体は成功扱いのままにする(fail-open)が、黙殺せずログに残す。
+                if agy_update_freeze is not None and antigravity_setup is not None:
+                    try:
+                        if antigravity_setup.is_installed():
+                            agy_update_freeze.add_hosts_redirect()
+                    except Exception as _e:
+                        print(f"[agy-freeze] install後の再凍結に失敗: {_e}", file=sys.stderr)
                 try:
                     _ANTIGRAVITY_INSTALL_LOCK.release()
                 except Exception:
@@ -2220,6 +2245,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
                     return
                 result = antigravity_setup.uninstall()
+                # 凍結解除: agy を消したら更新ホストの hosts リダイレクトも撤去する。
+                if agy_update_freeze is not None:
+                    try:
+                        agy_update_freeze.remove_hosts_redirect()
+                    except Exception as _e:
+                        print(f"[agy-freeze] uninstall後のリダイレクト撤去に失敗: {_e}", file=sys.stderr)
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
@@ -2538,6 +2569,14 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.makedirs(LOG_DIR, exist_ok=True)
+    # agy 自動更新の凍結状態を起動時に再確立する(増分6・Phase 1)。watchdog が web だけを
+    # 再起動した場合や、install 中に web が異常終了して finally の再凍結が走らなかった場合でも、
+    # ここで agy インストール状態に hosts を一致させ、凍結が解けたままになるのを防ぐ。
+    if agy_update_freeze is not None and antigravity_setup is not None:
+        try:
+            agy_update_freeze.reconcile(antigravity_setup.is_installed())
+        except Exception as _e:
+            print(f"[agy-freeze] 起動時の凍結状態再確立に失敗: {_e}", file=sys.stderr)
     threading.Thread(target=file_watcher, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
