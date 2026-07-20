@@ -31,16 +31,19 @@ class SetupGuardTests(unittest.TestCase):
         ("POST", "/api/setup/claude/install"),
         ("POST", "/api/setup/claude/uninstall"),
         ("POST", "/api/setup/claude/clear-auth"),
+        ("POST", "/api/setup/claude/logout"),
         ("GET", "/api/setup/antigravity/install"),
         ("GET", "/api/setup/antigravity/login"),
         ("POST", "/api/setup/antigravity/input"),
         ("POST", "/api/setup/antigravity/login-code"),
         ("POST", "/api/setup/antigravity/uninstall"),
         ("POST", "/api/setup/antigravity/clear-auth"),
+        ("POST", "/api/setup/antigravity/logout"),
         ("POST", "/api/setup/codex/install"),
         ("POST", "/api/setup/codex/login"),
         ("POST", "/api/setup/codex/uninstall"),
         ("POST", "/api/setup/codex/clear-auth"),
+        ("POST", "/api/setup/codex/logout"),
     )
 
     def setUp(self):

@@ -382,6 +382,11 @@ MQTT_USER = os.environ.get("MQTT_USER", "")
 MQTT_PASS = os.environ.get("MQTT_PASS", "")
 HA_URL    = os.environ["HA_URL"]
 HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+_SELF_RESTART_DELAY_SECONDS = 0.5
+_SELF_RESTART_MAX_ATTEMPTS = 3
+_SELF_RESTART_RETRY_DELAY_SECONDS = 1.0
+_self_restart_lock = threading.Lock()
+_self_restart_scheduled = False
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
@@ -403,12 +408,14 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/login", "/api/setup/login-code",
     "/api/setup/claude/login", "/api/setup/claude/login-code",
     "/api/setup/claude/install", "/api/setup/claude/uninstall",
-    "/api/setup/claude/clear-auth",
+    "/api/setup/claude/clear-auth", "/api/setup/claude/logout",
     "/api/setup/antigravity/install", "/api/setup/antigravity/login",
     "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
     "/api/setup/antigravity/uninstall", "/api/setup/antigravity/clear-auth",
+    "/api/setup/antigravity/logout",
     "/api/setup/codex/install", "/api/setup/codex/login",
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
+    "/api/setup/codex/logout",
 })
 _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
 
@@ -476,6 +483,93 @@ def _acquire_antigravity_destructive_locks() -> bool:
 def _release_antigravity_destructive_locks() -> None:
     _ANTIGRAVITY_LOGIN_SESSION_LOCK.release()
     _ANTIGRAVITY_INSTALL_LOCK.release()
+
+
+def _request_addon_self_restart() -> bool:
+    """Ask Supervisor to restart this add-on without exposing its token.
+
+    成功で True、リトライ全滅で False を返すベストエフォート。Request 生成も
+    retry の try 内に置くため、不正な EHA_SUPERVISOR_URL 等でも通常は False を返す
+    (latch解放の最終的な保証は呼び出し元 request_later の finally が担う)。
+    """
+    supervisor_base = os.environ.get("EHA_SUPERVISOR_URL", "http://supervisor").rstrip("/")
+    for attempt in range(_SELF_RESTART_MAX_ATTEMPTS):
+        try:
+            request = urllib.request.Request(
+                f"{supervisor_base}/addons/self/restart",
+                headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10):
+                return True
+        except Exception:
+            if attempt < _SELF_RESTART_MAX_ATTEMPTS - 1:
+                time.sleep(_SELF_RESTART_RETRY_DELAY_SECONDS)
+    print("[server] self-restart request failed", flush=True)
+    return False
+
+
+def _schedule_self_restart() -> None:
+    """Request a restart after the logout response has had time to flush."""
+    def request_later() -> None:
+        # 成功時のみ latch を True のまま残す。それ以外の全経路(False返し・sleep/helper/
+        # print の例外・BaseException)で latch を戻し、以後の再ログアウトで再試行できるように
+        # する。latch解放は必ず finally で行い、内側のログ出力失敗より優先させる(airtight)。
+        global _self_restart_scheduled
+        ok = False
+        try:
+            try:
+                time.sleep(_SELF_RESTART_DELAY_SECONDS)
+                ok = _request_addon_self_restart()
+            except Exception:
+                print("[server] self-restart worker failed", flush=True)
+        finally:
+            if not ok:
+                with _self_restart_lock:
+                    _self_restart_scheduled = False
+
+    global _self_restart_scheduled
+    with _self_restart_lock:
+        if _self_restart_scheduled:
+            return
+        _self_restart_scheduled = True
+        try:
+            threading.Thread(target=request_later, daemon=True).start()
+        except Exception:
+            _self_restart_scheduled = False
+            raise
+
+
+def _selected_harness_ready() -> bool:
+    """Return whether the selected harness would boot after restart, without writing state.
+
+    Read-only mirror of daemon.harness_ready().  The daemon remains the source
+    of truth; unlike its legacy migration path, the web server never writes a
+    grandfathered Claude selection flag.
+    """
+    selection_state, selected = harness_state.read_selection()
+    if selection_state == "missing":
+        selected = "claude" if claude_setup.is_authenticated() else None
+    elif selection_state != "valid":
+        return False
+    if selected == "claude":
+        return (
+            claude_setup.is_authenticated()
+            and claude_setup.resolve_claude_bin() is not None
+        )
+    if selected == "codex":
+        return (
+            codex_setup is not None
+            and codex_setup.is_installed()
+            and codex_setup.is_authenticated()
+        )
+    if selected == "agy":
+        return (
+            antigravity_setup is not None
+            and antigravity_setup.is_installed()
+            and antigravity_setup.is_authenticated()
+        )
+    return False
 
 
 def is_authenticated() -> bool:
@@ -1947,6 +2041,81 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _serve_setup_logout(self, harness: str) -> None:
+        """Clear one harness's credentials, then restart into setup-waiting state."""
+        if harness == "claude":
+            helpers = claude_setup
+            def acquire_lock():
+                return _CLAUDE_MUTATION_LOCK.acquire(blocking=False)
+            release_lock = _CLAUDE_MUTATION_LOCK.release
+            busy_error = "Claude setup is busy"
+            unavailable_error = "Claude helpers unavailable"
+        elif harness == "codex":
+            helpers = codex_setup
+            def acquire_lock():
+                return _acquire_codex_mutation("logout")
+            release_lock = _release_codex_mutation
+            busy_error = _codex_busy_error
+            unavailable_error = "Codex helpers unavailable"
+        elif harness == "agy":
+            helpers = antigravity_setup
+            acquire_lock = _acquire_antigravity_destructive_locks
+            release_lock = _release_antigravity_destructive_locks
+            busy_error = "Antigravity setup is busy"
+            unavailable_error = "antigravity helpers unavailable"
+        else:
+            self.send_json({"error": "unknown harness"}, 500)
+            return
+
+        if helpers is None:
+            self.send_json({"error": unavailable_error}, 500)
+            return
+        if not acquire_lock():
+            self.send_json({"error": busy_error() if callable(busy_error) else busy_error}, 409)
+            return
+        try:
+            try:
+                result = helpers.clear_auth()
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            if result.get("errors"):
+                self.send_json({"ok": False, **result}, 500)
+                return
+            if _selected_harness_ready():
+                # claudeで認証が残る=APIキー(アドオン設定 claude_api_key)保持のときだけ
+                # 構成タブ案内を出す。APIキーが無いのに非選択claudeをlogoutした等では
+                # 誤誘導になるため、汎用の「稼働中ハーネス不変」文言を使う。
+                message = (
+                    "サブスクからログアウトしました。APIキーは無効化されません。"
+                    "構成タブから削除してください。"
+                    if harness == "claude" and claude_setup.is_authenticated()
+                    else "ログアウトしました。稼働中のハーネスに変更がないため再起動しません。"
+                )
+                self.send_json({
+                    "ok": True,
+                    "restarting": False,
+                    "message": message,
+                    **result,
+                }, 200)
+                return
+            _schedule_self_restart()
+            message = (
+                "サブスクからログアウトしました。アドオンを再起動します。"
+                "再起動後はセットアップ待ちになります。"
+                if harness == "claude"
+                else "ログアウトしました。アドオンを再起動します。"
+                "再起動後はセットアップ待ちになります。"
+            )
+            self.send_json({
+                "ok": True,
+                "restarting": True,
+                "message": message,
+                **result,
+            }, 200)
+        finally:
+            release_lock()
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
@@ -2029,6 +2198,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
             finally:
                 _CLAUDE_MUTATION_LOCK.release()
+        elif path == "/api/setup/claude/logout":
+            self._serve_setup_logout("claude")
         elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -2066,6 +2237,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
             finally:
                 _release_antigravity_destructive_locks()
+        elif path == "/api/setup/antigravity/logout":
+            self._serve_setup_logout("agy")
         elif path == "/api/setup/codex/install":
             self._serve_setup_codex_install()
         elif path == "/api/setup/codex/login":
@@ -2098,6 +2271,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
             finally:
                 _release_codex_mutation()
+        elif path == "/api/setup/codex/logout":
+            self._serve_setup_logout("codex")
         elif path == "/api/send":
             length = int(self.headers.get("Content-Length", 0))
             try:
