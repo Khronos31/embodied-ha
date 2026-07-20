@@ -298,6 +298,19 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertIn("--allowed-mcp-tools", cmd)
         self.assertIn("--mcp-servers", cmd)
 
+    def test_command_without_sound_file_still_sets_agent_site_chat(self):
+        # 案A: chat は --mcp-servers を常に付けるため、通常ターンでも --agent-site chat を
+        # 付ける(agy選択時に invoke-agent.sh run_agy が --agent-site 必須で落ちないように)。
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+        )
+
+        self.assertNotIn("--sound-file", cmd)
+        self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
+        self.assertIn("--mcp-servers", cmd)
+
     def test_command_rejects_sound_file_with_content_json(self):
         # sol reviewの指摘(2026-07-17): run_agy()は--content-jsonで即死するため、
         # 呼び出し側の不備でsound_file/content_json_pathが両方渡っても

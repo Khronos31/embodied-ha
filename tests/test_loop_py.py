@@ -258,6 +258,24 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertNotIn("--content-json", cmd)
         self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
 
+    def test_command_without_sound_file_sets_agent_site_for_agy(self):
+        # 案A: 通常ターン(非sound_file)でも --mcp-servers があれば --agent-site を付ける。
+        # agy選択時に invoke-agent.sh run_agy が --agent-site 必須で落ちるのを防ぐ
+        # ([[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
+        cmd = loop.build_invoke_agent_loop_command(
+            script_dir=str(ROOT / "embodied_ha"),
+            mode="observe",
+            model_tier="default",
+            allowed_tools="mcp__sensors__get_sensors",
+            mcp_servers=["sensors"],
+            system_prompt="system",
+            user_prompt="observe prompt",
+            response_schema=None,
+        )
+        self.assertNotIn("--sound-file", cmd)
+        self.assertEqual(cmd[cmd.index("--agent-site") + 1], "observe")
+        self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors")
+
     def test_invoke_loop_claude_logs_returncode_and_stderr_on_failure(self):
         class Result:
             def __init__(self, stdout="", stderr="", returncode=0):

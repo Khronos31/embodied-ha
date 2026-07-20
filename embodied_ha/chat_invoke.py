@@ -436,6 +436,12 @@ def build_invoke_agent_chat_command(
     ]
     if sound_file:
         cmd += ["--sound-file", sound_file, "--agent-site", "chat"]
+    else:
+        # chat は下で --mcp-servers を常に付けるため、agy 選択時に run_agy が
+        # --agent-site 必須で落ちないよう、通常ターンでも --agent-site chat を常に付ける
+        # (sound_file 経路は上で付与済み)。claude/codex は無視するため3ハーネス安全
+        # (案A・[[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
+        cmd += ["--agent-site", "chat"]
     if allowed_builtins and not sound_file:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:

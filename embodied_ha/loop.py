@@ -189,6 +189,12 @@ def build_invoke_agent_loop_command(
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
     if mcp_servers:
+        # invoke-agent.sh の run_agy は --mcp-servers があると --agent-site を必須にする
+        # (agyのMCP config生成にサイトが要る)。sound_file 経路は上で付与済みだが、
+        # 通常ターン(非sound_file)でも agy 選択時に落ちないよう常に付ける。claude/codex は
+        # --agent-site を無視するため3ハーネス安全(案A・[[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
+        if not sound_file:
+            cmd += ["--agent-site", mode]
         cmd += ["--mcp-servers", " ".join(mcp_servers)]
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
