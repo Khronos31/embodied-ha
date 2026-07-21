@@ -25,12 +25,10 @@ panel_icon: mdi:robot-outline
 options:
   resident_name: "ユーザー"
   claude_api_key: ""
-  claude_config_dir: ""
   claude_cwd: ""
   autonomous_control: false
 schema:
   resident_name: str
   claude_api_key: str?
-  claude_config_dir: str?
   claude_cwd: str?
   autonomous_control: bool

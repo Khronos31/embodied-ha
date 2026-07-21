@@ -36,7 +36,6 @@ unset _OPT_KEY
 export HA_URL="${HA_URL:-http://supervisor/core/api}"
 
 # --- Claude CLI ---
-_OPT_CONFIG_DIR=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_config_dir',''))" 2>/dev/null || echo "")
 # 同梱廃止(増分5a): claudeはWeb UIからDIY配置先(binary_path、既定 /data/claude-cli/bin/claude)へ
 # インストールされる。コンテナ内の配置先は常にこのDIYパスなので、それをCLAUDE_BINへ配線する
 # (未配置でも将来のパスを指すだけ。runtimeは resolve_claude_bin() の実在確認でreadyになってから
@@ -200,16 +199,15 @@ else:
 " 2>&1 || true
 
 # --- Claude 設定ディレクトリ ---
-# 解決は claude_setup.resolve_config_dir に一本化(判断事項10改訂+グランドファザー)。
-# option指定 > 旧既定(実体あれば継続=既存あかね無移動) > 新既定 /data/claude-home。
+# 解決は claude_setup.resolve_config_dir に一本化(§13.9: claude_config_dirオプション撤去)。
+# 旧既定(実体あれば継続=既存あかね無移動) > 新既定 /data/claude-home の2段。ユーザーは変更不可。
 export CLAUDE_CONFIG_DIR
 CLAUDE_CONFIG_DIR=$(SCRIPT_DIR="$SCRIPT_DIR" python3 -c "
 import os, sys
 sys.path.insert(0, os.environ.get('SCRIPT_DIR', '/app'))
 import claude_setup
-print(claude_setup.resolve_config_dir(sys.argv[1], sys.argv[2]))
-" "$_OPT_CONFIG_DIR" "$EHA_DATA_DIR") || CLAUDE_CONFIG_DIR="${EHA_DATA_DIR}/.claude"
-unset _OPT_CONFIG_DIR
+print(claude_setup.resolve_config_dir(sys.argv[1]))
+" "$EHA_DATA_DIR") || CLAUDE_CONFIG_DIR="${EHA_DATA_DIR}/.claude"
 echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 
 # --- Claude の作業ディレクトリ ---

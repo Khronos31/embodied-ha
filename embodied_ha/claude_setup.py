@@ -41,15 +41,15 @@ def _has_config_substance(path: str) -> bool:
     return os.path.isdir(os.path.join(path, "projects"))
 
 
-def resolve_config_dir(option: str, data_dir: str) -> str:
-    """Resolve option, grandfathered legacy config, then the new default.
+def resolve_config_dir(data_dir: str) -> str:
+    """Resolve the grandfathered legacy config dir, else the new default (2-tier).
 
-    Existing instances keep the former ``<data_dir>/.claude`` location only
-    when it contains Claude authentication or persisted project state.
+    §13.9: the former user-facing ``claude_config_dir`` override was removed — the
+    memory/credential location is not user-configurable (over-trust設計の是正).
+    Existing instances keep the former ``<data_dir>/.claude`` location only when it
+    contains Claude authentication or persisted project state; everyone else gets the
+    fixed new default ``/data/claude-home``.
     """
-    option = option.strip()
-    if option:
-        return option
     legacy_dir = os.path.join(data_dir, ".claude")
     if _has_config_substance(legacy_dir):
         return legacy_dir
