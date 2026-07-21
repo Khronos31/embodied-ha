@@ -2174,6 +2174,24 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             release_lock()
 
+    def _uninstall_blocked_for_effective(self, harness: str) -> bool:
+        """§13.2: refuse to uninstall the harness that is actually running the agent.
+        Compares against the *effective* harness (not merely the selected flag) so a
+        grandfathered instance (flag missing → effective=claude) can't uninstall the
+        Claude CLI out from under the live runtime. Returns True (and sends 409) when
+        blocked; False when the target is a non-running harness and may be removed."""
+        try:
+            effective = harness_status.snapshot().get("effective")
+        except Exception:
+            effective = None
+        if effective == harness:
+            self.send_json({
+                "error": "cannot uninstall the harness the agent is currently running on",
+                "effective": effective,
+            }, 409)
+            return True
+        return False
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
@@ -2261,6 +2279,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/claude/install":
             self._serve_setup_claude_install()
         elif path == "/api/setup/claude/uninstall":
+            if self._uninstall_blocked_for_effective("claude"):
+                return
             if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
                 self.send_json({"error": "Claude setup is busy"}, 409)
                 return
@@ -2298,6 +2318,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/uninstall":
+            if self._uninstall_blocked_for_effective("agy"):
+                return
             if not _acquire_antigravity_destructive_locks():
                 self.send_json({"error": "Antigravity setup is busy"}, 409)
                 return
@@ -2338,6 +2360,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/codex/login":
             self._serve_setup_codex_login()
         elif path == "/api/setup/codex/uninstall":
+            if self._uninstall_blocked_for_effective("codex"):
+                return
             if not _acquire_codex_mutation("uninstall"):
                 self.send_json({"error": _codex_busy_error()}, 409)
                 return

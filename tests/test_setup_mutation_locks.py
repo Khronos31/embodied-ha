@@ -182,7 +182,15 @@ class SetupMutationLockTests(unittest.TestCase):
             uninstall=mock.Mock(return_value={"removed_files": []}),
             clear_auth=mock.Mock(return_value={"removed_files": []}),
         )
-        with mock.patch.object(server, "claude_setup", fake):
+        # §13.2: claude uninstall is refused while claude is the effective harness, which
+        # would pre-empt the lock 409 under test; select codex so the lock path is exercised
+        # ([[embodied-ha-step4-uninstall-guard-test-contract-change]]).
+        _flag_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(_flag_dir.cleanup)
+        _flag = os.path.join(_flag_dir.name, "selected_harness")
+        Path(_flag).write_text("codex\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": _flag}, clear=False), \
+             mock.patch.object(server, "claude_setup", fake):
             self.assertTrue(server._CLAUDE_MUTATION_LOCK.acquire(blocking=False))
             try:
                 for endpoint, error in (

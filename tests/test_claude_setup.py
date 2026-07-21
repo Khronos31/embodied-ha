@@ -436,6 +436,10 @@ class ClaudeSetupEndpointTests(unittest.TestCase):
                     break
                 time.sleep(0.01)
             self.assertFalse(server._CLAUDE_MUTATION_LOCK.locked())
+            # §13.2: claude uninstall is refused while claude is the effective harness;
+            # select codex so this test still exercises the dispatch path
+            # ([[embodied-ha-step4-uninstall-guard-test-contract-change]]).
+            Path(self.harness_flag_dir, "selected_harness").write_text("codex\n", encoding="utf-8")
             self.assertEqual(
                 self._post_json("/api/setup/claude/uninstall"),
                 {"ok": True, "removed_files": ["/tmp/claude-cli"]},
