@@ -31,6 +31,7 @@ import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import export_manifest  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
@@ -423,6 +424,11 @@ _SELF_RESTART_MAX_ATTEMPTS = 3
 _SELF_RESTART_RETRY_DELAY_SECONDS = 1.0
 _self_restart_lock = threading.Lock()
 _self_restart_scheduled = False
+# Bound concurrent export bundle builds so parallel requests can't exhaust disk/memory
+# (each holds up to a MAX_TOTAL_BYTES temp file). Small request-body cap for the
+# categories JSON (sol export-review Med5).
+_export_semaphore = threading.Semaphore(2)
+_MAX_EXPORT_REQUEST_BODY = 64 * 1024
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
@@ -453,6 +459,7 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
     "/api/setup/agent-prefs",
+    "/api/setup/export",
 })
 # Paths in _SETUP_MUTATION_PATHS that are a *read* on GET (guarded only on their
 # mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
@@ -2175,6 +2182,56 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             release_lock()
 
+    def _serve_setup_export(self) -> None:
+        """Build a category-selected export bundle and stream it as a sensitive download
+        (Step4増分3). ingress-guarded (mutation path); no-store so the bundle is not
+        cached by browser/proxy (sol Med14). Bounded concurrency + request-body size
+        so parallel exports can't exhaust disk/memory (sol Med5). Streams from an
+        already-unlinked temp fd — no on-disk name to race (sol H3)."""
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            self.send_json({"error": "invalid Content-Length"}, 400)
+            return
+        if length < 0 or length > _MAX_EXPORT_REQUEST_BODY:
+            self.send_json({"error": "request body too large"}, 400)
+            return
+        if not _export_semaphore.acquire(blocking=False):
+            self.send_json({"error": "export is busy; try again"}, 429)
+            return
+        try:
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+                categories = body.get("categories") if isinstance(body, dict) else None
+                bundle, _manifest = export_manifest.build_bundle_to_tempfile(categories)
+            except export_manifest.ExportError as e:
+                self.send_json({"error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            try:
+                size = bundle.seek(0, os.SEEK_END)
+                bundle.seek(0)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", 'attachment; filename="embodied-ha-export.tar.gz"')
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store, private")
+                self.send_header("Pragma", "no-cache")
+                self.end_headers()
+                while True:
+                    chunk = bundle.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except Exception:
+                pass
+            finally:
+                bundle.close()
+        finally:
+            _export_semaphore.release()
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
@@ -2259,6 +2316,8 @@ class Handler(BaseHTTPRequestHandler):
                 "message": "設定を保存しました。反映のため再起動します。",
                 "default_tier": updated.get("default_tier", {}),
             })
+        elif path == "/api/setup/export":
+            self._serve_setup_export()
         elif path == "/api/setup/claude/install":
             self._serve_setup_claude_install()
         elif path == "/api/setup/claude/uninstall":
