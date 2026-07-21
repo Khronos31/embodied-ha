@@ -249,8 +249,17 @@ case "$harness:$logical_model" in
     model="${EHA_AGY_MODEL_LITE:-Gemini 3.5 Flash (Low)}"
     ;;
 esac
-if [[ "$harness" == "agy" && -n "$sound_file" && "$harness_was_agy" != "true" ]]; then
-  model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
+if [[ "$harness" == "agy" && -n "$sound_file" ]]; then
+  # 音声モデルの優先順位(sol Med3): (1)明示された EHA_SESSION_MODEL を最優先。深聴き音声
+  # セッション(listen_queue)はこれを音声既定Highに設定するため、選択ハーネスが agy で default
+  # ティア prefs(EHA_AGY_MODEL_DEFAULT)を Low にしても STT には波及しない。(2)EHA_SESSION_MODEL
+  # 未設定かつ元々 agy 選択でない(あかね等)なら音声専用既定へ。(3)元々 agy 選択かつ session
+  # モデル未指定なら default ティアのまま(既存の意図的挙動を保持)。
+  if [[ -n "${EHA_SESSION_MODEL:-}" ]]; then
+    model="$EHA_SESSION_MODEL"
+  elif [[ "$harness_was_agy" != "true" ]]; then
+    model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
+  fi
 fi
 
 extract_result_json() {

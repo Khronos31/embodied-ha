@@ -702,6 +702,43 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn("command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です", prompt)
             self.assertRegex(prompt, r"@\S+\.webm")
 
+    def test_sound_file_uses_session_model_over_default_tier_for_agy(self):
+        # sol Med3: agy 選択でも深聴き(EHA_SESSION_MODEL 指定)は default ティア prefs より
+        # session モデルを優先し、STT 品質を prefs で劣化させない。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            agy = tmpdir / "agy"
+            wav_path = tmpdir / "input.wav"
+            write_silent_wav(wav_path)
+            write_executable(
+                agy,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:]}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+            result = self.run_wrapper(
+                ["--model", "lite", "--sound-file", wav_path.as_posix(), "listen"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
+                    "EHA_AGY_MODEL_DEFAULT": "Gemini 3.5 Flash (Low)",  # prefs 相当の低モデル
+                    "EHA_SESSION_MODEL": "Gemini 3.5 Flash (High)",     # 深聴きが指定する音声モデル
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (High)")
+
     def test_sound_file_missing_dies(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

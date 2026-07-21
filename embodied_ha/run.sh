@@ -70,7 +70,22 @@ else
     # 残すと valid フラグ優先が崩れる(sol 1a-review Med3)ため、明示的に外す。
     unset EHA_AGENT_HARNESS
 fi
-unset _SELECTED_HARNESS
+
+# 選択ハーネス(未選択時は claude 既定)の default ティア model/effort を agent_prefs.json から
+# EHA_<H>_MODEL_DEFAULT / EFFORT へ配線(Step4増分2)。prefs 不在/未設定なら何も export せず、
+# invoke-agent.sh の組み込み既定に委ねる(prefs の無いあかねは既定 byte 不変)。agy モデル名は
+# 空白を含むため IFS=tab で読む。process substitution で while ループを現在シェルに置き export を残す。
+_EFFECTIVE_HARNESS="${_SELECTED_HARNESS:-claude}"
+while IFS=$'\t' read -r _pk _pv; do
+    # 既知の5キーだけを export(不正レコード注入を fail-soft で無視・sol High の二層目防御。
+    # 一層目は agent_prefs 側の制御文字拒否)。
+    case "$_pk" in
+        EHA_CLAUDE_MODEL_DEFAULT|EHA_CLAUDE_EFFORT_DEFAULT|EHA_CODEX_MODEL_DEFAULT|EHA_CODEX_REASONING_EFFORT_DEFAULT|EHA_AGY_MODEL_DEFAULT)
+            export "$_pk=$_pv" ;;
+        *) : ;;
+    esac
+done < <(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import agent_prefs; [print(f'{k}\t{v}') for k, v in agent_prefs.env_overrides('${_EFFECTIVE_HARNESS}').items()]" 2>/dev/null || true)
+unset _SELECTED_HARNESS _EFFECTIVE_HARNESS _pk _pv
 
 # --- PulseAudio（audio: true で注入されるソケット）---
 # HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。

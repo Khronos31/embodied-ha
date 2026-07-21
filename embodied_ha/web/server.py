@@ -30,6 +30,7 @@ except Exception:
 import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
@@ -451,7 +452,12 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/codex/install", "/api/setup/codex/login",
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
+    "/api/setup/agent-prefs",
 })
+# Paths in _SETUP_MUTATION_PATHS that are a *read* on GET (guarded only on their
+# mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
+# reads while POST stays ingress-guarded (sol Med).
+_SETUP_GET_READS = frozenset({"/api/setup/agent-prefs"})
 _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
 
 
@@ -1086,9 +1092,16 @@ class Handler(BaseHTTPRequestHandler):
             path = path[len(base):]
         return path or "/"
 
-    def _block_loopback_setup_mutation(self, path: str) -> bool:
-        """Send the common ingress-only rejection for guarded setup routes."""
+    def _block_loopback_setup_mutation(self, path: str, method: str = "POST") -> bool:
+        """Send the common ingress-only rejection for guarded setup routes.
+
+        Some routes (install/login SSE) mutate via GET and must stay guarded, so the
+        default guards every method. A path in _SETUP_GET_READS is a read on GET only
+        (e.g. the agent-prefs read), so it is exempt for GET but still guarded on POST
+        (its mutating verb). sol Med: guard is (method, path)-aware, not path-only."""
         if path not in _SETUP_MUTATION_PATHS or setup_guard(self.client_address):
+            return False
+        if method == "GET" and path in _SETUP_GET_READS:
             return False
         self.send_json({"error": _SETUP_GUARD_ERROR}, 403)
         return True
@@ -1830,7 +1843,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
 
-        if self._block_loopback_setup_mutation(path):
+        if self._block_loopback_setup_mutation(path, "GET"):
             return
 
         if path in ("/", ""):
@@ -1948,6 +1961,10 @@ class Handler(BaseHTTPRequestHandler):
             # 集約 readiness(Step4増分1a)。フロント gate はこれ1本でピッカー/再開/通常モードを
             # 分岐できる。読み取りのみ・公開schema固定(path/token/version を載せない・sol L11)。
             self.send_json(harness_status.snapshot())
+        elif path == "/api/setup/agent-prefs":
+            # default ティアの model/effort 現在値(Step4増分2)。UI 初期表示用・読み取りのみ・
+            # 機密なし(model/effort 選択のみ)。
+            self.send_json({"default_tier": agent_prefs.load().get("default_tier", {})})
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
@@ -2212,6 +2229,36 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/agent-prefs":
+            # default ティアの model/effort を保存し、自己再起動で反映する(Step4増分2・
+            # 保存後self-restart契約 sol Med6)。run.sh が起動時に agent_prefs から env を配線するため、
+            # 変更は再起動で効く。
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(body, dict):
+                    self.send_json({"error": "body must be a JSON object"}, 400)
+                    return
+                harness = body.get("harness")
+                model = body.get("model")
+                effort = body.get("effort")
+                if model is None and effort is None:
+                    self.send_json({"error": "model or effort is required"}, 400)
+                    return
+                updated = agent_prefs.update_default_tier(harness, model=model, effort=effort)
+            except ValueError as e:
+                self.send_json({"error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            _schedule_self_restart()
+            self.send_json({
+                "ok": True,
+                "restarting": True,
+                "message": "設定を保存しました。反映のため再起動します。",
+                "default_tier": updated.get("default_tier", {}),
+            })
         elif path == "/api/setup/claude/install":
             self._serve_setup_claude_install()
         elif path == "/api/setup/claude/uninstall":
