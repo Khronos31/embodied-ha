@@ -882,12 +882,15 @@
                 <span>未インストールのものは選択後にダウンロード→ログインへ進みます。</span>
             </div>
 
-            <!-- 選択後の進行状況表示領域 -->
-            <div id="harness-picker-status" hidden></div>
-            <pre id="harness-picker-log" hidden></pre>
-            <div id="harness-auth-code-row" hidden>
-                <input type="text" id="harness-auth-code" class="setup-input" placeholder="OAuth認証コードを入力..." autocomplete="off">
-                <button type="button" id="harness-auth-code-submit" class="setup-send-btn">送信</button>
+            <!-- 選択後の進行状況・認証表示領域 -->
+            <div id="harness-picker-progress" class="setup-choices" style="margin-top: 16px;" hidden>
+                <div id="harness-auth-url" hidden></div>
+                <div id="harness-auth-code-display" hidden></div>
+                <div id="harness-auth-code-row" class="setup-input-row" hidden>
+                    <input type="text" id="harness-auth-code" class="setup-input" placeholder="OAuth認証コードを入力..." autocomplete="off">
+                    <button type="button" id="harness-auth-code-submit" class="setup-send-btn">送信</button>
+                </div>
+                <div id="harness-picker-status" class="form-hint" hidden></div>
             </div>
         </div>
     </div>

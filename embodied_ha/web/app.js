@@ -1079,21 +1079,78 @@ async function fetchOverview() {
     return res.json();
 }
 
-function harnessSetStatus(text) {
-    const el = document.getElementById('harness-picker-status');
-    if (el) { el.hidden = false; el.textContent = text; }
+function harnessShowProgress() {
+    const p = document.getElementById('harness-picker-progress');
+    if (p) p.hidden = false;
 }
 
-function harnessAppendLog(text) {
-    const el = document.getElementById('harness-picker-log');
+function harnessSetStatus(text, kind) {
+    harnessShowProgress();
+    const el = document.getElementById('harness-picker-status');
+    if (el) { el.hidden = false; el.textContent = text; el.className = 'form-hint' + (kind ? ' ' + kind : ''); }
+}
+
+// 認証UI(URLボタン/コード表示/コード入力)を初期状態に戻す。
+function harnessResetAuthUi() {
+    const url = document.getElementById('harness-auth-url');
+    const disp = document.getElementById('harness-auth-code-display');
+    const row = document.getElementById('harness-auth-code-row');
+    if (url) { url.hidden = true; url.innerHTML = ''; }
+    if (disp) { disp.hidden = true; disp.textContent = ''; }
+    if (row) { row.hidden = true; }
+}
+
+function harnessShowAuthUrl(url) {
+    const el = document.getElementById('harness-auth-url');
     if (!el) return;
     el.hidden = false;
-    el.textContent += (el.textContent ? '\n' : '') + text;
-    el.scrollTop = el.scrollHeight;
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    a.className = 'setup-choice-btn';
+    a.style.cssText = 'text-decoration:none;text-align:center;display:flex;justify-content:center;margin-bottom:10px;';
+    a.textContent = '🔗 認証ページを開く';
+    el.innerHTML = '';
+    el.appendChild(a);
+}
+
+// codex: 端末に貼るコードをこちらが表示する(貼り戻し無し)。コピーボタン付き。
+function harnessShowCodeDisplay(code) {
+    const disp = document.getElementById('harness-auth-code-display');
+    if (!disp) return;
+    disp.hidden = false;
+    disp.innerHTML = '';
+    disp.style.display = 'flex';
+    disp.style.alignItems = 'center';
+    disp.style.justifyContent = 'space-between';
+    disp.style.gap = '12px';
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'harness-code-value';
+    codeSpan.textContent = code;
+    codeSpan.style.flex = '1';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'setup-send-btn';
+    btn.textContent = 'コピー';
+    btn.onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(code);
+            btn.textContent = 'コピーしました';
+            setTimeout(() => { btn.textContent = 'コピー'; }, 1500);
+        } catch (_) {
+            // クリップボード不可の環境ではコードを選択状態にする(手動コピー用)。
+            const range = document.createRange();
+            range.selectNodeContents(codeSpan);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    };
+    disp.appendChild(codeSpan);
+    disp.appendChild(btn);
 }
 
 function harnessFail(text) {
-    harnessSetStatus('⚠ ' + text);
+    harnessSetStatus('⚠ ' + text, 'error');
     document.querySelectorAll('.harness-select-btn').forEach(b => { b.disabled = false; });
     document.querySelectorAll('.harness-card').forEach(c => c.classList.remove('harness-card-dimmed'));
 }
@@ -1136,37 +1193,47 @@ async function harnessStreamSSE(method, url, body, handlers) {
 
 function harnessInstall(harness) {
     const ep = HARNESS_ENDPOINTS[harness].install;
-    harnessSetStatus('ダウンロード / インストール中…');
+    harnessSetStatus('ダウンロード / インストール中… ⏳');
     return new Promise((resolve) => {
         harnessStreamSSE(ep.method, ep.url, null, {
-            onLine: (p) => { if (p && p.text) harnessAppendLog(p.text); },
+            onLine: () => { /* 生ログは出さない(ターミナル廃止)。状態表示のみ */ },
             onDone: () => resolve(true),
-            onError: (msg) => { harnessAppendLog('エラー: ' + msg); resolve(false); },
+            onError: () => resolve(false),
         });
     });
 }
 
-// claude/agy: OAuth-style login streams a URL; user opens it and pastes back a code.
-// codex: device-auth streams URL+code; user completes on the device page (no code submit).
+// 認証フローは2種類:
+//  claude/agy: 認証ページを開いてログイン→ブラウザに出たコードをこちらの入力欄に貼り付け。
+//  codex     : URLとコードをこちらが表示→ユーザーがブラウザ側でそのコードを入力(貼り戻し無し)。
 function harnessLogin(harness) {
     const ep = HARNESS_ENDPOINTS[harness].login;
-    harnessSetStatus('ログインフローを開始しています…');
+    const usesCodeInput = !!HARNESS_ENDPOINTS[harness].code; // claude/agy
+    harnessSetStatus('ログインの準備をしています… ⏳');
     let sawUrl = false;
+    let shownCode = false;
     return new Promise((resolve) => {
         harnessStreamSSE(ep.method, ep.url, null, {
             onLine: (p) => {
                 const text = p && p.text ? p.text : '';
                 if (!text) return;
-                const m = text.match(/https?:\/\/\S+/);
-                if (m && !sawUrl) {
+                const um = text.match(/https?:\/\/\S+/);
+                if (um && !sawUrl) {
                     sawUrl = true;
-                    harnessSetStatus('下記URLをブラウザで開いてログインしてください:');
-                    harnessAppendLog(m[0]);
-                    if (HARNESS_ENDPOINTS[harness].code) {
+                    harnessShowAuthUrl(um[0]);
+                    if (usesCodeInput) {
+                        harnessSetStatus('認証ページを開いてログインし、表示されたコードを下に貼り付けてください。');
                         harnessShowCodeInput(harness);
                     }
-                } else {
-                    harnessAppendLog(text);
+                }
+                if (!usesCodeInput && !shownCode) {
+                    // codex: device コード(例 ABCD-1234)を抽出して表示する。
+                    const cm = text.match(/\b[A-Z0-9]{4,8}-[A-Z0-9]{4,8}\b/);
+                    if (cm) {
+                        shownCode = true;
+                        harnessShowCodeDisplay(cm[0]);
+                        harnessSetStatus('認証ページを開き、このコードを入力して承認してください。完了すると自動で起動します。');
+                    }
                 }
             },
             onDone: async () => { await harnessPollReady(); resolve(true); },
@@ -1175,14 +1242,17 @@ function harnessLogin(harness) {
     });
 }
 
+// claude/agy 用: こちらの入力欄に貼られたコードをバックエンドへ送る。
 function harnessShowCodeInput(harness) {
     const row = document.getElementById('harness-auth-code-row');
     const input = document.getElementById('harness-auth-code');
     const submit = document.getElementById('harness-auth-code-submit');
     if (!row || !input || !submit) return;
     row.hidden = false;
-    input.focus();
-    submit.onclick = async () => {
+    if (row.dataset.wired) return;  // 既に配線済みなら二重配線しない
+    row.dataset.wired = '1';
+    setTimeout(() => input.focus(), 50);
+    const submitCode = async () => {
         const code = (input.value || '').trim();
         if (!code) return;
         submit.disabled = true;
@@ -1193,10 +1263,11 @@ function harnessShowCodeInput(harness) {
                 body: JSON.stringify({ code, text: code }),
             });
         } catch (_) { /* ignore; readiness poll will confirm */ }
-        row.hidden = true;
-        harnessSetStatus('ログイン完了を確認しています… ⏳');
+        harnessSetStatus('コードを送信しました。認証完了を確認しています… ⏳');
         await harnessPollReady();
     };
+    submit.onclick = submitCode;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submitCode(); } };
 }
 
 async function harnessPollReady() {
@@ -1222,8 +1293,7 @@ async function selectHarness(harness) {
         c.classList.toggle('harness-card-selected', c.dataset.harness === harness);
         c.classList.toggle('harness-card-dimmed', c.dataset.harness !== harness);
     });
-    const logEl = document.getElementById('harness-picker-log');
-    if (logEl) logEl.textContent = '';
+    harnessResetAuthUi();
     try {
         let ov = await fetchOverview();
         let st = (ov.harnesses || {})[harness] || {};
