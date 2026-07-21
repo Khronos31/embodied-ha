@@ -2680,7 +2680,7 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 }
 
 /* ===========================
-   Harness Picker Overlay Style
+   Harness Picker Overlay Style (Responsive: PC=Plan B, Mobile=Plan A)
    =========================== */
 .setup-overlay[hidden],
 #harness-picker[hidden],
@@ -2747,37 +2747,46 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     color: var(--claude-text-main);
 }
 
+/* カードコンテナ：枚数に依存しない縦積みレイアウト */
 .harness-cards-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
     margin-bottom: 24px;
-    align-items: stretch;
 }
 
+/* デフォルト / PC (769px〜): B案 (横長カード：左タイトル / 中央 詳細 / 右 ボタン) */
 .harness-card {
     background: var(--claude-card-bg);
     border: 1px solid var(--claude-border);
     border-radius: 12px;
-    padding: 20px;
+    padding: 18px 24px;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
     justify-content: space-between;
+    gap: 20px;
     transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .harness-card:hover {
-    transform: translateY(-4px);
+    transform: translateX(4px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
     border-color: var(--claude-accent);
 }
 
 .harness-card-header {
-    border-bottom: 1px solid var(--claude-border);
-    padding-bottom: 14px;
-    margin-bottom: 14px;
-    position: relative;
+    width: 150px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--claude-border);
+    border-bottom: none;
+    padding-right: 16px;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
 }
 
 .harness-card-title {
@@ -2814,7 +2823,8 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 
 .harness-card-body {
     flex: 1;
-    margin-bottom: 20px;
+    margin-bottom: 0;
+    padding: 0 8px;
 }
 
 .harness-details-list {
@@ -2831,13 +2841,22 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 
 .harness-details-list li {
     position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
 }
 
 .detail-label {
     font-weight: 600;
     color: var(--claude-text-sub);
-    display: inline-block;
-    min-width: 90px;
+    flex-shrink: 0;
+    min-width: 48px;
+}
+
+.detail-value {
+    flex: 1;
+    min-width: 0;
+    color: var(--claude-text-main);
 }
 
 .detail-subtext {
@@ -2846,8 +2865,13 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 }
 
 .harness-card-footer {
-    margin-top: auto;
-    padding-top: 10px;
+    width: 150px;
+    flex-shrink: 0;
+    margin-top: 0;
+    padding-top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
 }
 
 .harness-select-btn {
@@ -2871,6 +2895,40 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 
 .harness-select-btn:active {
     transform: scale(0.98);
+}
+
+/* スマホ (〜768px): A案 (縦長ポートレートカード：タイトル上 → 詳細 → ボタン下。1列積み) */
+@media (max-width: 768px) {
+    .harness-picker-modal {
+        padding: 20px;
+    }
+
+    .harness-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 14px;
+        padding: 16px;
+    }
+
+    .harness-card:hover {
+        transform: translateY(-4px);
+    }
+
+    .harness-card-header {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--claude-border);
+        padding-right: 0;
+        padding-bottom: 10px;
+    }
+
+    .harness-card-body {
+        padding: 0;
+    }
+
+    .harness-card-footer {
+        width: 100%;
+    }
 }
 
 .harness-picker-notice {
@@ -2933,15 +2991,5 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     white-space: nowrap;
 }
 
-/* Responsive adjustments */
-@media (max-width: 900px) {
-    .harness-cards-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .harness-picker-modal {
-        padding: 20px;
-    }
-}
 
 

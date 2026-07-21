@@ -818,9 +818,9 @@
     <div id="harness-picker" class="setup-overlay" hidden>
         <div class="harness-picker-modal">
             <header class="harness-picker-header">
-                <h2 class="harness-picker-title">Embodied HA - 初回ハーネス選択</h2>
+                <h2 class="harness-picker-title">Embodied HA 初回設定</h2>
                 <div id="harness-picker-intro" class="harness-picker-intro">
-                    <p>あかね(この子)を動かす<strong>ハーネス(頭脳となるAI)</strong>を選びます。<strong>1インスタンス=1ハーネス、初回に選ぶと固定</strong>され、後から変えるには一度アンインストールして選び直します。どれも同じ EHA の体・記憶・道具を使いますが、下の AI が違うと<strong>気質や得意分野が変わります</strong>。優劣ではなく個性の違いです。</p>
+                    <p>あなたの家に住み込むエージェントを選びます。基本的な機能に差はありませんが、性格や受け答えが変わります。<br>また、これらはそれぞれの「素の性格」で、character.mdや毎日の会話を通じて育っていきます。</p>
                 </div>
             </header>
 
@@ -829,15 +829,12 @@
                 <div class="harness-card" id="harness-card-claude" data-harness="claude">
                     <div class="harness-card-header">
                         <h3 class="harness-card-title">Claude Code</h3>
-                        <span class="harness-card-subtitle">Anthropic Claude</span>
-                        <span class="harness-feature-badge feature-highlight">組み込みメモリ あり</span>
                     </div>
                     <div class="harness-card-body">
                         <ul class="harness-details-list">
-                            <li><span class="detail-label">下のAI:</span> Anthropic の Claude</li>
-                            <li><span class="detail-label">組み込みメモリ:</span> <strong>あり</strong> <span class="detail-subtext">(EHA公式の記憶とは別に、ハーネス自身が作業場所に自動でメモを育てる。他の2つには無い)</span></li>
-                            <li><span class="detail-label">得意:</span> 長い文脈の一貫性・文章・実装</li>
-                            <li><span class="detail-label">入出力:</span> テキスト+画像 <span class="detail-subtext">(音声は EHA 側で文字に変換して渡す)</span></li>
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">Anthropic Claude</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">組み込みメモリ — Embodied HAの生成するメモリファイルの他、Claude Codeが自動でMEMORY.mdを作成します</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">丁寧で内省的。慎重に確認しながら進めるバランス型</span></li>
                         </ul>
                     </div>
                     <div class="harness-card-footer">
@@ -849,15 +846,12 @@
                 <div class="harness-card" id="harness-card-codex" data-harness="codex">
                     <div class="harness-card-header">
                         <h3 class="harness-card-title">Codex</h3>
-                        <span class="harness-card-subtitle">OpenAI GPT系</span>
-                        <span class="harness-feature-badge">組み込みメモリ なし</span>
                     </div>
                     <div class="harness-card-body">
                         <ul class="harness-details-list">
-                            <li><span class="detail-label">下のAI:</span> OpenAI の GPT 系</li>
-                            <li><span class="detail-label">組み込みメモリ:</span> なし <span class="detail-subtext">(EHA公式の記憶のみ)</span></li>
-                            <li><span class="detail-label">得意:</span> コードの実装・レビュー</li>
-                            <li><span class="detail-label">入出力:</span> テキスト+画像 <span class="detail-subtext">(音声は EHA 側で変換)</span></li>
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">OpenAI GPT</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">シンプルな標準構成 — 設定や記憶が一箇所に集約され、管理ファイルがあちこちに散らばりません</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">クールな実務家。無駄口を叩かず、確実に手を動かす</span></li>
                         </ul>
                     </div>
                     <div class="harness-card-footer">
@@ -869,15 +863,12 @@
                 <div class="harness-card" id="harness-card-agy" data-harness="agy">
                     <div class="harness-card-header">
                         <h3 class="harness-card-title">Antigravity</h3>
-                        <span class="harness-card-subtitle">Google Gemini系</span>
-                        <span class="harness-feature-badge">組み込みメモリ なし</span>
                     </div>
                     <div class="harness-card-body">
                         <ul class="harness-details-list">
-                            <li><span class="detail-label">下のAI:</span> Google の Gemini 系</li>
-                            <li><span class="detail-label">組み込みメモリ:</span> なし <span class="detail-subtext">(EHA公式の記憶のみ)</span></li>
-                            <li><span class="detail-label">得意:</span> デザイン・画像まわり・マルチモーダル</li>
-                            <li><span class="detail-label">入出力:</span> テキスト+画像に加え <strong>音声をそのまま扱える</strong>(音声ネイティブ)。EHAの「深く聴く」音声処理はこの系統</li>
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">Google Gemini</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">メディアファイルのマルチモーダル処理 — 音声・映像ファイルの直接解析ができます</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">明るいムードメーカー。ノリが良くフットワークが軽い、ちょっとお調子者</span></li>
                         </ul>
                     </div>
                     <div class="harness-card-footer">
@@ -888,7 +879,7 @@
 
             <div class="harness-picker-notice">
                 <span class="notice-icon">💡</span>
-                <span>未インストールのものは選択後にダウンロード→ログインへ進みます。変更にはアンインストールが必要です。</span>
+                <span>未インストールのものは選択後にダウンロード→ログインへ進みます。</span>
             </div>
 
             <!-- 選択後の進行状況表示領域 -->
