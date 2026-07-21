@@ -2176,14 +2176,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _uninstall_blocked_for_effective(self, harness: str) -> bool:
         """§13.2: refuse to uninstall the harness that is actually running the agent.
-        Compares against the *effective* harness (not merely the selected flag) so a
-        grandfathered instance (flag missing → effective=claude) can't uninstall the
-        Claude CLI out from under the live runtime. Returns True (and sends 409) when
-        blocked; False when the target is a non-running harness and may be removed."""
+        The effective harness is derived from the selection flag ALONE (valid → selected,
+        missing/invalid → claude) — NOT from the full readiness snapshot, whose 3-harness
+        install/auth probing could raise on an unrelated harness and (sol Med) fail OPEN
+        on a destructive guard. If even the flag read fails, fail CLOSED. Returns True
+        (and sends 409) when blocked; False when the target is a non-running harness."""
         try:
-            effective = harness_status.snapshot().get("effective")
+            state, selected = harness_state.read_selection()
         except Exception:
-            effective = None
+            self.send_json(
+                {"error": "cannot determine the active harness; refusing to uninstall"}, 409)
+            return True
+        effective = selected if state == "valid" else "claude"
         if effective == harness:
             self.send_json({
                 "error": "cannot uninstall the harness the agent is currently running on",

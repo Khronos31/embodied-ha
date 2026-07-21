@@ -52,10 +52,20 @@ class UninstallGuardTests(unittest.TestCase):
         h.send_json.assert_not_called()
 
     def test_grandfather_missing_flag_blocks_claude(self):
-        # No flag written → snapshot effective resolves to claude; claude uninstall blocked.
+        # No flag written → effective resolves to claude; claude uninstall blocked.
         h = self._handler()
         self.assertTrue(h._uninstall_blocked_for_effective("claude"))
         self.assertFalse(h._uninstall_blocked_for_effective("codex"))
+
+    def test_fail_closed_when_selection_unreadable(self):
+        # sol Med: a destructive guard must fail CLOSED, not open, if state is unknown.
+        self._select("codex")
+        h = self._handler()
+        with mock.patch.object(server.harness_state, "read_selection",
+                               side_effect=RuntimeError("boom")):
+            self.assertTrue(h._uninstall_blocked_for_effective("codex"))
+            self.assertTrue(h._uninstall_blocked_for_effective("claude"))
+            self.assertEqual(h.send_json.call_args.args[1], 409)
 
     # --- wired into the POST handlers --------------------------------------------
 

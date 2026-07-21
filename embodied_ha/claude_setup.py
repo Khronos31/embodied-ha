@@ -35,10 +35,19 @@ def config_dir() -> str:
 
 
 def _has_config_substance(path: str) -> bool:
-    """Return whether a Claude config directory has auth or persisted sessions."""
-    if any(os.path.exists(os.path.join(path, name)) for name in _CREDENTIALS_FILENAMES):
-        return True
-    return os.path.isdir(os.path.join(path, "projects"))
+    """Return whether a legacy Claude config directory holds anything worth keeping.
+
+    Grandfather any existing *non-empty* dir (sol Low): Claude Code stores not just
+    credentials/projects under CLAUDE_CONFIG_DIR but also settings.json, plugins,
+    skills, hooks, etc. An API-key user with only settings must still keep the legacy
+    location instead of silently switching to /data/claude-home. A truly empty dir has
+    nothing to orphan, so it falls through to the new default. Fresh installs never
+    create this legacy path (they resolve to /data/claude-home), so this cannot
+    mis-grandfather a new instance."""
+    try:
+        return len(os.listdir(path)) > 0
+    except OSError:
+        return False
 
 
 def resolve_config_dir(data_dir: str) -> str:

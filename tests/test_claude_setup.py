@@ -39,6 +39,16 @@ class ClaudeSetupTests(unittest.TestCase):
             os.makedirs(os.path.join(legacy_dir, "projects"))
             self.assertEqual(claude_setup.resolve_config_dir(data_dir), legacy_dir)
 
+    def test_resolve_config_dir_grandfathers_settings_only(self):
+        # sol Low: an API-key user with only settings.json (no credentials/projects)
+        # must still keep the legacy location, not switch to /data/claude-home.
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = os.path.join(temp, "data")
+            legacy_dir = os.path.join(data_dir, ".claude")
+            os.makedirs(legacy_dir)
+            Path(legacy_dir, "settings.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(claude_setup.resolve_config_dir(data_dir), legacy_dir)
+
     def test_resolve_config_dir_uses_new_default_for_empty_legacy_dir(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = os.path.join(temp, "data")
