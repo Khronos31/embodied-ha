@@ -27,10 +27,6 @@ Multi-harness support: choose which AI runs your companion — **Claude Code / C
 
 - 初回セットアップのハーネス選択ウィザード（未選択 → 選択 → インストール → ログイン → 起動）。
   First-run harness selection wizard (select → install → sign in → start).
-- 記憶ファイルのエクスポート（Claude の MEMORY.md / メモリファイルを退避）。
-  Export of memory files (back up Claude's MEMORY.md / memory files).
-- 開発者向け機能タブ（`developer_mode`）: `/data` の生データダンプ（認証情報を除く）。
-  Developer tools tab (`developer_mode`): raw `/data` dump (credentials excluded).
 
 ### Changed / 変更
 

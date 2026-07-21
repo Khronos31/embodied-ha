@@ -28,11 +28,9 @@ options:
   claude_config_dir: ""
   claude_cwd: ""
   autonomous_control: false
-  developer_mode: false
 schema:
   resident_name: str
   claude_api_key: str?
   claude_config_dir: str?
   claude_cwd: str?
   autonomous_control: bool
-  developer_mode: bool?

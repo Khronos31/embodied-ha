@@ -31,7 +31,6 @@ import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
-import export_manifest  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
@@ -424,25 +423,6 @@ _SELF_RESTART_MAX_ATTEMPTS = 3
 _SELF_RESTART_RETRY_DELAY_SECONDS = 1.0
 _self_restart_lock = threading.Lock()
 _self_restart_scheduled = False
-# Exports run strictly one at a time (sol M3: raw dump 同時1本) — each build can hold
-# up to a MAX_TOTAL_BYTES temp file. Small request-body cap (sol export-review Med5).
-_export_lock = threading.Lock()
-_MAX_EXPORT_REQUEST_BODY = 64 * 1024
-
-
-def _developer_mode_enabled() -> bool:
-    """config.yaml ``developer_mode`` option, surfaced via run.sh as EHA_DEVELOPER_MODE."""
-    return (os.environ.get("EHA_DEVELOPER_MODE") or "").strip().lower() in ("1", "true", "on", "yes")
-
-
-def _export_filename(kind: str) -> str:
-    """`embodied-ha-<kind>-<harness>-<YYYYMMDD>.tar.gz`. Harness comes from the
-    validated enum only (sol Low: never concatenate raw file contents into a header)."""
-    state, harness = harness_state.read_selection()
-    name = harness if state == "valid" else "unknown"
-    stamp = time.strftime("%Y%m%d")
-    return f"embodied-ha-{kind}-{name}-{stamp}.tar.gz"
-
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
@@ -472,8 +452,6 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
     "/api/setup/agent-prefs",
-    "/api/setup/export/memory",
-    "/api/setup/export/data-dump",
 })
 # Paths in _SETUP_MUTATION_PATHS that are a *read* on GET (guarded only on their
 # mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
@@ -2196,66 +2174,6 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             release_lock()
 
-    def _serve_setup_export(self, kind: str) -> None:
-        """Build one of the two §14.7 export bundles ("memory" | "data-dump") and stream
-        it as a sensitive download. ingress-guarded (mutation path); no-store so the
-        bundle is not cached by browser/proxy (sol Med14). Strictly one export at a
-        time (sol M3). Streams from an already-unlinked temp fd (sol H3).
-
-        The data-dump additionally requires developer_mode, and both paths require the
-        ingress remote-user header when running under the Supervisor (sol M4 — real
-        header presence is an E2E-gate item; previews without SUPERVISOR_TOKEN skip it)."""
-        try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
-        except (TypeError, ValueError):
-            self.send_json({"error": "invalid Content-Length"}, 400)
-            return
-        if length < 0 or length > _MAX_EXPORT_REQUEST_BODY:
-            self.send_json({"error": "request body too large"}, 400)
-            return
-        if length:
-            self.rfile.read(length)     # body is unused; drain to keep the connection sane
-        if HA_TOKEN and not (self.headers.get("X-Remote-User-Id") or "").strip():
-            self.send_json({"error": "export requires an authenticated HA user"}, 403)
-            return
-        if kind == "data-dump" and not _developer_mode_enabled():
-            self.send_json({"error": "developer_mode is not enabled"}, 403)
-            return
-        if not _export_lock.acquire(blocking=False):
-            self.send_json({"error": "export is busy; try again"}, 429)
-            return
-        try:
-            try:
-                bundle, _manifest = export_manifest.build_to_tempfile(kind)
-            except export_manifest.ExportError as e:
-                self.send_json({"error": str(e)}, 400)
-                return
-            except Exception as e:
-                self.send_json({"error": str(e)}, 500)
-                return
-            try:
-                size = bundle.seek(0, os.SEEK_END)
-                bundle.seek(0)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/gzip")
-                self.send_header("Content-Disposition",
-                                 f'attachment; filename="{_export_filename(kind)}"')
-                self.send_header("Content-Length", str(size))
-                self.send_header("Cache-Control", "no-store, private")
-                self.send_header("Pragma", "no-cache")
-                self.end_headers()
-                while True:
-                    chunk = bundle.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-            except Exception:
-                pass
-            finally:
-                bundle.close()      # client disconnect included: temp fd closes immediately
-        finally:
-            _export_lock.release()
-
     def do_POST(self):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
@@ -2340,10 +2258,6 @@ class Handler(BaseHTTPRequestHandler):
                 "message": "設定を保存しました。反映のため再起動します。",
                 "default_tier": updated.get("default_tier", {}),
             })
-        elif path == "/api/setup/export/memory":
-            self._serve_setup_export("memory")
-        elif path == "/api/setup/export/data-dump":
-            self._serve_setup_export("data-dump")
         elif path == "/api/setup/claude/install":
             self._serve_setup_claude_install()
         elif path == "/api/setup/claude/uninstall":

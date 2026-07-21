@@ -35,10 +35,6 @@ unset _OPT_KEY
 # これには config.yaml の homeassistant_api: true が必要（SUPERVISOR_TOKEN が Core API に通る）。
 export HA_URL="${HA_URL:-http://supervisor/core/api}"
 
-# 開発者向け機能タブ(§13.4 経路2=/data生ダンプ等)の有効化フラグ。既定オフ。
-_OPT_DEVELOPER_MODE=$(python3 -c "import json; print('true' if json.load(open('/data/options.json')).get('developer_mode') else 'false')" 2>/dev/null || echo "false")
-export EHA_DEVELOPER_MODE="${EHA_DEVELOPER_MODE:-$_OPT_DEVELOPER_MODE}"
-
 # --- Claude CLI ---
 _OPT_CONFIG_DIR=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_config_dir',''))" 2>/dev/null || echo "")
 # 同梱廃止(増分5a): claudeはWeb UIからDIY配置先(binary_path、既定 /data/claude-cli/bin/claude)へ
