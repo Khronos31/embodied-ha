@@ -103,12 +103,41 @@ def _get_install_status(key: str) -> dict:
         return dict(_install_status.get(key, {"status": "idle", "message": ""}))
 
 
-def _record_selected_harness(harness: str) -> None:
-    """Persist a successful harness installation without failing its request."""
-    try:
-        harness_state.set_selected_harness(harness)
-    except Exception:
-        print(f"[web] failed to record selected harness: {harness}", flush=True)
+def _harness_binary_present(harness: str) -> bool:
+    """Whether the harness's executable actually exists (not just a nominal install)."""
+    if harness == "claude":
+        return claude_setup.is_installed()
+    if harness == "codex":
+        return codex_setup is not None and codex_setup.is_installed()
+    if harness == "agy":
+        return antigravity_setup is not None and antigravity_setup.is_installed()
+    return False
+
+
+def _commit_selected_harness(harness: str) -> None:
+    """Verify the freshly installed binary and atomically claim the selection.
+
+    Unlike the old best-effort recorder, this raises so the install handler reports
+    an error instead of a false success (sol H1/H9):
+
+    - the binary is missing after a nominal install (e.g. agy's script exited 0 but
+      produced no executable), or
+    - a *different* valid harness is already selected — the "fixed on first selection"
+      policy rejects switching without an uninstall first.
+
+    A shared cross-process lock (harness_state.compare_and_set) serialises concurrent
+    installers so the last one cannot silently overwrite an earlier selection.
+    """
+    if not _harness_binary_present(harness):
+        raise RuntimeError(
+            f"{harness} の実行ファイルが見つかりません（インストールが完了していません）"
+        )
+    outcome, current = harness_state.compare_and_set(harness)
+    if outcome == "conflict":
+        raise RuntimeError(
+            f"既に別のハーネス（{current}）が選択済みです。"
+            "変更するにはアンインストールしてから選び直してください"
+        )
 
 
 def _start_install_thread(key: str, target) -> bool:
@@ -1295,7 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not stop_event.is_set():
                     rc = proc.wait()
                     if rc == 0:
-                        _record_selected_harness("agy")
+                        _commit_selected_harness("agy")
                     q.put(("done", rc))
             except Exception as e:
                 if not stop_event.is_set():
@@ -1373,7 +1402,7 @@ class Handler(BaseHTTPRequestHandler):
                     if codex_setup is None:
                         raise RuntimeError("Codex helpers unavailable")
                     result = codex_setup.install(progress=lambda text: q.put(("line", text)))
-                    _record_selected_harness("codex")
+                    _commit_selected_harness("codex")
                     q.put(("done", result))
                 except Exception as e:
                     q.put(("error", str(e)))
@@ -1432,7 +1461,7 @@ class Handler(BaseHTTPRequestHandler):
             def run_install():
                 try:
                     result = claude_setup.install(progress=lambda text: q.put(("line", text)))
-                    _record_selected_harness("claude")
+                    _commit_selected_harness("claude")
                     q.put(("done", result))
                 except Exception as e:
                     q.put(("error", str(e)))

@@ -1,6 +1,7 @@
 """Persistent selection of the CLI harness used by this add-on instance."""
 from __future__ import annotations
 
+import fcntl
 import os
 import tempfile
 
@@ -39,11 +40,7 @@ def read_selection() -> tuple[str, str | None]:
     return "invalid", None
 
 
-def set_selected_harness(harness: str) -> None:
-    """Atomically persist a validated harness selection."""
-    if harness not in VALID_HARNESSES:
-        raise ValueError(f"Invalid harness: {harness!r}")
-    path = flag_path()
+def _atomic_write(path: str, harness: str) -> None:
     parent = os.path.dirname(path) or os.curdir
     os.makedirs(parent, exist_ok=True)
     fd, temporary_path = tempfile.mkstemp(prefix=".selected_harness-", dir=parent)
@@ -57,3 +54,43 @@ def set_selected_harness(harness: str) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def set_selected_harness(harness: str) -> None:
+    """Atomically persist a validated harness selection (unconditional write)."""
+    if harness not in VALID_HARNESSES:
+        raise ValueError(f"Invalid harness: {harness!r}")
+    _atomic_write(flag_path(), harness)
+
+
+def compare_and_set(harness: str) -> tuple[str, str | None]:
+    """Atomically claim the selection unless a *different* valid one already exists.
+
+    Enforces the "1 instance = 1 harness, fixed on first selection" policy at the
+    persistence layer (sol H1). Returns ``(outcome, current)``:
+
+    - ``("set", harness)``    — committed (the flag was ``missing`` or ``invalid``).
+    - ``("unchanged", harness)`` — the same harness was already selected (idempotent).
+    - ``("conflict", current)`` — a *different* valid harness is selected; nothing written.
+
+    Cross-process safe: a shared ``<flag>.lock`` flock serialises the read→decide→write
+    so two concurrent installers cannot both win (last-write-wins) or interleave.
+    """
+    if harness not in VALID_HARNESSES:
+        raise ValueError(f"Invalid harness: {harness!r}")
+    path = flag_path()
+    parent = os.path.dirname(path) or os.curdir
+    os.makedirs(parent, exist_ok=True)
+    lock_path = path + ".lock"
+    with open(lock_path, "w", encoding="utf-8") as lock_fp:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX)
+        try:
+            state, current = read_selection()
+            if state == "valid":
+                if current == harness:
+                    return "unchanged", current
+                return "conflict", current
+            _atomic_write(path, harness)
+            return "set", harness
+        finally:
+            fcntl.flock(lock_fp, fcntl.LOCK_UN)

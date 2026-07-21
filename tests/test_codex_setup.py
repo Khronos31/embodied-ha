@@ -526,6 +526,9 @@ class CodexSetupEndpointTests(unittest.TestCase):
     def test_install_post_dispatches_sse(self):
         fake = SimpleNamespace(
             install=lambda progress: (progress("downloaded") or {"checksum_verified": True}),
+            # Step4増分1c: install 後の _commit_selected_harness が binary 実在を確認するため
+            # (sol H9)、成功パスの fake も is_installed=True を返す必要がある。
+            is_installed=lambda: True,
             state=lambda: {"installed": False, "authenticated": False},
             uninstall=lambda: {"removed_files": []},
             clear_auth=lambda: {"removed_files": []},

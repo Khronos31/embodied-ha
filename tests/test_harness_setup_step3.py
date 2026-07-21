@@ -31,6 +31,13 @@ def _load_daemon_without_boot():
 daemon = _load_daemon_without_boot()
 
 
+def _cas_worker(args):
+    """別プロセスで compare_and_set を呼ぶ(並行 install の直列化テスト用・module-level 必須)。"""
+    flag, harness = args
+    os.environ["EHA_HARNESS_FLAG_FILE"] = flag
+    return harness_state.compare_and_set(harness)
+
+
 class HarnessStateTests(unittest.TestCase):
     def test_get_set_round_trip_uses_atomic_replace(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -77,6 +84,62 @@ class HarnessStateTests(unittest.TestCase):
     def test_set_rejects_invalid_harness(self):
         with self.assertRaises(ValueError):
             harness_state.set_selected_harness("unknown")
+
+    def test_compare_and_set_sets_when_missing_or_invalid(self):
+        # Step4増分1c(sol H1): 未選択/不正なら確定する。
+        with tempfile.TemporaryDirectory() as temp:
+            flag = Path(temp) / "state" / "selected_harness"
+            with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": str(flag)}, clear=False):
+                self.assertEqual(harness_state.compare_and_set("codex"), ("set", "codex"))
+                self.assertEqual(harness_state.get_selected_harness(), "codex")
+                # invalid からも確定できる。
+                flag.write_text("garbage\n", encoding="utf-8")
+                self.assertEqual(harness_state.compare_and_set("agy"), ("set", "agy"))
+                self.assertEqual(harness_state.get_selected_harness(), "agy")
+
+    def test_compare_and_set_is_idempotent_for_same_harness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            flag = Path(temp) / "selected_harness"
+            with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": str(flag)}, clear=False):
+                harness_state.compare_and_set("claude")
+                self.assertEqual(harness_state.compare_and_set("claude"), ("unchanged", "claude"))
+                self.assertEqual(harness_state.get_selected_harness(), "claude")
+
+    def test_compare_and_set_rejects_different_valid_selection(self):
+        # 初回固定: 別の valid 選択があれば conflict、既存は不変。
+        with tempfile.TemporaryDirectory() as temp:
+            flag = Path(temp) / "selected_harness"
+            with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": str(flag)}, clear=False):
+                harness_state.compare_and_set("claude")
+                self.assertEqual(harness_state.compare_and_set("codex"), ("conflict", "claude"))
+                self.assertEqual(harness_state.get_selected_harness(), "claude")
+
+    def test_compare_and_set_rejects_invalid_harness_argument(self):
+        with self.assertRaises(ValueError):
+            harness_state.compare_and_set("unknown")
+
+    def test_compare_and_set_serialises_concurrent_processes(self):
+        # sol 1b/1c Med2: 並行 install が最後勝ちしない。異なるハーネスで同時に CAS しても
+        # flock により確定は1件のみ、残りは conflict、最終選択は確定したハーネス。
+        import multiprocessing as mp
+        with tempfile.TemporaryDirectory() as temp:
+            flag = os.path.join(temp, "selected_harness")
+            jobs = [(flag, h) for h in ("claude", "codex", "agy", "codex", "agy")]
+            with mp.get_context("fork").Pool(len(jobs)) as pool:
+                results = pool.map(_cas_worker, jobs)
+            outcomes = [outcome for outcome, _ in results]
+            self.assertEqual(outcomes.count("set"), 1)
+            setter = next(h for (_, h), (o, _) in zip(jobs, results) if o == "set")
+            with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": flag}, clear=False):
+                self.assertEqual(harness_state.get_selected_harness(), setter)
+            for (_, h), (outcome, current) in zip(jobs, results):
+                if outcome == "set":
+                    continue
+                if h == setter:
+                    self.assertEqual(outcome, "unchanged")  # 同一ハーネスの後続は冪等
+                else:
+                    self.assertEqual(outcome, "conflict")  # 別ハーネスは拒否(最後勝ちしない)
+                    self.assertEqual(current, setter)
 
 
 class ResolveClaudeBinTests(unittest.TestCase):
@@ -133,26 +196,39 @@ class HarnessReadyTests(unittest.TestCase):
             self.assertFalse(daemon.harness_ready())
 
     def test_missing_flag_migrates_authenticated_claude_once(self):
+        # Step4増分1c(sol 1b/1c High): migration も compare_and_set 経由に統一。
         with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
              mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected, \
+             mock.patch.object(daemon.harness_state, "compare_and_set", return_value=("set", "claude")) as cas, \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
              mock.patch.object(daemon.claude_setup, "resolve_claude_bin", return_value="/bin/claude"):
             self.assertTrue(daemon.harness_ready())
-        set_selected.assert_called_once_with("claude")
+        cas.assert_called_once_with("claude")
+
+    def test_missing_flag_migration_yields_to_concurrent_selection(self):
+        # sol 1b/1c High: migration 中に別ハーネスが CAS 確定していたら claude を決め打ちせず
+        # conflict の current を採用する(既に選択済みを上書きしない)。
+        with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
+             mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
+             mock.patch.object(daemon.harness_state, "compare_and_set", return_value=("conflict", "codex")), \
+             mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
+             mock.patch.object(daemon.codex_setup, "is_installed", return_value=True), \
+             mock.patch.object(daemon.codex_setup, "is_authenticated", return_value=True):
+            # 実効ハーネスは codex。codex が ready なので True(claude 判定に落ちない)。
+            self.assertTrue(daemon.harness_ready())
 
     def test_missing_flag_without_claude_auth_waits_for_setup(self):
         with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
              mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected, \
+             mock.patch.object(daemon.harness_state, "compare_and_set") as cas, \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=False):
             self.assertFalse(daemon.harness_ready())
-        set_selected.assert_not_called()
+        cas.assert_not_called()
 
     def test_migration_write_error_keeps_claude_ready_when_binary_exists(self):
         with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
              mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness", side_effect=OSError("read-only")), \
+             mock.patch.object(daemon.harness_state, "compare_and_set", side_effect=OSError("read-only")), \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
              mock.patch.object(daemon.claude_setup, "resolve_claude_bin", return_value="/bin/claude"):
             self.assertTrue(daemon.harness_ready())
@@ -160,7 +236,7 @@ class HarnessReadyTests(unittest.TestCase):
     def test_migration_write_error_waits_when_claude_binary_is_missing(self):
         with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
              mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness", side_effect=OSError("read-only")), \
+             mock.patch.object(daemon.harness_state, "compare_and_set", side_effect=OSError("read-only")), \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
              mock.patch.object(daemon.claude_setup, "resolve_claude_bin", return_value=None):
             self.assertFalse(daemon.harness_ready())
@@ -170,10 +246,10 @@ class HarnessReadyTests(unittest.TestCase):
             with self.subTest(selection_state=selection_state), \
                  mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
                  mock.patch.object(daemon.harness_state, "read_selection", return_value=(selection_state, None)), \
-                 mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected, \
+                 mock.patch.object(daemon.harness_state, "compare_and_set") as cas, \
                  mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True):
                 self.assertFalse(daemon.harness_ready())
-            set_selected.assert_not_called()
+            cas.assert_not_called()
 
     def test_empty_and_invalid_flag_files_never_migrate_to_claude(self):
         for contents in ("\n", "not-a-harness\n"):
@@ -182,26 +258,26 @@ class HarnessReadyTests(unittest.TestCase):
                 flag.write_text(contents, encoding="utf-8")
                 with mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": str(flag)}, clear=False), \
                      mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
-                     mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected:
+                     mock.patch.object(daemon.harness_state, "compare_and_set") as cas:
                     self.assertFalse(daemon.harness_ready())
-                set_selected.assert_not_called()
+                cas.assert_not_called()
 
     def test_unreadable_flag_never_migrates_to_claude(self):
         with mock.patch.object(daemon.harness_state, "flag_path", return_value="/unreadable"), \
              mock.patch("builtins.open", side_effect=OSError("read failed")), \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected:
+             mock.patch.object(daemon.harness_state, "compare_and_set") as cas:
             self.assertFalse(daemon.harness_ready())
-        set_selected.assert_not_called()
+        cas.assert_not_called()
 
     def test_missing_flag_still_migrates_to_claude(self):
         with mock.patch.object(daemon.harness_state, "get_selected_harness", return_value=None), \
              mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
-             mock.patch.object(daemon.harness_state, "set_selected_harness") as set_selected, \
+             mock.patch.object(daemon.harness_state, "compare_and_set", return_value=("set", "claude")) as cas, \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=True), \
              mock.patch.object(daemon.claude_setup, "resolve_claude_bin", return_value="/bin/claude"):
             self.assertTrue(daemon.harness_ready())
-        set_selected.assert_called_once_with("claude")
+        cas.assert_called_once_with("claude")
 
 
 class SetupWaitNotificationTests(unittest.TestCase):
@@ -325,28 +401,45 @@ class ServerHarnessPersistenceTests(unittest.TestCase):
         handler.wfile = io.BytesIO()
         return handler
 
-    def test_claude_and_codex_install_handlers_record_selection_after_success(self):
+    def setUp(self):
+        # 選択フラグを実ファイルで隔離(Step4増分1cで _record→_commit/CAS 化したため、
+        # モックした set_selected ではなく実 compare_and_set の結果を検証する)。
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        flag = os.path.join(self._tmp.name, "selected_harness")
+        patcher = mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": flag}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_install_handler_commits_selection_and_second_harness_conflicts(self):
+        # Step4増分1c(sol H1): 初回 install が選択を確定し、異なるハーネスの後続 install は
+        # 「初回固定」で上書きせず conflict になる(選択は最初のまま)。
         claude = types.SimpleNamespace(
             install=lambda progress: (progress("installed") or {"ok": True}),
+            is_installed=lambda: True,
         )
         codex = types.SimpleNamespace(
             install=lambda progress: (progress("installed") or {"ok": True}),
+            is_installed=lambda: True,
         )
         with mock.patch.object(server.threading, "Thread", self._ImmediateThread), \
-             mock.patch.object(server.harness_state, "set_selected_harness") as set_selected, \
              mock.patch.object(server, "claude_setup", claude), \
              mock.patch.object(server, "codex_setup", codex):
             self._handler()._serve_setup_claude_install()
+            self.assertEqual(harness_state.get_selected_harness(), "claude")
             self._handler()._serve_setup_codex_install()
-        self.assertEqual(set_selected.call_args_list, [mock.call("claude"), mock.call("codex")])
+        # codex install は走るが初回固定で選択は claude のまま(偽の上書きなし)。
+        self.assertEqual(harness_state.get_selected_harness(), "claude")
 
-    def test_antigravity_install_handler_records_selection_only_for_zero_exit(self):
+    def test_antigravity_install_commits_only_with_zero_exit_and_binary(self):
+        # sol H9: rc==0 かつ実 binary あり → 選択確定。
         with tempfile.TemporaryDirectory() as temp:
             agy = types.SimpleNamespace(
                 home_dir=lambda: temp,
                 bin_dir=lambda: os.path.join(temp, "bin"),
                 fetch_install_script=lambda timeout: "exit 0\n",
                 subprocess_env=lambda: {},
+                is_installed=lambda: True,
             )
             process = mock.MagicMock()
             process.stdin = mock.MagicMock()
@@ -354,24 +447,88 @@ class ServerHarnessPersistenceTests(unittest.TestCase):
             process.wait.return_value = 0
             process.poll.return_value = 0
             with mock.patch.object(server.threading, "Thread", self._ImmediateThread), \
-                 mock.patch.object(server.harness_state, "set_selected_harness") as set_selected, \
                  mock.patch.object(server, "antigravity_setup", agy), \
                  mock.patch("subprocess.Popen", return_value=process):
                 self._handler()._serve_setup_antigravity_install()
-        set_selected.assert_called_once_with("agy")
+        self.assertEqual(harness_state.get_selected_harness(), "agy")
 
-    def test_successful_install_records_each_harness_without_affecting_install(self):
-        with mock.patch.object(server.harness_state, "set_selected_harness") as set_selected:
-            for harness in harness_state.VALID_HARNESSES:
-                server._record_selected_harness(harness)
-        self.assertEqual(
-            set_selected.call_args_list,
-            [mock.call("claude"), mock.call("codex"), mock.call("agy")],
+    def test_antigravity_install_does_not_commit_when_binary_missing(self):
+        # sol H9: rc==0 でも実 binary が無ければ偽成功にしない=選択を確定しない。
+        with tempfile.TemporaryDirectory() as temp:
+            agy = types.SimpleNamespace(
+                home_dir=lambda: temp,
+                bin_dir=lambda: os.path.join(temp, "bin"),
+                fetch_install_script=lambda timeout: "exit 0\n",
+                subprocess_env=lambda: {},
+                is_installed=lambda: False,
+            )
+            process = mock.MagicMock()
+            process.stdin = mock.MagicMock()
+            process.stdout = []
+            process.wait.return_value = 0
+            process.poll.return_value = 0
+            with mock.patch.object(server.threading, "Thread", self._ImmediateThread), \
+                 mock.patch.object(server, "antigravity_setup", agy), \
+                 mock.patch("subprocess.Popen", return_value=process):
+                self._handler()._serve_setup_antigravity_install()
+        self.assertIsNone(harness_state.get_selected_harness())
+
+    def test_commit_selected_harness_sets_when_binary_present(self):
+        with mock.patch.object(server, "claude_setup", types.SimpleNamespace(is_installed=lambda: True)):
+            server._commit_selected_harness("claude")
+        self.assertEqual(harness_state.get_selected_harness(), "claude")
+
+    def test_commit_raises_and_does_not_write_when_binary_missing(self):
+        # sol H1/H9: install 完了扱いでも binary が無ければ raise(偽成功禁止)、フラグ未書込。
+        with mock.patch.object(server, "claude_setup", types.SimpleNamespace(is_installed=lambda: False)):
+            with self.assertRaises(RuntimeError):
+                server._commit_selected_harness("claude")
+        self.assertIsNone(harness_state.get_selected_harness())
+
+    def test_commit_raises_on_conflicting_selection(self):
+        # sol H1: 別の valid 選択が既にあれば raise、既存選択は不変。
+        harness_state.set_selected_harness("claude")
+        with mock.patch.object(server, "codex_setup", types.SimpleNamespace(is_installed=lambda: True)):
+            with self.assertRaises(RuntimeError):
+                server._commit_selected_harness("codex")
+        self.assertEqual(harness_state.get_selected_harness(), "claude")
+
+    def test_commit_is_idempotent_for_same_harness(self):
+        with mock.patch.object(server, "claude_setup", types.SimpleNamespace(is_installed=lambda: True)):
+            server._commit_selected_harness("claude")
+            server._commit_selected_harness("claude")  # unchanged, 例外なし
+        self.assertEqual(harness_state.get_selected_harness(), "claude")
+
+    def test_install_handler_emits_error_and_no_done_on_conflict(self):
+        # sol Med2: 別ハーネス選択済みでの install は error SSE を出し done を出さない(偽成功禁止)。
+        harness_state.set_selected_harness("claude")
+        codex = types.SimpleNamespace(
+            install=lambda progress: (progress("installed") or {"ok": True}),
+            is_installed=lambda: True,
         )
+        handler = self._handler()
+        with mock.patch.object(server.threading, "Thread", self._ImmediateThread), \
+             mock.patch.object(server, "codex_setup", codex):
+            handler._serve_setup_codex_install()
+        body = handler.wfile.getvalue().decode("utf-8")
+        self.assertIn("event: error", body)
+        self.assertNotIn("event: done", body)
+        self.assertEqual(harness_state.get_selected_harness(), "claude")
 
-    def test_selection_record_failure_is_best_effort(self):
-        with mock.patch.object(server.harness_state, "set_selected_harness", side_effect=OSError):
-            server._record_selected_harness("claude")
+    def test_install_handler_emits_error_and_no_done_when_binary_missing(self):
+        # sol Med2/H9: rc相当は成功でも binary 欠落なら error SSE、done なし、選択未確定。
+        claude = types.SimpleNamespace(
+            install=lambda progress: (progress("installed") or {"ok": True}),
+            is_installed=lambda: False,
+        )
+        handler = self._handler()
+        with mock.patch.object(server.threading, "Thread", self._ImmediateThread), \
+             mock.patch.object(server, "claude_setup", claude):
+            handler._serve_setup_claude_install()
+        body = handler.wfile.getvalue().decode("utf-8")
+        self.assertIn("event: error", body)
+        self.assertNotIn("event: done", body)
+        self.assertIsNone(harness_state.get_selected_harness())
 
 
 if __name__ == "__main__":

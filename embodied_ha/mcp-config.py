@@ -41,6 +41,22 @@ _ENV_KEYS = (
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
 
+# game-mcp は CPU 戦(WordVec)で invoke-agent.sh 経由に選択ハーネスを再起動する唯一の MCP
+# サーバー。MCP サーバーは COMMON_ENV(明示 env)からのみ起動され親環境を継承しないため、
+# nested invoke に要る「選択ハーネス + その CLI パス/ホーム/認証/cwd」を game 限定で明示注入する
+# (Step4増分1b・sol H3)。ANTHROPIC_API_KEY 等の認証情報は全 MCP へ広げず、first-party の
+# game サーバーだけに限定する(存在するものだけ渡す)。
+_GAME_NESTED_ENV_KEYS = (
+    "EHA_AGENT_HARNESS", "EHA_AGENT_CWD",
+    # claude: bin 解決(EHA_CLAUDE_BIN>CLAUDE_BIN>DIY) + cwd + 認証(config dir / API key)
+    "EHA_CLAUDE_BIN", "CLAUDE_BIN", "EHA_CLAUDE_CWD", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY",
+    # codex: bin + home(認証)
+    "EHA_CODEX_BIN", "CODEX_HOME",
+    # agy: bin + home(認証)
+    "EHA_ANTIGRAVITY_BIN", "EHA_ANTIGRAVITY_BIN_DIR", "EHA_ANTIGRAVITY_HOME",
+)
+GAME_NESTED_ENV = {k: os.environ[k] for k in _GAME_NESTED_ENV_KEYS if k in os.environ}
+
 
 def _load_prefs():
     path = os.environ.get("EHA_PREFS_FILE", "")
@@ -176,7 +192,7 @@ SERVER_SPECS = {
         "get_turn_taking_state",
         "ingest_interaction",
     )),
-    "game": ServerSpec(lambda: _server("game-mcp.py"), (
+    "game": ServerSpec(lambda: _server("game-mcp.py", extra_env=GAME_NESTED_ENV), (
         "game_wiki6_start",
         "game_wiki6_getlinks",
         "game_wordvec_race_start",

@@ -102,16 +102,24 @@ def harness_ready() -> bool:
             return False
         else:
             # One-generation migration for existing Claude instances that predate
-            # the selection flag.  claude_setup resolves credentials from the
-            # current env.
+            # the selection flag.  Use the SAME compare_and_set as the install path
+            # so a concurrent user selection is never clobbered (sol 1b/1c review High):
+            # if a valid selection appeared meanwhile, adopt it instead of forcing
+            # claude.  claude_setup resolves credentials from the current env.
             if claude_setup.is_authenticated():
                 try:
-                    harness_state.set_selected_harness("claude")
+                    outcome, current = harness_state.compare_and_set("claude")
                 except OSError as exc:
                     print(f"[daemon] failed to persist Claude harness migration: {exc}", flush=True)
+                    selected = "claude"
                 else:
-                    print("[daemon] migrated existing Claude authentication to selected harness", flush=True)
-                selected = "claude"
+                    if outcome == "conflict":
+                        print(f"[daemon] harness already selected ({current}); skipping Claude migration",
+                              flush=True)
+                        selected = current
+                    else:
+                        print("[daemon] migrated existing Claude authentication to selected harness", flush=True)
+                        selected = "claude"
             else:
                 return False
     # Per-harness readiness is defined once in harness_status (shared with the
