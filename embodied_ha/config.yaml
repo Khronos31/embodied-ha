@@ -8,7 +8,7 @@ arch:
 init: true
 startup: application
 boot: manual
-# /config を読み書きマウント（/config/.tools の認証・CLIを再利用し、スクリプト群も参照）
+# /config を読み書きマウント
 map:
   - config:rw
 audio: true
