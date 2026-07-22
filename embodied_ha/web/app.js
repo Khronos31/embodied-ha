@@ -1613,7 +1613,28 @@ function setAntigravityAuthStatus(message, kind = 'info') {
     statusEl.className = `form-hint ${kind}`.trim();
 }
 
-function renderAntigravityStatus(data) {
+function renderAntigravityStatus(data, selectedHarness) {
+    // §13.2/13.3: when Antigravity itself is the running harness, its install/auth/
+    // management controls would break the live agent (uninstall/clear-auth are the
+    // dangerous ones). Hide the whole management area and show an explanatory notice.
+    const agySelected = selectedHarness === 'agy';
+    const notice = document.getElementById('antigravity-selected-notice');
+    const dashboard = document.getElementById('antigravity-dashboard-box');
+    const setupActions = document.getElementById('antigravity-setup-actions');
+    const authUi = document.getElementById('antigravity-auth-ui');
+    if (notice) notice.style.display = agySelected ? '' : 'none';
+    if (agySelected) {
+        if (dashboard) dashboard.style.display = 'none';
+        if (setupActions) setupActions.style.display = 'none';
+        if (authUi) authUi.style.display = 'none';
+        const dz = document.getElementById('antigravity-danger-zone');
+        if (dz) dz.style.display = 'none';
+        return;
+    }
+    if (dashboard) dashboard.style.display = '';
+    if (setupActions) setupActions.style.display = '';
+    if (authUi) authUi.style.display = '';
+
     const statusEl = document.getElementById('antigravity-status-text');
     if (statusEl) {
         statusEl.style.display = 'block';
@@ -1680,12 +1701,27 @@ function renderAntigravityStatus(data) {
     }
 }
 
+async function fetchSelectedHarness() {
+    // Best-effort: the selected harness gates the experimental tab's controls.
+    // On any failure, return null (treat as non-agy → controls shown as before).
+    try {
+        const res = await fetch(`${base}/api/setup/overview`);
+        const ov = await res.json();
+        return ov && ov.selection_state === 'valid' ? ov.selected : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 async function refreshAntigravityStatus() {
     try {
-        const res = await fetch(`${base}/api/setup/antigravity/status`);
+        const [res, selectedHarness] = await Promise.all([
+            fetch(`${base}/api/setup/antigravity/status`),
+            fetchSelectedHarness(),
+        ]);
         const data = await res.json();
         antigravitySetupState = data;
-        renderAntigravityStatus(data);
+        renderAntigravityStatus(data, selectedHarness);
         if (data.installing) {
             appendAntigravityLog('Antigravity CLI をインストール中です。');
         } else if (!data.installed) {
