@@ -73,8 +73,14 @@ def _load_prefs():
 prefs = _load_prefs()
 
 
-def _server(script, extra_args=None, extra_env=None):
-    env = dict(COMMON_ENV)
+# files MCP のような「HA へアクセスしない」サーバー向けの最小 env。COMMON_ENV(SUPERVISOR_TOKEN 等の
+# 秘密を含む)を渡さない=最小権限。read_file が万一 /proc/self/environ 相当を読んでも秘密が無い
+# (本命の防御は files-mcp.py 側の /proc・/sys 拒否+NUL 検出。これはその二重化)。
+MINIMAL_ENV = {"PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")}
+
+
+def _server(script, extra_args=None, extra_env=None, base_env=None):
+    env = dict(COMMON_ENV if base_env is None else base_env)
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items() if v is not None})
     return {
@@ -136,6 +142,10 @@ SERVER_SPECS = {
     )),
     "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
+    # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を
+    # シェルなしで最小権限提供する(2026-07-22)。claude は native Read を使うので通常は不要だが
+    # ハーネス非依存で持たせておく。
+    "files": ServerSpec(lambda: _server("files-mcp.py", base_env=MINIMAL_ENV), ("read_file",)),  # ファイル読み取り(read-anything+secure-read・最小env)
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
     # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
     # Claude Codeの--allowedToolsは実行時にMCPツール単位で拒否できるが、tools/listの可視性は

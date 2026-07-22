@@ -14,8 +14,10 @@ Options:
                              via prompt prefix approximation)
   --append-system-prompt TXT Append to the harness/system prompt (Claude native
                              --append-system-prompt; Codex/Antigravity via prompt prefix)
-  --allowed-builtins CSV     Built-in tool allow-list for Claude Code only
-                             (currently: Read, WebSearch)
+  --allowed-builtins CSV     Harness-agnostic capability intent (currently: Read,
+                             WebSearch). claude=native --allowed-builtins; codex=WebSearch
+                             gates native web_search, Read is served by the files MCP;
+                             agy=Read via files MCP, WebSearch grant is 2.1.0 (§8).
   --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; must cover every
                              selected MCP server. Per-server partial allowlists
                              are allowed: Claude blocks unlisted tool execution,
@@ -501,7 +503,8 @@ run_claude() {
 }
 
 run_codex() {
-  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
+  # --allowed-builtins は全ハーネス共通の能力意図(Read/WebSearch)。codex では Read は files MCP が
+  # 担うため no-op、WebSearch は下で codex native の web_search を制御する(die しない)。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
   [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
@@ -522,6 +525,18 @@ run_codex() {
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  # WebSearch 意図があれば codex native の live web_search を有効化、無ければ無効化して
+  # claude chat(WebSearch 非許可)とのパリティを取る。--allowed-builtins 未指定時は codex 既定に任せる。
+  # validate_allowed_builtins が要素を trim して受理する("Read, WebSearch"等)ため、判定前に空白を除去して
+  # 正規化する(生CSV部分一致だと空白付き要素を取りこぼす・sol Med)。
+  if [[ "$allowed_builtins_set" == "true" ]]; then
+    local _ab_norm="${allowed_builtins//[[:space:]]/}"
+    if [[ ",$_ab_norm," == *",WebSearch,"* ]]; then
+      cmd+=("--config" "web_search=live")
+    else
+      cmd+=("--config" "web_search=disabled")
+    fi
+  fi
   if [[ -n "$system_prompt_replace" ]]; then
     local instructions_path
     instructions_path="$(mktemp "${TMPDIR:-/tmp}/eha-codex-system-prompt.XXXXXX.md")"
@@ -555,7 +570,8 @@ run_codex() {
 }
 
 run_agy() {
-  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
+  # --allowed-builtins(Read/WebSearch)は agy では: Read は files MCP が担うため no-op。
+  # WebSearch(agy native)の headless 許可形式は未確定(§8)で 2.1.0。ここでは die せず受理して無視する。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
 

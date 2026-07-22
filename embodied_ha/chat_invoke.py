@@ -362,6 +362,14 @@ _CHAT_MCP_SERVERS = (
     "body", "sensors", "http", "lounge", "game", "song",
 )
 
+# codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。files MCP でハーネス非依存に Read を
+# 提供する。claude は native Read を使うため付けない(決定2「claude native 維持・codex/agy だけ MCP」)。
+_FILES_MCP_HARNESSES = frozenset({"codex", "agy"})
+
+
+def _effective_harness() -> str:
+    return (os.environ.get("EHA_AGENT_HARNESS") or "claude").strip().lower()
+
 
 def _read_http_post_enabled(prefs_file):
     """Mirror mcp-config.py's _http_tools(): http_post is only an active tool
@@ -427,6 +435,10 @@ def build_invoke_agent_chat_command(
         # that kills the queued-listen audio path (sol review, 2026-07-17).
         raise ValueError("build_invoke_agent_chat_command: sound_file and content_json_path are mutually exclusive")
     allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
+    mcp_servers = _CHAT_MCP_SERVERS
+    if _effective_harness() in _FILES_MCP_HARNESSES:
+        allowed = allowed + ",mcp__files__read_file"
+        mcp_servers = mcp_servers + ("files",)
     allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
     cmd = [
         "bash",
@@ -446,7 +458,7 @@ def build_invoke_agent_chat_command(
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
-    cmd += ["--mcp-servers", " ".join(_CHAT_MCP_SERVERS)]
+    cmd += ["--mcp-servers", " ".join(mcp_servers)]
     cmd += ["--json-schema", json.dumps(chat_schema(voice=(chat_source == "voice")), ensure_ascii=False)]
     if content_json_path is not None:
         cmd += ["--content-json", f"@{content_json_path}"]

@@ -1008,28 +1008,51 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertIn("not --allowed-mcp-tools", help_text)
         self.assertIn("Per-server partial allowlists", help_text)
 
-    def test_codex_rejects_allowed_builtins(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "codex"
-            write_executable(
-                fake,
-                """
-                #!/usr/bin/env bash
-                echo "codex must not be called" >&2
-                exit 99
-                """,
-            )
+    def test_codex_accepts_allowed_builtins_and_maps_web_search(self):
+        # 契約変更(2026-07-23・F4): --allowed-builtins は全ハーネス共通の能力意図。codex では
+        # die せず受理し、WebSearch 意図の有無を native web_search(live/disabled)へ翻訳する。
+        # Read は files MCP が担うため codex へ raw フラグは渡さない。
+        for builtins, expected_web in (
+            ("Read", "web_search=disabled"),
+            ("Read,WebSearch", "web_search=live"),
+            ("Read, WebSearch", "web_search=live"),  # 空白付きCSVも正規化して判定(sol Med)
+        ):
+            with self.subTest(builtins=builtins):
+                with tempfile.TemporaryDirectory() as tmp:
+                    record = Path(tmp) / "args.json"
+                    fake = Path(tmp) / "codex"
+                    write_executable(
+                        fake,
+                        f"""
+                        #!/usr/bin/env python3
+                        import json
+                        import sys
+                        from pathlib import Path
 
-            result = self.run_wrapper(
-                ["--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
-                {
-                    "EHA_AGENT_HARNESS": "codex",
-                    "EHA_CODEX_BIN": fake.as_posix(),
-                },
-            )
+                        args = sys.argv[1:]
+                        out_path = args[args.index("-o") + 1]
+                        Path({record.as_posix()!r}).write_text(
+                            json.dumps(args), encoding="utf-8"
+                        )
+                        Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                        """,
+                    )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("--allowed-builtins is not supported for codex", result.stderr)
+                    result = self.run_wrapper(
+                        ["--allowed-builtins", builtins, "hello"],
+                        {
+                            "EHA_AGENT_HARNESS": "codex",
+                            "EHA_CODEX_BIN": fake.as_posix(),
+                        },
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn(
+                        "--allowed-builtins is not supported for codex", result.stderr
+                    )
+                    args = json.loads(record.read_text(encoding="utf-8"))
+                    self.assertIn(expected_web, args)
+                    self.assertNotIn("--allowed-builtins", args)
 
     def test_codex_rejects_content_json_including_at_path_form(self):
         # content_json_set(2026-07-16の@<path>対応)がinline/@path両方の指定を
@@ -1290,29 +1313,36 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(config_path.stat().st_mtime_ns, mtime_before)
 
-    def test_agy_mcp_requires_agent_site_and_rejects_allowed_builtins(self):
+    def test_agy_mcp_requires_agent_site_and_accepts_allowed_builtins(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = self.write_project_fake_agy(Path(tmp))
+            # hermetic: agent-site の作業場所を temp に固定し、repo 直下 chat/.agents を作らない(sol Med)。
+            work = Path(tmp) / "work"
+            work.mkdir()
 
             missing_site = self.run_wrapper(
                 ["--mcp-servers", "ha", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": work.as_posix(),
                 },
             )
-            bad_builtins = self.run_wrapper(
+            # 契約変更(2026-07-23・F4): agy も --allowed-builtins で die しない。Read は files MCP、
+            # WebSearch(agy native)の grant 形式は 2.1.0(§8)。ここでは受理して無視することを確認。
+            with_builtins = self.run_wrapper(
                 ["--agent-site", "chat", "--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": work.as_posix(),
                 },
             )
 
             self.assertNotEqual(missing_site.returncode, 0)
             self.assertIn("--agent-site is required for agy MCP config", missing_site.stderr)
-            self.assertNotEqual(bad_builtins.returncode, 0)
-            self.assertIn("--allowed-builtins is not supported for agy", bad_builtins.stderr)
+            self.assertEqual(with_builtins.returncode, 0, with_builtins.stderr)
+            self.assertNotIn("--allowed-builtins is not supported for agy", with_builtins.stderr)
 
     def test_agent_site_is_ignored_by_codex_cwd_selection(self):
         with tempfile.TemporaryDirectory() as tmp:

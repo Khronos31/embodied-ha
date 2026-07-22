@@ -298,6 +298,17 @@ class ServerSpecsTests(unittest.TestCase):
     def test_server_specs_match_runtime_tools_with_default_preferences(self):
         self.assert_server_specs_match_runtime_tools()
 
+    def test_files_server_env_excludes_secrets(self):
+        # files MCP は HA へアクセスしないため COMMON_ENV(SUPERVISOR_TOKEN 等の秘密)を渡さない=最小権限。
+        # (本命の防御は files-mcp.py の /proc・/sys 拒否+NUL 検出。これはその二重化。)
+        with tempfile.TemporaryDirectory() as tmp:
+            module, env = self.load_module(tmp)
+            with mock.patch.dict(os.environ, env, clear=False):
+                files = module.SERVER_SPECS["files"].build()
+        self.assertNotIn("SUPERVISOR_TOKEN", files["env"])
+        self.assertNotIn("HA_URL", files["env"])
+        self.assertIn("PATH", files["env"])
+
     def test_server_specs_match_runtime_tools_when_http_post_enabled(self):
         self.assert_server_specs_match_runtime_tools({"http_post_enabled": True})
 

@@ -10,6 +10,7 @@ try/exceptで包まれたlocation_belief.json/preferences.jsonの読み取りの
 """
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -223,11 +224,13 @@ def _arg_after(cmd, flag):
 
 class InvokeAgentChatPathTests(unittest.TestCase):
     def test_command_splits_builtin_and_mcp_tools_for_chat(self):
-        cmd = chat_invoke.build_invoke_agent_chat_command(
-            chat_source="chat",
-            script_dir=str(EMBODIED_HA_DIR),
-            user_prompt="こんにちは",
-        )
+        # 既定(claude)は files MCP を付けない(決定2: claude native Read 維持)。
+        with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}):
+            cmd = chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat",
+                script_dir=str(EMBODIED_HA_DIR),
+                user_prompt="こんにちは",
+            )
         self.assertEqual(cmd[:4], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh"), "--model", "default"])
         self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
 
@@ -239,12 +242,28 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertTrue(common_mcp_tools.issubset(allowed_mcp_tools))
         self.assertIn("mcp__audio__speak", allowed_mcp_tools)
         self.assertNotIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+        self.assertNotIn("mcp__files__read_file", allowed_mcp_tools)  # claude=native Read
 
         self.assertEqual(
             _arg_after(cmd, "--mcp-servers"),
             "memory ha sociality hacontrol camera audio body sensors http lounge game song",
         )
         self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
+
+    def test_codex_and_agy_get_files_mcp_read_file(self):
+        # codex/agy は bwrap で native シェル Read 不可のため files MCP で read_file を得る(決定2)。
+        for harness in ("codex", "agy"):
+            with self.subTest(harness=harness):
+                with patch.dict(os.environ, {"EHA_AGENT_HARNESS": harness}):
+                    cmd = chat_invoke.build_invoke_agent_chat_command(
+                        chat_source="chat",
+                        script_dir=str(EMBODIED_HA_DIR),
+                        user_prompt="こんにちは",
+                    )
+                servers = _arg_after(cmd, "--mcp-servers").split(" ")
+                self.assertIn("files", servers)
+                allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+                self.assertIn("mcp__files__read_file", allowed_mcp_tools)
 
     def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
         # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで
