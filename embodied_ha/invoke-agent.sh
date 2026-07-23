@@ -560,13 +560,15 @@ run_codex() {
     TEMP_FILES+=("$profile_path")
     cmd+=("--profile" "$profile_name")
   fi
+  # json_schema は --output-schema(OpenAI strict response_format)ではなく prompt へ埋め込む(F5・2026-07-23)。
+  # EHA のスキーマは任意キーの object(cameras_add 等の {"type":"object"})を含み、OpenAI strict モード
+  # (全 object に additionalProperties:false 必須=任意キー不可)では表現できないため。agy と同じ
+  # prompt-injection にし、最終メッセージは -o で回収する(claude は native --json-schema のまま)。
   if [[ -n "$json_schema" ]]; then
-    # Keep process substitution here intentionally: this is the contract the
-    # wrapper exists to hide from callers, and it was verified from a Bash file.
-    "${cmd[@]}" --output-schema <(printf '%s' "$json_schema") -o >(cat) "$full_prompt" 1>&2
-  else
-    "${cmd[@]}" -o >(cat) "$full_prompt" 1>&2
+    full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi
+  # -o >(cat) の process substitution は wrapper が隠す契約(Bash ファイルから検証済み)。
+  "${cmd[@]}" -o >(cat) "$full_prompt" 1>&2
 }
 
 run_agy() {

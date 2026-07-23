@@ -322,14 +322,11 @@ class InvokeAgentTests(unittest.TestCase):
                 from pathlib import Path
 
                 args = sys.argv[1:]
-                schema_path = args[args.index("--output-schema") + 1]
                 out_path = args[args.index("-o") + 1]
                 prompt = args[-1]
-                schema = Path(schema_path).read_text(encoding="utf-8")
                 Path({record.as_posix()!r}).write_text(
                     json.dumps({{
                         "args": args,
-                        "schema": schema,
                         "prompt": prompt,
                     }}, ensure_ascii=False),
                     encoding="utf-8",
@@ -357,8 +354,12 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(args[:2], ["exec", "--skip-git-repo-check"])
             self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-luna")
             self.assertEqual(args[args.index("--config") + 1], "model_reasoning_effort=low")
-            self.assertEqual(payload["schema"], schema)
-            self.assertEqual(payload["prompt"], "SYS\n\nhello")
+            # 契約変更(F5・2026-07-23): codex は --output-schema(OpenAI strict)を使わず、agy 同様に schema を
+            # prompt へ埋め込む(EHA の任意キー object は strict で表現不可)。
+            self.assertNotIn("--output-schema", args)
+            self.assertTrue(payload["prompt"].startswith("SYS\n\nhello"))
+            self.assertIn(schema, payload["prompt"])
+            self.assertTrue(payload["prompt"].endswith("JSON:\n"))
 
     def test_agy_appends_schema_to_prompt_and_extracts_json(self):
         with tempfile.TemporaryDirectory() as tmp:
