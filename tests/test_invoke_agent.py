@@ -1211,6 +1211,45 @@ class InvokeAgentTests(unittest.TestCase):
                 ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
+    def test_agy_grants_read_file_when_read_builtin_intended(self):
+        # F9(2026-07-23): agy native read_file は config.json globalPermissionGrants の read_file(*) grant で
+        # headless でも通る(実機確認)。Read 意図(--allowed-builtins Read)がある時だけ配布する。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"userSettings": {}}', encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home,
+                ["--mcp-servers", "ha", "--allowed-builtins", "Read"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            allow = config["userSettings"]["globalPermissionGrants"]["allow"]
+            self.assertIn("read_file(*)", allow)
+            self.assertIn("mcp(ha/*)", allow)
+
+    def test_agy_does_not_grant_read_file_without_read_builtin(self):
+        # Read 意図が無ければ read_file(*) は配らない(intent gate)。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"userSettings": {}}', encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            allow = config["userSettings"]["globalPermissionGrants"]["allow"]
+            self.assertNotIn("read_file(*)", allow)
+
     def test_agy_permission_grants_merge_is_add_only_and_dedupes(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)

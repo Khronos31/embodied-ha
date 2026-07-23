@@ -362,9 +362,10 @@ _CHAT_MCP_SERVERS = (
     "body", "sensors", "http", "lounge", "game", "song",
 )
 
-# codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。files MCP でハーネス非依存に Read を
-# 提供する。claude は native Read を使うため付けない(決定2「claude native 維持・codex/agy だけ MCP」)。
-_FILES_MCP_HARNESSES = frozenset({"codex", "agy"})
+# codex は本環境の bwrap 制約でシェル経由 Read が不可なので files MCP で Read を提供する。
+# claude は native Read、agy は native read_file(config.json の read_file(*) grant で headless でも通る・
+# 2026-07-23 実機確認)を使うため files MCP は付けない。→ files MCP は codex 限定。
+_FILES_MCP_HARNESSES = frozenset({"codex"})
 
 
 def _effective_harness() -> str:
