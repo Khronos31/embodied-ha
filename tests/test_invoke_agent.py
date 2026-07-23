@@ -354,6 +354,22 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(args[:2], ["exec", "--skip-git-repo-check"])
             self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-luna")
             self.assertEqual(args[args.index("--config") + 1], "model_reasoning_effort=low")
+            # 契約(F11-B1・2026-07-23): codex 既定の built-in 実行系/apps を明示 hardening する。
+            # read-only sandbox + apps/shell_tool 等の feature 無効化。exec は残す(MCP 中核)。
+            self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
+            disabled = [args[i + 1] for i, a in enumerate(args) if a == "--disable"]
+            for feature in (
+                "apps",
+                "shell_tool",
+                "image_generation",
+                "goals",
+                "multi_agent",
+                "tool_suggest",
+            ):
+                self.assertIn(feature, disabled)
+            # --ignore-user-config は使わない: transient --profile ごと無視され MCP が全滅するため
+            # (2026-07-23 実機 A/B 実証)。
+            self.assertNotIn("--ignore-user-config", args)
             # 契約変更(F5・2026-07-23): codex は --output-schema(OpenAI strict)を使わず、agy 同様に schema を
             # prompt へ埋め込む(EHA の任意キー object は strict で表現不可)。
             self.assertNotIn("--output-schema", args)

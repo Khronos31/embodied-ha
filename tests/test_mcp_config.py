@@ -163,8 +163,15 @@ class McpConfigFormatTests(unittest.TestCase):
                 profile["mcp_servers"]["files"]["default_tools_approval_mode"],
                 "approve",
             )
+            # F11-A1(2026-07-23): developer_instruction を全 MCP 向けに一般化(code-mode の
+            # ALL_TOOLS registry を照合させて confabulation を抑える)。files 提示時は read_file
+            # ガイドも併記される。
+            self.assertIn("ALL_TOOLS", profile["developer_instructions"])
+            self.assertIn(
+                "do not rely on earlier conversation claims",
+                profile["developer_instructions"],
+            )
             self.assertIn("files MCP server's read_file tool", profile["developer_instructions"])
-            self.assertIn("Do not infer current tool availability", profile["developer_instructions"])
             # F10(2026-07-23): 承認は files 限定ではなく全 first-party server に付与する。
             # files 限定だと codex chat が ha/memory/body/game 等を "user cancelled" で
             # 一切呼べない（実機E2Eで判明）。ha も approve されること。
@@ -186,9 +193,14 @@ class McpConfigFormatTests(unittest.TestCase):
             )
             with ha_only_path.open("rb") as fh:
                 ha_only_profile = tomllib.load(fh)
-            # developer_instructions は files 提示時だけ（read_file 用ガイド）なので付かない。
-            self.assertNotIn("developer_instructions", ha_only_profile)
-            # だが承認は first-party 一律なので files 非同席でも ha は approve される（F10）。
+            # F11-A1: 一般 code-mode instruction は MCP server がある限り付く(files 非同席でも)。
+            self.assertIn("ALL_TOOLS", ha_only_profile["developer_instructions"])
+            # ただし read_file 固有ガイドは files 提示時だけなので付かない。
+            self.assertNotIn(
+                "files MCP server's read_file tool",
+                ha_only_profile["developer_instructions"],
+            )
+            # 承認は first-party 一律なので files 非同席でも ha は approve される（F10）。
             self.assertEqual(
                 ha_only_profile["mcp_servers"]["ha"]["default_tools_approval_mode"],
                 "approve",

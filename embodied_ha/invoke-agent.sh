@@ -525,6 +525,25 @@ run_codex() {
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  # F11-B1(2026-07-23・Codex red-team [[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]]):
+  # codex 既定は built-in 実行系(exec_command/apply_patch/write_stdin)と ChatGPT apps(codex_apps・
+  # ユーザーの CODEX_HOME 認証由来)を露出する。住み込み個体には不要かつ危険なので明示 hardening する。
+  #   --sandbox read-only    : default/global config のドリフトに依存せず書込みを塞ぐ(exec は残るが write 不可)
+  #   --disable apps         : mcp__codex_apps__* を除去(feature フラグ由来なので user-config 非依存)
+  #   --disable shell_tool   : exec_command / write_stdin を除去
+  #   --disable image_generation/goals/multi_agent/tool_suggest : chat に不要な surface を削減
+  # exec(code-mode の MCP 呼出し中核)と apply_patch は残るが、read-only sandbox で書込みは拒否される。
+  # flag 実在は codex 0.144.4 の --help / features list で確認済。
+  # ★--ignore-user-config は「使わない」: EHA は MCP を CODEX_HOME 内の transient --profile で渡すため、
+  #   --ignore-user-config を付けると profile ごと無視され MCP tool も developer_instruction も全滅する
+  #   (2026-07-23 SCS で --json の mcp_tool_call 有無で A/B 実証: 付けると read_file 呼び出し消失・
+  #   外すと EHA_F11 canary 読取成功)。addon の CODEX_HOME は DIY で個人 global 設定を持たないため
+  #   継承リスクは元々低く、codex_apps 除去は --disable apps が担う。厳密な user-config 隔離が要る場合は
+  #   MCP を --profile でなく inline -c で渡す別実装が要る(将来課題・レポート§8/B-1)。
+  cmd+=("--sandbox" "read-only"
+        "--disable" "apps" "--disable" "shell_tool"
+        "--disable" "image_generation" "--disable" "goals"
+        "--disable" "multi_agent" "--disable" "tool_suggest")
   # WebSearch 意図があれば codex native の live web_search を有効化、無ければ無効化して
   # claude chat(WebSearch 非許可)とのパリティを取る。--allowed-builtins 未指定時は codex 既定に任せる。
   # validate_allowed_builtins が要素を trim して受理する("Read, WebSearch"等)ため、判定前に空白を除去して

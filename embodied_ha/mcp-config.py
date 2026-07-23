@@ -285,21 +285,32 @@ def _toml_array(values):
 
 def _write_codex_profile(path, servers, allowed_tools):
     lines = []
-    if "files" in servers:
-        # Codex 0.145.0 + gpt-5.6-terra では、通常 chat の長い user prompt 内に
-        # read_file の利用方法を書くだけでは tool を「利用不能」と誤判定する一方、
-        # 同一 profile の短い prompt では呼べることを実機確認した。これは tool の
-        # 接続契約なので user prompt ではなく追加 developer instruction に置く。
-        # model_instructions_file は built-in base instructions を置換するため使わない。
-        lines.append(
-            "developer_instructions = "
-            + _toml_string(
-                "When the user asks to read a file, use the files MCP server's read_file tool. "
-                "Pass an absolute or relative regular-file path. It does not list directories. "
-                "Do not infer current tool availability from prior conversation claims; call the tool "
-                "and report an error only if the current call fails."
-            )
+    # Codex 0.144.4 + gpt-5.6-terra は tool_mode=code_mode_only で、MCP tool を
+    # (1)モデルへ直接提示される定義層 と (2)exec の JS から ALL_TOOLS/tools.<name> で
+    # 解決する遅延 registry 層 の二層で扱う。Terra は(1)だけを見て MCP tool を「利用不能」と
+    # 誤判定しうる(70-tool 隔離実験で無指示 0/70 正答・本 instruction で 70/70=2026-07-23 Codex
+    # red-team・[[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]] F11-A1)。これは tool の
+    # 接続契約なので user prompt ではなく developer instruction に置く(F6 の files 限定・read_file
+    # 中心を全 MCP へ一般化)。model_instructions_file は built-in base instructions を置換するため使わない。
+    instructions = []
+    if servers:
+        instructions.append(
+            "The MCP tools in this run are exposed through the code-mode exec runtime: they live in "
+            "the exec ALL_TOOLS registry and are invoked via the tools.<name> object, not only as "
+            "directly-listed function definitions. Do not judge a tool's availability from the "
+            "directly-visible definitions alone, and do not rely on earlier conversation claims about "
+            "what is or is not available. Before telling the user a tool is unavailable, look it up by "
+            "its exact name in ALL_TOOLS (for a side-effecting tool prefer this registry check over "
+            "invoking it just to probe), or make one schema-valid call, and base your answer on the "
+            "current result rather than on what you said earlier."
         )
+    if "files" in servers:
+        instructions.append(
+            "When the user asks to read a file, use the files MCP server's read_file tool with an "
+            "absolute or relative regular-file path (it does not list directories)."
+        )
+    if instructions:
+        lines.append("developer_instructions = " + _toml_string(" ".join(instructions)))
         lines.append("")
     for name, server in servers.items():
         lines.append(f"[mcp_servers.{name}]")
