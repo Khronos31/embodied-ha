@@ -103,6 +103,36 @@ class FilesMcpReadFileTests(unittest.TestCase):
         self.assertTrue(err)
         self.assertIn("仮想ファイルシステム", text)
 
+    def test_sys_is_rejected(self):
+        # sysfs のファイルは S_ISREG を通る(NUL も無い)ため、realpath prefix 判定でしか
+        # 弾けない。/proc と同じ _DENY_REALPATH_PREFIXES 経路が /sys にも効くことを検証(2026-07-23)。
+        candidates = (
+            "/sys/kernel/ostype",
+            "/sys/devices/system/cpu/online",
+            "/sys/class/dmi/id/sys_vendor",
+        )
+        path = next((p for p in candidates if os.path.exists(p)), None)
+        if path is None:
+            self.skipTest("読める /sys ファイルが無い環境")
+        text, err = self._call(path)
+        self.assertTrue(err)
+        self.assertIn("仮想ファイルシステム", text)
+
+    def test_unix_socket_is_rejected(self):
+        # ソケットは open(O_RDONLY) で ENXIO になるか、開けても S_ISREG を通らず弾かれる。
+        # いずれにせよ内容は返さない(fifo と同じ非通常ファイル拒否・2026-07-23)。
+        import socket
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sock_path = os.path.join(tmp, "s.sock")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                srv.bind(sock_path)
+                _text, err = self._call(sock_path)
+                self.assertTrue(err)
+            finally:
+                srv.close()
+
     def test_proc_text_file_rejected_by_realpath_not_only_nul(self):
         # /proc/self/status はテキスト(NUL 無し)。NUL 拒否では捕まらないので realpath-reject を独立にピンする。
         text, err = self._call("/proc/self/status")

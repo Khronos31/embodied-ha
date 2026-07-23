@@ -258,13 +258,30 @@ _RACE_BASES = [
 ]
 
 
+# gensim パッケージ(/data/python-packages)も chiVe ベクトル(.kv, /data)も /data 配下にあり、
+# アドオン uninstall で消える(インストール済みフラグは preferences.json=/config 側に残す仕様=ゆの:
+# preferences.json はユーザー直接編集領域なのでフラグ場所は動かさない)。この不整合時、生の
+# ImportError「No module named gensim」/ FileNotFoundError は一般ユーザーに意味不明なので、
+# 再インストール導線を示す文言へ翻訳する(2026-07-23)。
+_WORDVEC_UNAVAILABLE_MSG = (
+    "モデルのロードに失敗しました。設定画面のゲームタブから"
+    "WordVecレースを再インストールしてください。"
+)
+
+
 def _get_kv():
     global _kv
     if _kv is not None:
         return _kv
     kv_path = "/data/word2vec/chive-1.3-mc90_gensim/chive-1.3-mc90.kv"
-    from gensim.models import KeyedVectors
-    _kv = KeyedVectors.load(kv_path)
+    try:
+        from gensim.models import KeyedVectors
+    except ImportError as e:
+        raise RuntimeError(_WORDVEC_UNAVAILABLE_MSG) from e
+    try:
+        _kv = KeyedVectors.load(kv_path)
+    except (FileNotFoundError, OSError) as e:
+        raise RuntimeError(_WORDVEC_UNAVAILABLE_MSG) from e
     return _kv
 
 

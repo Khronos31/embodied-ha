@@ -230,5 +230,34 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertEqual(self.recorded_argv(), [])
 
 
+class WordVecModelUnavailableMessageTests(unittest.TestCase):
+    """gensim/chiVe が /data から消えた(uninstall後)ときの friendly 文言(2026-07-23・#3)。"""
+
+    def _load_unmocked(self):
+        # load_game_module と違い _get_kv を mock しない=実ロード経路を検証する。
+        name = f"game_mcp_kv_test_{uuid.uuid4().hex}"
+        spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        module._PLUGINS = {"wordvec_race": True}
+        return module
+
+    def test_get_kv_missing_model_raises_reinstall_message(self):
+        module = self._load_unmocked()
+        # テスト環境に /data/word2vec は存在しない(gensim 有無に関わらず翻訳される)。
+        with self.assertRaises(RuntimeError) as cm:
+            module._get_kv()
+        msg = str(cm.exception)
+        self.assertIn("再インストール", msg)
+        self.assertIn("ゲームタブ", msg)
+        self.assertNotIn("gensim", msg)  # 生の import エラーを晒さない
+
+    def test_start_surfaces_reinstall_message_when_model_missing(self):
+        module = self._load_unmocked()
+        result = result_json(module.game_wordvec_race_start({"base": "犬", "mode": "cpu"}))
+        self.assertIn("再インストール", json.dumps(result, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     unittest.main()
