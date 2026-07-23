@@ -1185,6 +1185,11 @@ async function harnessStreamSSE(method, url, body, handlers) {
             let payload = null;
             try { payload = data ? JSON.parse(data) : null; } catch (_) { payload = { text: data }; }
             if (event === 'line') handlers.onLine && handlers.onLine(payload);
+            // agy(Antigravity)の login backend は line ではなく url/waiting_code の typed イベントを送る。
+            // ピッカーは onLine(text から URL 正規表現抽出)経路なので、url イベントを {text:url} として流し込む
+            // (agy は usesCodeInput=true なので URL 表示＋コード入力欄が出る)。claude/codex は url を送らないため無影響。
+            else if (event === 'url') handlers.onLine && handlers.onLine({ text: (payload && payload.url) || '' });
+            else if (event === 'waiting_code') handlers.onLine && handlers.onLine({ text: 'authorization code' });
             else if (event === 'done') handlers.onDone && handlers.onDone(payload);
             else if (event === 'error') handlers.onError && handlers.onError((payload && payload.error) || 'error');
         }
