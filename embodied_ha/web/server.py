@@ -16,6 +16,22 @@ try:
     import antigravity_setup  # type: ignore
 except Exception:
     antigravity_setup = None
+try:
+    import agy_update_freeze  # type: ignore
+except Exception:
+    agy_update_freeze = None
+try:
+    import codex_setup  # type: ignore
+except Exception:
+    codex_setup = None
+# claude_setupはagy/codexと違い、本番実績のある既存経路(旧/api/setup/*とログイン
+# 完了検知)が依存する。import失敗を握り潰すと既存機能が黙って未認証扱いに退行する
+# ため、必須importとして失敗時は起動時に大きく落とす(sol指摘 2026-07-18)。
+import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
@@ -86,6 +102,43 @@ def _set_install_status(key: str, status: str, message: str) -> None:
 def _get_install_status(key: str) -> dict:
     with _install_status_lock:
         return dict(_install_status.get(key, {"status": "idle", "message": ""}))
+
+
+def _harness_binary_present(harness: str) -> bool:
+    """Whether the harness's executable actually exists (not just a nominal install)."""
+    if harness == "claude":
+        return claude_setup.is_installed()
+    if harness == "codex":
+        return codex_setup is not None and codex_setup.is_installed()
+    if harness == "agy":
+        return antigravity_setup is not None and antigravity_setup.is_installed()
+    return False
+
+
+def _commit_selected_harness(harness: str) -> None:
+    """Verify the freshly installed binary and atomically claim the selection.
+
+    Unlike the old best-effort recorder, this raises so the install handler reports
+    an error instead of a false success (sol H1/H9):
+
+    - the binary is missing after a nominal install (e.g. agy's script exited 0 but
+      produced no executable), or
+    - a *different* valid harness is already selected — the "fixed on first selection"
+      policy rejects switching without an uninstall first.
+
+    A shared cross-process lock (harness_state.compare_and_set) serialises concurrent
+    installers so the last one cannot silently overwrite an earlier selection.
+    """
+    if not _harness_binary_present(harness):
+        raise RuntimeError(
+            f"{harness} の実行ファイルが見つかりません（インストールが完了していません）"
+        )
+    outcome, current = harness_state.compare_and_set(harness)
+    if outcome == "conflict":
+        raise RuntimeError(
+            f"既に別のハーネス（{current}）が選択済みです。"
+            "変更するにはアンインストールしてから選び直してください"
+        )
 
 
 def _start_install_thread(key: str, target) -> bool:
@@ -365,28 +418,183 @@ MQTT_USER = os.environ.get("MQTT_USER", "")
 MQTT_PASS = os.environ.get("MQTT_PASS", "")
 HA_URL    = os.environ["HA_URL"]
 HA_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
-
+_SELF_RESTART_DELAY_SECONDS = 0.5
+_SELF_RESTART_MAX_ATTEMPTS = 3
+_SELF_RESTART_RETRY_DELAY_SECONDS = 1.0
+_self_restart_lock = threading.Lock()
+_self_restart_scheduled = False
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
-CLAUDE_CONFIG_DIR_PATH = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
-
 _ANTIGRAVITY_LOGIN_PTY_FD: list = [None]   # [int | None]
 _ANTIGRAVITY_LOGIN_PTY_LOCK = threading.Lock()
 _ANTIGRAVITY_LOGIN_SESSION_LOCK = threading.Lock()
 _ANTIGRAVITY_INSTALL_LOCK = threading.Lock()
+_CLAUDE_MUTATION_LOCK = threading.Lock()
+_CODEX_INSTALL_LOCK = threading.Lock()
+_CODEX_ACTIVE_OPERATION: list = [None]  # [str | None]
+_CODEX_ACTIVE_OPERATION_LOCK = threading.Lock()
+_CODEX_LOGIN_TIMEOUT = 16 * 60
+_CODEX_LOGIN_POLL_INTERVAL = 1
+_CODEX_LOGIN_QUEUE_PUT_TIMEOUT = 0.1
 _ANTIGRAVITY_LOGIN_URL_RE = re.compile(r"https://[^\s\x00-\x1f]+")
+
+# Setup mutation routes are intentionally centralized so new aliases cannot
+# accidentally bypass the ingress-only boundary. Status reads are not included.
+_SETUP_MUTATION_PATHS = frozenset({
+    "/api/setup/login", "/api/setup/login-code",
+    "/api/setup/claude/login", "/api/setup/claude/login-code",
+    "/api/setup/claude/install", "/api/setup/claude/uninstall",
+    "/api/setup/claude/clear-auth", "/api/setup/claude/logout",
+    "/api/setup/antigravity/install", "/api/setup/antigravity/login",
+    "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
+    "/api/setup/antigravity/uninstall", "/api/setup/antigravity/clear-auth",
+    "/api/setup/antigravity/logout",
+    "/api/setup/codex/install", "/api/setup/codex/login",
+    "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
+    "/api/setup/codex/logout",
+    "/api/setup/agent-prefs",
+})
+# Paths in _SETUP_MUTATION_PATHS that are a *read* on GET (guarded only on their
+# mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
+# reads while POST stays ingress-guarded (sol Med).
+_SETUP_GET_READS = frozenset({"/api/setup/agent-prefs"})
+_SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
+
+
+def setup_guard(client_address) -> bool:
+    """Return whether a setup mutation is allowed for this peer address.
+
+    172.30.32.2 is the fixed ingress-proxy source documented by Home Assistant.
+    Verify it on the deployed appliance; if that assumption changes, recover
+    with EHA_INGRESS_SOURCE (one or more comma-separated sources) or the
+    EHA_SETUP_GUARD=off emergency override.  The override is deliberately read
+    for every request so an add-on restart can recover from a bad deployment
+    assumption.
+    """
+    if os.environ.get("EHA_SETUP_GUARD", "").lower() == "off":
+        return True
+    sources = {
+        source.strip()
+        for source in os.environ.get("EHA_INGRESS_SOURCE", "172.30.32.2").split(",")
+        if source.strip()
+    }
+    return client_address[0] in sources
+
+
+def _codex_active_operation() -> str | None:
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        return _CODEX_ACTIVE_OPERATION[0]
+
+
+def _acquire_codex_mutation(operation: str) -> bool:
+    """Acquire Codex's shared mutation lock and record its actual operation.
+
+    取得と操作名設定を同一クリティカルセクションで行う——分離すると
+    「lock取得済み・操作名未設定」の瞬間にbusyメッセージが実操作名を
+    含められない競合窓ができる(sol再レビュー指摘)。解放側も同様。
+    """
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        if not _CODEX_INSTALL_LOCK.acquire(blocking=False):
+            return False
+        _CODEX_ACTIVE_OPERATION[0] = operation
+        return True
+
+
+def _release_codex_mutation() -> None:
+    with _CODEX_ACTIVE_OPERATION_LOCK:
+        _CODEX_ACTIVE_OPERATION[0] = None
+        _CODEX_INSTALL_LOCK.release()
+
+
+def _codex_busy_error() -> str:
+    operation = _codex_active_operation()
+    return f"Codex {operation or 'setup'} is running"
+
+
+def _acquire_antigravity_destructive_locks() -> bool:
+    """Exclude uninstall/clear-auth from both active Antigravity sessions."""
+    if not _ANTIGRAVITY_INSTALL_LOCK.acquire(blocking=False):
+        return False
+    if _ANTIGRAVITY_LOGIN_SESSION_LOCK.acquire(blocking=False):
+        return True
+    _ANTIGRAVITY_INSTALL_LOCK.release()
+    return False
+
+
+def _release_antigravity_destructive_locks() -> None:
+    _ANTIGRAVITY_LOGIN_SESSION_LOCK.release()
+    _ANTIGRAVITY_INSTALL_LOCK.release()
+
+
+def _request_addon_self_restart() -> bool:
+    """Ask Supervisor to restart this add-on without exposing its token.
+
+    成功で True、リトライ全滅で False を返すベストエフォート。Request 生成も
+    retry の try 内に置くため、不正な EHA_SUPERVISOR_URL 等でも通常は False を返す
+    (latch解放の最終的な保証は呼び出し元 request_later の finally が担う)。
+    """
+    supervisor_base = os.environ.get("EHA_SUPERVISOR_URL", "http://supervisor").rstrip("/")
+    for attempt in range(_SELF_RESTART_MAX_ATTEMPTS):
+        try:
+            request = urllib.request.Request(
+                f"{supervisor_base}/addons/self/restart",
+                headers={"Authorization": f"Bearer {HA_TOKEN}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10):
+                return True
+        except Exception:
+            if attempt < _SELF_RESTART_MAX_ATTEMPTS - 1:
+                time.sleep(_SELF_RESTART_RETRY_DELAY_SECONDS)
+    print("[server] self-restart request failed", flush=True)
+    return False
+
+
+def _schedule_self_restart() -> None:
+    """Request a restart after the logout response has had time to flush."""
+    def request_later() -> None:
+        # 成功時のみ latch を True のまま残す。それ以外の全経路(False返し・sleep/helper/
+        # print の例外・BaseException)で latch を戻し、以後の再ログアウトで再試行できるように
+        # する。latch解放は必ず finally で行い、内側のログ出力失敗より優先させる(airtight)。
+        global _self_restart_scheduled
+        ok = False
+        try:
+            try:
+                time.sleep(_SELF_RESTART_DELAY_SECONDS)
+                ok = _request_addon_self_restart()
+            except Exception:
+                print("[server] self-restart worker failed", flush=True)
+        finally:
+            if not ok:
+                with _self_restart_lock:
+                    _self_restart_scheduled = False
+
+    global _self_restart_scheduled
+    with _self_restart_lock:
+        if _self_restart_scheduled:
+            return
+        _self_restart_scheduled = True
+        try:
+            threading.Thread(target=request_later, daemon=True).start()
+        except Exception:
+            _self_restart_scheduled = False
+            raise
+
+
+def _selected_harness_ready() -> bool:
+    """Return whether the selected harness would boot after restart, without writing state.
+
+    Read-only mirror of daemon.harness_ready().  The daemon remains the source
+    of truth; unlike its legacy migration path, the web server never writes a
+    grandfathered Claude selection flag.  Readiness is defined once in
+    harness_status.snapshot() so this mirror can never drift from the daemon
+    (sol R5).
+    """
+    return harness_status.snapshot()["ready"]
 
 
 def is_authenticated() -> bool:
-    # APIキー認証
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    # サブスク認証は OAuthトークン本体 .credentials.json の有無で判定する。
-    # （.claude.json の userID は「ログイン記録」であって認証実体ではない。
-    #   userID があってもトークンが無ければ claude は "Not logged in" になる）
-    for fname in (".credentials.json", "credentials.json"):
-        if os.path.exists(os.path.join(CLAUDE_CONFIG_DIR_PATH, fname)):
-            return True
-    return False
+    """Compatibility wrapper for the existing Claude setup/login flow."""
+    return claude_setup.is_authenticated()
 
 
 def antigravity_status() -> dict:
@@ -405,6 +613,25 @@ def antigravity_status() -> dict:
     state = antigravity_setup.state()
     state["installing"] = _ANTIGRAVITY_INSTALL_LOCK.locked()
     state["login_active"] = _ANTIGRAVITY_LOGIN_SESSION_LOCK.locked()
+    return state
+
+
+def codex_status() -> dict:
+    if codex_setup is None:
+        return {
+            "installed": False,
+            "authenticated": False,
+            "installing": False,
+            "active_operation": None,
+            "install_root": os.environ.get("EHA_CODEX_INSTALL_ROOT", "/data/codex-cli"),
+            "home_dir": os.environ.get("EHA_CODEX_HOME", "/data/codex-home"),
+            "binary_path": "",
+            "auth_path": "",
+        }
+    state = codex_setup.state()
+    operation = _codex_active_operation()
+    state["installing"] = operation == "install"
+    state["active_operation"] = operation
     return state
 
 
@@ -466,7 +693,10 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
     if not state.get("sent_method"):
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
             print("[agy-login] method prompt, sending \\r", flush=True)
-            os.write(master_fd, b"1\n")
+            # raw モードの矢印キー TUI では Enter は CR(\r)。LF(\n)だと選択が登録されず
+            # agy が「press ctrl+d again to exit」へ落ちる(2026-07-23 実機で確認)。
+            # option 1(Google OAuth)は既にハイライト済みなので CR で確定。
+            os.write(master_fd, b"\r")
             state["sent_method"] = True
             return
 
@@ -489,17 +719,17 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
 
     if "color scheme" in line_lower:
         print("[agy-login] color scheme prompt, sending \\r", flush=True)
-        os.write(master_fd, b"\n")
+        os.write(master_fd, b"\r")
         return
 
     if "terms of service" in line_lower or "terms" in line_lower:
         print("[agy-login] terms prompt, sending accept", flush=True)
-        os.write(master_fd, b"\x1b[B\x1b[C\n")
+        os.write(master_fd, b"\x1b[B\x1b[C\r")
         return
 
     if "trust" in line_lower and not state.get("auth_done"):
         print("[agy-login] trust prompt, sending \\r + marking done", flush=True)
-        os.write(master_fd, b"\n")
+        os.write(master_fd, b"\r")
         state["auth_done"] = True
         if antigravity_setup is not None:
             try:
@@ -815,12 +1045,12 @@ def send_chat(message: str, source: str = "chat"):
         subprocess.run(
             ["mosquitto_pub", "-h", MQTT_HOST, "-p", MQTT_PORT,
              "-u", MQTT_USER, "-P", MQTT_PASS,
-             "-t", "embodied_ha/chat/set", "-m", json.dumps({"message": message, "source": source}, ensure_ascii=False)],
+             "-t", f"{MQTT_PREFIX}/chat/set", "-m", json.dumps({"message": message, "source": source}, ensure_ascii=False)],
             capture_output=True, timeout=5
         )
     else:
         payload = json.dumps(
-            {"entity_id": "input_text.embodied_ha_chat_input", "value": message[:100]},
+            {"entity_id": f"input_text.{MQTT_PREFIX}_chat_input", "value": message[:100]},
             ensure_ascii=False
         )
         subprocess.run([
@@ -864,6 +1094,20 @@ class Handler(BaseHTTPRequestHandler):
             path = path[len(base):]
         return path or "/"
 
+    def _block_loopback_setup_mutation(self, path: str, method: str = "POST") -> bool:
+        """Send the common ingress-only rejection for guarded setup routes.
+
+        Some routes (install/login SSE) mutate via GET and must stay guarded, so the
+        default guards every method. A path in _SETUP_GET_READS is a read on GET only
+        (e.g. the agent-prefs read), so it is exempt for GET but still guarded on POST
+        (its mutating verb). sol Med: guard is (method, path)-aware, not path-only."""
+        if path not in _SETUP_MUTATION_PATHS or setup_guard(self.client_address):
+            return False
+        if method == "GET" and path in _SETUP_GET_READS:
+            return False
+        self.send_json({"error": _SETUP_GUARD_ERROR}, 403)
+        return True
+
     def serve_index(self):
         """index.html に window.INGRESS_PATH を注入して返す。"""
         # 本番は HA ingress が X-Ingress-Path を付与する。ローカルプレビュー
@@ -905,13 +1149,21 @@ class Handler(BaseHTTPRequestHandler):
         URL 表示後はユーザーが取得したコードを POST /api/setup/login-code で送り返す。"""
         import subprocess as _sp, pty, select, re as _re
 
-        q: queue.Queue = queue.Queue(maxsize=200)
+        if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b'event: error\ndata: {"error": "Claude login is busy"}\n\n')
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
+        q: queue.Queue = queue.Queue(maxsize=200)
+        worker_owns_lock = False
 
         def run_login():
             master_fd = None
@@ -926,6 +1178,8 @@ class Handler(BaseHTTPRequestHandler):
                 # OAuthコード交換後に .credentials.json を永続化しないため不可
                 # （userIDは書くがトークン本体が書かれない）。auth login はウィザード
                 # 不要・URLが1行・コード送信1秒後に .credentials.json を書く。
+                # CLAUDE_BIN は run.sh が DIY 配置先(binary_path)へ配線済み。
+                # EHA_CLAUDE_BIN も同値を継承するため、通常ターン・ready判定と同一実体を指す。
                 proc = _sp.Popen(
                     [CLAUDE_BIN, "auth", "login", "--claudeai"],
                     stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
@@ -981,10 +1235,18 @@ class Handler(BaseHTTPRequestHandler):
                 if master_fd is not None:
                     try: os.close(master_fd)
                     except OSError: pass
-
-        threading.Thread(target=run_login, daemon=True).start()
+                _CLAUDE_MUTATION_LOCK.release()
 
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            threading.Thread(target=run_login, daemon=True).start()
+            # From here the worker owns the lock until its finally block.  This
+            # prevents a second login from overwriting the shared PTY FD.
+            worker_owns_lock = True
             while True:
                 try:
                     etype, data = q.get(timeout=2)
@@ -1003,6 +1265,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
         except Exception:
             pass
+        finally:
+            if not worker_owns_lock:
+                _CLAUDE_MUTATION_LOCK.release()
 
     def _serve_setup_antigravity_install(self):
         """Antigravity CLI を公式 install.sh からオンデマンド導入し、進捗を SSE 配信する。"""
@@ -1034,6 +1299,19 @@ class Handler(BaseHTTPRequestHandler):
 
         def run_install():
             proc = None
+            # 凍結中(hosts リダイレクト有効)はバイナリ DL 元も同じ更新ホストなので、
+            # install の間だけリダイレクトを一時解除する(スクリプト取得〜バイナリ配置完了まで)。
+            # finally で agy がインストール済みなら再凍結する。⚠️この解除窓に別の agy ターンが
+            # 走ると、その bg-updater が実ホストへ到達し更新が成功しうる(凍結の破れ)。緩和は
+            # (a)install は手動・稀 (b)UI は導入済みなら install を隠す (c)agy 自身の 15 分
+            # 更新チェックスロットルで窓中に bg-updater が発火する確率が下がる、の 3 点。install
+            # エンドポイント自体はスロットルせず窓を強制もしないため、厳密化には install 中の
+            # agy 起動ブロックが別途必要(Phase 1 では許容。Fable/sol レビュー 2026-07-20)。
+            if agy_update_freeze is not None:
+                try:
+                    agy_update_freeze.remove_hosts_redirect()
+                except Exception as _e:
+                    print(f"[agy-freeze] install前のリダイレクト解除に失敗: {_e}", file=sys.stderr)
             try:
                 if antigravity_setup is None:
                     raise RuntimeError("antigravity helpers unavailable")
@@ -1042,9 +1320,7 @@ class Handler(BaseHTTPRequestHandler):
                 os.makedirs(home_dir, exist_ok=True)
                 os.makedirs(bin_dir, exist_ok=True)
                 script = antigravity_setup.fetch_install_script(timeout=60)
-                env = os.environ.copy()
-                env["HOME"] = home_dir
-                env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+                env = antigravity_setup.subprocess_env()
                 proc = _sp.Popen(
                     ["bash", "-s", "--", "--dir", bin_dir],
                     stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.STDOUT,
@@ -1062,12 +1338,22 @@ class Handler(BaseHTTPRequestHandler):
                         q.put(("line", line))
                 if not stop_event.is_set():
                     rc = proc.wait()
+                    if rc == 0:
+                        _commit_selected_harness("agy")
                     q.put(("done", rc))
             except Exception as e:
                 if not stop_event.is_set():
                     q.put(("error", str(e)))
             finally:
                 _stop_antigravity_process(proc)
+                # agy がインストール済みなら再凍結する(新規 install 成功時もここで初回凍結)。
+                # 失敗しても install 自体は成功扱いのままにする(fail-open)が、黙殺せずログに残す。
+                if agy_update_freeze is not None and antigravity_setup is not None:
+                    try:
+                        if antigravity_setup.is_installed():
+                            agy_update_freeze.add_hosts_redirect()
+                    except Exception as _e:
+                        print(f"[agy-freeze] install後の再凍結に失敗: {_e}", file=sys.stderr)
                 try:
                     _ANTIGRAVITY_INSTALL_LOCK.release()
                 except Exception:
@@ -1100,6 +1386,261 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"])
+
+    def _serve_setup_codex_install(self):
+        """Codex CLI を GitHub Releases から導入し、進捗を SSE 配信する。"""
+        if not _acquire_codex_mutation("install"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': _codex_busy_error()}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        worker_owns_lock = False
+        try:
+            q: queue.Queue = queue.Queue(maxsize=200)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def run_install():
+                try:
+                    if codex_setup is None:
+                        raise RuntimeError("Codex helpers unavailable")
+                    result = codex_setup.install(progress=lambda text: q.put(("line", text)))
+                    _commit_selected_harness("codex")
+                    q.put(("done", result))
+                except Exception as e:
+                    q.put(("error", str(e)))
+                finally:
+                    _release_codex_mutation()
+
+            threading.Thread(target=run_install, daemon=True).start()
+            worker_owns_lock = True
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            if not worker_owns_lock:
+                _release_codex_mutation()
+
+    def _serve_setup_claude_install(self):
+        """Install Claude CLI from its verified release manifest via SSE."""
+        if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            msg = f"event: error\ndata: {json.dumps({'error': 'Claude setup is busy'}, ensure_ascii=False)}\n\n"
+            try:
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        worker_owns_lock = False
+        try:
+            q: queue.Queue = queue.Queue(maxsize=200)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def run_install():
+                try:
+                    result = claude_setup.install(progress=lambda text: q.put(("line", text)))
+                    _commit_selected_harness("claude")
+                    q.put(("done", result))
+                except Exception as e:
+                    # 実エラーは SSE の error イベントで送るが、フロントが汎用文言へ潰すため
+                    # 診断できない(2026-07-23判明)。install 失敗は addon ログ(stdout)にも残す。
+                    # server.py は sys を import していないため stdout の print を使う(codebase 慣習)。
+                    import traceback
+                    print(f"[server] claude install failed: {type(e).__name__}: {e}", flush=True)
+                    print(traceback.format_exc(), flush=True)
+                    q.put(("error", str(e)))
+                finally:
+                    _CLAUDE_MUTATION_LOCK.release()
+
+            threading.Thread(target=run_install, daemon=True).start()
+            worker_owns_lock = True
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            if not worker_owns_lock:
+                _CLAUDE_MUTATION_LOCK.release()
+
+    def _serve_setup_codex_login(self):
+        """Start Codex device auth and stream its URL/code without using a PTY."""
+        import subprocess as _sp
+
+        if not _acquire_codex_mutation("login"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                msg = f"event: error\ndata: {json.dumps({'error': _codex_busy_error()})}\n\n"
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        proc = None
+        reader = None
+        error = None
+        lines: queue.Queue = queue.Queue(maxsize=200)
+        reader_done = threading.Event()
+        reader_stop = threading.Event()
+        reader_error = threading.Event()
+        reader_error_text = []
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            if codex_setup is None:
+                raise RuntimeError("Codex helpers unavailable")
+            if not codex_setup.is_installed():
+                raise RuntimeError("Codex CLI is not installed")
+            os.makedirs(codex_setup.home_dir(), exist_ok=True)
+            proc = _sp.Popen(
+                [codex_setup.binary_path(), "login", "--device-auth"],
+                stdin=_sp.DEVNULL, stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                text=True, bufsize=1, env=codex_setup.subprocess_env(),
+            )
+
+            def read_stdout():
+                try:
+                    assert proc is not None and proc.stdout is not None
+                    for raw_line in proc.stdout:
+                        for value in codex_setup.device_auth_values(raw_line):
+                            while not reader_stop.is_set():
+                                try:
+                                    lines.put(("line", value), timeout=_CODEX_LOGIN_QUEUE_PUT_TIMEOUT)
+                                    break
+                                except queue.Full:
+                                    pass
+                except Exception as exc:
+                    # The main loop owns process cleanup and SSE output.  Do not
+                    # let reader failures turn into a full login-timeout wait.
+                    reader_error_text.append(f"Codex login output reader failed: {exc}")
+                    reader_error.set()
+                    while not reader_stop.is_set():
+                        try:
+                            lines.put(("error", reader_error_text[0]),
+                                      timeout=_CODEX_LOGIN_QUEUE_PUT_TIMEOUT)
+                            break
+                        except queue.Full:
+                            pass
+                finally:
+                    reader_done.set()
+
+            reader = threading.Thread(target=read_stdout, name="codex-login-reader", daemon=True)
+            reader.start()
+            deadline = time.monotonic() + _CODEX_LOGIN_TIMEOUT
+            while True:
+                if reader_error.is_set():
+                    raise RuntimeError(reader_error_text[0])
+                if codex_setup.is_authenticated():
+                    self.wfile.write(b'event: done\ndata: {"authenticated": true}\n\n')
+                    self.wfile.flush()
+                    return
+                try:
+                    event, value = lines.get(timeout=_CODEX_LOGIN_POLL_INTERVAL)
+                    if reader_error.is_set():
+                        raise RuntimeError(reader_error_text[0])
+                    if event == "error":
+                        raise RuntimeError(value)
+                    msg = f"event: line\ndata: {json.dumps({'text': value}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                except queue.Empty:
+                    # keepalive: 書き込みがないとクライアント切断を検知できず、
+                    # 子プロセスとmutation lockがタイムアウトまで残る(実E2Eで確認)
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                if proc.poll() is not None and reader_done.is_set() and lines.empty():
+                    # 承認成功時、codexはauth.jsonを書いて自ら即終了する(status 0、
+                    # 実ブラウザ承認E2Eで確認)。死亡判定の前に認証完了を再確認しないと
+                    # 「auth.jsonチェック→queue待ち→死亡チェック」の隙間で誤errorになる。
+                    if codex_setup.is_authenticated():
+                        self.wfile.write(b'event: done\ndata: {"authenticated": true}\n\n')
+                        self.wfile.flush()
+                        return
+                    raise RuntimeError(f"Codex login exited before authentication completed (status {proc.returncode})")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Codex device authentication timed out")
+        except Exception as e:
+            error = str(e)
+        finally:
+            # Wake a reader blocked on a full queue before waiting for it.
+            reader_stop.set()
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except _sp.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            if reader is not None:
+                reader.join()
+            if proc is not None and proc.stdout is not None:
+                proc.stdout.close()
+            _release_codex_mutation()
+        if error is not None:
+            try:
+                msg = f"event: error\ndata: {json.dumps({'error': error}, ensure_ascii=False)}\n\n"
+                self.wfile.write(msg.encode())
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def _serve_setup_antigravity_login(self):
         """Antigravity auth login を PTY で起動し、URL と完了状態だけを SSE 配信する。"""
@@ -1310,6 +1851,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
 
+        if self._block_loopback_setup_mutation(path, "GET"):
+            return
+
         if path in ("/", ""):
             self.serve_index()
         elif path == "/style.css":
@@ -1417,11 +1961,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"authenticated": is_authenticated(), "antigravity": antigravity_status()})
         elif path == "/api/setup/antigravity/status":
             self.send_json(antigravity_status())
+        elif path == "/api/setup/codex/status":
+            self.send_json(codex_status())
+        elif path == "/api/setup/claude/status":
+            self.send_json(claude_setup.state())
+        elif path == "/api/setup/overview":
+            # 集約 readiness(Step4増分1a)。フロント gate はこれ1本でピッカー/再開/通常モードを
+            # 分岐できる。読み取りのみ・公開schema固定(path/token/version を載せない・sol L11)。
+            self.send_json(harness_status.snapshot())
+        elif path == "/api/setup/agent-prefs":
+            # default ティアの model/effort 現在値(Step4増分2)。UI 初期表示用・読み取りのみ・
+            # 機密なし(model/effort 選択のみ)。
+            self.send_json({"default_tier": agent_prefs.load().get("default_tier", {})})
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
         elif path == "/api/setup/antigravity/login":
             self._serve_setup_antigravity_login()
-        elif path == "/api/setup/login":
+        elif path in ("/api/setup/login", "/api/setup/claude/login"):
             self._serve_setup_login()
         elif path == "/api/preferences":
             filepath = PREFS_FILE
@@ -1552,9 +2108,118 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def _serve_setup_logout(self, harness: str) -> None:
+        """Clear one harness's credentials, then restart into setup-waiting state."""
+        if harness == "claude":
+            helpers = claude_setup
+            def acquire_lock():
+                return _CLAUDE_MUTATION_LOCK.acquire(blocking=False)
+            release_lock = _CLAUDE_MUTATION_LOCK.release
+            busy_error = "Claude setup is busy"
+            unavailable_error = "Claude helpers unavailable"
+        elif harness == "codex":
+            helpers = codex_setup
+            def acquire_lock():
+                return _acquire_codex_mutation("logout")
+            release_lock = _release_codex_mutation
+            busy_error = _codex_busy_error
+            unavailable_error = "Codex helpers unavailable"
+        elif harness == "agy":
+            helpers = antigravity_setup
+            acquire_lock = _acquire_antigravity_destructive_locks
+            release_lock = _release_antigravity_destructive_locks
+            busy_error = "Antigravity setup is busy"
+            unavailable_error = "antigravity helpers unavailable"
+        else:
+            self.send_json({"error": "unknown harness"}, 500)
+            return
+
+        if helpers is None:
+            self.send_json({"error": unavailable_error}, 500)
+            return
+        if not acquire_lock():
+            self.send_json({"error": busy_error() if callable(busy_error) else busy_error}, 409)
+            return
+        try:
+            try:
+                result = helpers.clear_auth()
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            if result.get("errors"):
+                self.send_json({"ok": False, **result}, 500)
+                return
+            if _selected_harness_ready():
+                # claudeで認証が残る=APIキー(アドオン設定 claude_api_key)保持のときだけ
+                # 構成タブ案内を出す。APIキーが無いのに非選択claudeをlogoutした等では
+                # 誤誘導になるため、汎用の「稼働中ハーネス不変」文言を使う。
+                message = (
+                    "サブスクからログアウトしました。APIキーは無効化されません。"
+                    "構成タブから削除してください。"
+                    if harness == "claude" and claude_setup.is_authenticated()
+                    else "ログアウトしました。稼働中のハーネスに変更がないため再起動しません。"
+                )
+                self.send_json({
+                    "ok": True,
+                    "restarting": False,
+                    "message": message,
+                    **result,
+                }, 200)
+                return
+            _schedule_self_restart()
+            message = (
+                "サブスクからログアウトしました。アドオンを再起動します。"
+                "再起動後はセットアップ待ちになります。"
+                if harness == "claude"
+                else "ログアウトしました。アドオンを再起動します。"
+                "再起動後はセットアップ待ちになります。"
+            )
+            self.send_json({
+                "ok": True,
+                "restarting": True,
+                "message": message,
+                **result,
+            }, 200)
+        finally:
+            release_lock()
+
+    def _uninstall_blocked_for_effective(self, harness: str) -> bool:
+        """§13.2: refuse to uninstall the harness that is actually running the agent.
+        The effective harness is derived from the selection flag ALONE (valid → selected,
+        missing/invalid → claude) — NOT from the full readiness snapshot, whose 3-harness
+        install/auth probing could raise on an unrelated harness and (sol Med) fail OPEN
+        on a destructive guard. If even the flag read fails, fail CLOSED. Returns True
+        (and sends 409) when blocked; False when the target is a non-running harness."""
+        try:
+            state, selected = harness_state.read_selection()
+        except Exception:
+            self.send_json(
+                {"error": "cannot determine the active harness; refusing to uninstall"}, 409)
+            return True
+        # read_selection() は corrupt/empty/unreadable を例外でなく ("invalid", None) で返す
+        # (Codex red-team B-2)。invalid を missing と同じく claude 扱いにすると、実際に稼働中かも
+        # しれない Codex/Agy の uninstall を許す fail-open になる。稼働中 harness を特定できない以上、
+        # invalid では target に関わらず全 uninstall を fail CLOSED(409)にする。missing のみ grandfather。
+        if state == "invalid":
+            self.send_json(
+                {"error": "cannot determine the active harness (invalid selection state); "
+                          "refusing to uninstall"}, 409)
+            return True
+        effective = selected if state == "valid" else "claude"
+        if effective == harness:
+            self.send_json({
+                "error": "cannot uninstall the harness the agent is currently running on",
+                "effective": effective,
+            }, 409)
+            return True
+        return False
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = self._strip_ingress(parsed.path)
+
+        if self._block_loopback_setup_mutation(path):
+            return
 
         if path == "/api/status":
             length = int(self.headers.get("Content-Length", 0))
@@ -1586,7 +2251,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-        elif path == "/api/setup/login-code":
+        elif path in ("/api/setup/login-code", "/api/setup/claude/login-code"):
             length = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(length))
@@ -1603,6 +2268,71 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/agent-prefs":
+            # default ティアの model/effort を保存し、自己再起動で反映する(Step4増分2・
+            # 保存後self-restart契約 sol Med6)。run.sh が起動時に agent_prefs から env を配線するため、
+            # 変更は再起動で効く。
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(body, dict):
+                    self.send_json({"error": "body must be a JSON object"}, 400)
+                    return
+                harness = body.get("harness")
+                model = body.get("model")
+                effort = body.get("effort")
+                if model is None and effort is None:
+                    self.send_json({"error": "model or effort is required"}, 400)
+                    return
+                updated = agent_prefs.update_default_tier(harness, model=model, effort=effort)
+            except ValueError as e:
+                self.send_json({"error": str(e)}, 400)
+                return
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+                return
+            _schedule_self_restart()
+            self.send_json({
+                "ok": True,
+                "restarting": True,
+                "message": "設定を保存しました。反映のため再起動します。",
+                "default_tier": updated.get("default_tier", {}),
+            })
+        elif path == "/api/setup/claude/install":
+            self._serve_setup_claude_install()
+        elif path == "/api/setup/claude/uninstall":
+            if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Claude setup is busy"}, 409)
+                return
+            try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定する。install の選択 CAS は
+                # 同じ mutation lock 下で行われるため、lock を保持している間は選択状態が変わらず、
+                # 「判定後・削除前に同 harness が選択確定する」TOCTOU を塞げる。
+                if self._uninstall_blocked_for_effective("claude"):
+                    return
+                result = claude_setup.uninstall()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            finally:
+                _CLAUDE_MUTATION_LOCK.release()
+        elif path == "/api/setup/claude/clear-auth":
+            if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+                self.send_json({"error": "Claude login is busy"}, 409)
+                return
+            try:
+                result = claude_setup.clear_auth()
+                if result.get("errors"):
+                    # 部分成功を握り潰さない: 消えたファイルと失敗理由を両方返す
+                    self.send_json({"ok": False, **result}, 500)
+                else:
+                    self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            finally:
+                _CLAUDE_MUTATION_LOCK.release()
+        elif path == "/api/setup/claude/logout":
+            self._serve_setup_logout("claude")
         elif path == "/api/setup/antigravity/input" or path == "/api/setup/antigravity/login-code":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -1613,15 +2343,32 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/uninstall":
+            if not _acquire_antigravity_destructive_locks():
+                self.send_json({"error": "Antigravity setup is busy"}, 409)
+                return
             try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定(TOCTOU 対策・claude 同様)。
+                if self._uninstall_blocked_for_effective("agy"):
+                    return
                 if antigravity_setup is None:
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
                     return
                 result = antigravity_setup.uninstall()
+                # 凍結解除: agy を消したら更新ホストの hosts リダイレクトも撤去する。
+                if agy_update_freeze is not None:
+                    try:
+                        agy_update_freeze.remove_hosts_redirect()
+                    except Exception as _e:
+                        print(f"[agy-freeze] uninstall後のリダイレクト撤去に失敗: {_e}", file=sys.stderr)
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_antigravity_destructive_locks()
         elif path == "/api/setup/antigravity/clear-auth":
+            if not _acquire_antigravity_destructive_locks():
+                self.send_json({"error": "Antigravity setup is busy"}, 409)
+                return
             try:
                 if antigravity_setup is None:
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
@@ -1630,6 +2377,47 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **result})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_antigravity_destructive_locks()
+        elif path == "/api/setup/antigravity/logout":
+            self._serve_setup_logout("agy")
+        elif path == "/api/setup/codex/install":
+            self._serve_setup_codex_install()
+        elif path == "/api/setup/codex/login":
+            self._serve_setup_codex_login()
+        elif path == "/api/setup/codex/uninstall":
+            if not _acquire_codex_mutation("uninstall"):
+                self.send_json({"error": _codex_busy_error()}, 409)
+                return
+            try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定(TOCTOU 対策・claude 同様)。
+                if self._uninstall_blocked_for_effective("codex"):
+                    return
+                if codex_setup is None:
+                    self.send_json({"error": "Codex helpers unavailable"}, 500)
+                    return
+                result = codex_setup.uninstall()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_codex_mutation()
+        elif path == "/api/setup/codex/clear-auth":
+            if not _acquire_codex_mutation("clear-auth"):
+                self.send_json({"error": _codex_busy_error()}, 409)
+                return
+            try:
+                if codex_setup is None:
+                    self.send_json({"error": "Codex helpers unavailable"}, 500)
+                    return
+                result = codex_setup.clear_auth()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            finally:
+                _release_codex_mutation()
+        elif path == "/api/setup/codex/logout":
+            self._serve_setup_logout("codex")
         elif path == "/api/send":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -1893,6 +2681,14 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.makedirs(LOG_DIR, exist_ok=True)
+    # agy 自動更新の凍結状態を起動時に再確立する(増分6・Phase 1)。watchdog が web だけを
+    # 再起動した場合や、install 中に web が異常終了して finally の再凍結が走らなかった場合でも、
+    # ここで agy インストール状態に hosts を一致させ、凍結が解けたままになるのを防ぐ。
+    if agy_update_freeze is not None and antigravity_setup is not None:
+        try:
+            agy_update_freeze.reconcile(antigravity_setup.is_installed())
+        except Exception as _e:
+            print(f"[agy-freeze] 起動時の凍結状態再確立に失敗: {_e}", file=sys.stderr)
     threading.Thread(target=file_watcher, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True

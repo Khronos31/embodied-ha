@@ -14,10 +14,17 @@ import time
 import json
 import random
 import fcntl
+import urllib.request
 
 import body_state
 import anomaly_state
 import desire_state
+import antigravity_setup
+import claude_setup
+import codex_setup
+import harness_state
+import harness_status
+from instance_identity import MQTT_PREFIX
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
@@ -56,7 +63,9 @@ _runtime_lock = threading.Lock()
 _runtime_started = threading.Event()
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
-_CLAUDE_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR", "/data/.claude")
+_setup_wait_notification_sent = False
+_setup_wait_notification_lock = threading.Lock()
+_SETUP_WAIT_NOTIFICATION_ID = f"{MQTT_PREFIX}_harness_setup_required"
 
 
 def load_enabled_mics() -> list[dict]:
@@ -75,16 +84,102 @@ def load_enabled_mics() -> list[dict]:
     return [item for item in sources if isinstance(item, dict) and item.get("stt_enabled") is True]
 
 
-def auth_ready() -> bool:
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    for fname in (".credentials.json", "credentials.json"):
-        if os.path.exists(os.path.join(_CLAUDE_CONFIG_DIR, fname)):
-            return True
-    return False
+def harness_ready() -> bool:
+    """Return whether the selected harness can start the autonomous runtime."""
+    selected = harness_state.get_selected_harness()
+    if selected is None:
+        selection_state, selected = harness_state.read_selection()
+        if selection_state == "invalid":
+            print("[daemon] selected harness flag is invalid or unreadable; waiting for setup", flush=True)
+            return False
+        if selection_state == "valid":
+            # The file changed between the legacy compatibility read above and
+            # the detailed read.  Use the valid current selection, never
+            # mistake this race for a pre-selection installation.
+            pass
+        elif selection_state != "missing":
+            print("[daemon] selected harness flag has an unknown state; waiting for setup", flush=True)
+            return False
+        else:
+            # One-generation migration for existing Claude instances that predate
+            # the selection flag.  Use the SAME compare_and_set as the install path
+            # so a concurrent user selection is never clobbered (sol 1b/1c review High):
+            # if a valid selection appeared meanwhile, adopt it instead of forcing
+            # claude.  claude_setup resolves credentials from the current env.
+            if claude_setup.is_authenticated():
+                try:
+                    outcome, current = harness_state.compare_and_set("claude")
+                except OSError as exc:
+                    print(f"[daemon] failed to persist Claude harness migration: {exc}", flush=True)
+                    selected = "claude"
+                else:
+                    if outcome == "conflict":
+                        print(f"[daemon] harness already selected ({current}); skipping Claude migration",
+                              flush=True)
+                        selected = current
+                    else:
+                        print("[daemon] migrated existing Claude authentication to selected harness", flush=True)
+                        selected = "claude"
+            else:
+                return False
+    # Per-harness readiness is defined once in harness_status (shared with the
+    # web overview) so the two never drift (sol R5). Migration above stays a
+    # daemon-only side effect.
+    return harness_status.readiness(selected)
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
+
+
+def notify_setup_waiting() -> None:
+    """Create one best-effort HA notification while setup blocks the runtime."""
+    global _setup_wait_notification_sent
+    selection_state, selected = harness_state.read_selection()
+    if (selection_state == "missing" and claude_setup.is_authenticated()
+            and (claude_setup.resolve_claude_bin() is None or not claude_setup.is_installed())):
+        message = "記憶は保持されています。Web UIでClaude Codeを再インストールしてください。"
+    elif selection_state == "missing":
+        message = "Web UIでハーネスを選んでインストールしてください。"
+    else:
+        setup = {
+            "claude": ("Claude Code", claude_setup.is_installed, claude_setup.is_authenticated),
+            "codex": ("Codex", codex_setup.is_installed, codex_setup.is_authenticated),
+            "agy": ("Antigravity", antigravity_setup.is_installed, antigravity_setup.is_authenticated),
+        }
+        if selected in setup:
+            harness_name, is_installed, is_authenticated = setup[selected]
+            if not is_installed():
+                message = f"Web UIで{harness_name}をインストールしてください。"
+            elif not is_authenticated():
+                message = f"{harness_name}にログインしてください。"
+            else:
+                message = "Web UIでハーネスの設定を確認してください。"
+        else:
+            message = "Web UIでハーネスを選んでインストールしてください。"
+    payload = json.dumps({
+        "notification_id": _SETUP_WAIT_NOTIFICATION_ID,
+        "title": "Embodied HA のセットアップ待ち",
+        "message": message,
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/create",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with _setup_wait_notification_lock:
+        if _setup_wait_notification_sent:
+            return
+        try:
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+        except Exception:
+            print("[daemon] setup-wait notification failed", flush=True)
+        else:
+            _setup_wait_notification_sent = True
 
 def load_schedule():
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
@@ -318,7 +413,7 @@ def on_loop_trigger(payload):
 
 def run_chat(message, source="chat"):
     # MQTT text エンティティの state_topic に echo して HA の表示を同期
-    mqtt_pub("embodied_ha/chat/state", message)
+    mqtt_pub(f"{MQTT_PREFIX}/chat/state", message)
     if not _chat_lock.acquire(blocking=False):
         print("[daemon] chat already running, skip", flush=True)
         return
@@ -587,15 +682,28 @@ def start_runtime_threads():
     with _runtime_lock:
         if _runtime_started.is_set():
             return
+        # 選択ハーネスを実行時ハーネスへ配線(Step4増分1a)。ポーラの harness_ready() 判定と
+        # 起動の間にフラグ/認証が変わる競合(sol 1a-review High)を避けるため、ここで1回だけ
+        # snapshot を取り、その snapshot が ready を認めた effective harness だけを export する
+        # (judge した値と実行する値を同一 read に固定)。起動直前に未準備へ変わっていたら
+        # 壊れたハーネスで起動せず見送る(ポーラが次周期で再試行/待機に戻る)。
+        snap = harness_status.snapshot()
+        if not snap["ready"]:
+            print("[daemon] runtime 開始直前に harness 未準備を検出。起動を見送ります", flush=True)
+            return
+        # effective は valid→選択ハーネス、missing/移行→claude。初回選択(再起動なし)でも
+        # 以降 spawn する loop/chat 子プロセスが継承する。継承された古い EHA_AGENT_HARNESS が
+        # あっても effective で明示上書きし、valid フラグ優先を貫徹する(sol 1a-review Med3)。
+        os.environ["EHA_AGENT_HARNESS"] = snap["effective"]
         if MQTT_HOST:
             threading.Thread(
                 target=mqtt_listen,
-                args=("embodied_ha/chat/set", on_chat_trigger, "mqtt-chat"),
+                args=(f"{MQTT_PREFIX}/chat/set", on_chat_trigger, "mqtt-chat"),
                 daemon=True,
             ).start()
             threading.Thread(
                 target=mqtt_listen,
-                args=("embodied_ha/loop/trigger", on_loop_trigger, "mqtt-loop"),
+                args=(f"{MQTT_PREFIX}/loop/trigger", on_loop_trigger, "mqtt-loop"),
                 daemon=True,
             ).start()
             print(f"[daemon] MQTT I/O started ({MQTT_HOST}:{MQTT_PORT})", flush=True)
@@ -611,9 +719,10 @@ def start_runtime_threads():
 
 
 def boot_runtime_when_ready():
-    while not auth_ready():
+    notify_setup_waiting()
+    while not harness_ready():
         time.sleep(5)
-    print("[daemon] Claude認証を検出。runtime を開始します", flush=True)
+    print("[daemon] ready harness を検出。runtime を開始します", flush=True)
     start_runtime_threads()
 
 
@@ -632,10 +741,11 @@ except OSError:
 # --- Web UI / runtime 起動 ---
 threading.Thread(target=web_server_watchdog, daemon=True).start()
 print("[daemon] web server watchdog enabled", flush=True)
-if auth_ready():
+if harness_ready():
     start_runtime_threads()
 else:
-    print("[daemon] Claude 未認証。Web UI でセットアップ後に runtime を開始します", flush=True)
+    print("[daemon] harness 未準備。Web UI でセットアップ後に runtime を開始します", flush=True)
+    notify_setup_waiting()
     threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
 # 保守パイプラインの生存確認（サイレント停止の早期検知）
 try:

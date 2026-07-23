@@ -2679,3 +2679,329 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     color: var(--claude-text-sub);
 }
 
+/* ===========================
+   Harness Picker Overlay Style (Responsive: PC=Plan B, Mobile=Plan A)
+   =========================== */
+.setup-overlay[hidden],
+#harness-picker[hidden],
+#harness-picker-progress[hidden],
+#harness-auth-url[hidden],
+#harness-auth-code-display[hidden],
+#harness-auth-code-row[hidden],
+#harness-picker-status[hidden] {
+    display: none !important;
+}
+
+#harness-picker.setup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(25, 25, 25, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.harness-picker-modal {
+    background: var(--claude-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 16px;
+    width: 1000px;
+    max-width: 95vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    padding: 32px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+    overflow-y: auto;
+}
+
+.harness-picker-header {
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.harness-picker-title {
+    font-family: var(--font-serif);
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--claude-text-main);
+    margin-bottom: 12px;
+}
+
+.harness-picker-intro {
+    font-size: 14px;
+    color: var(--claude-text-sub);
+    line-height: 1.7;
+    max-width: 800px;
+    margin: 0 auto;
+    background-color: var(--claude-sidebar-bg);
+    padding: 14px 20px;
+    border-radius: 10px;
+    border: 1px solid var(--claude-border);
+    text-align: left;
+}
+
+.harness-picker-intro strong {
+    color: var(--claude-text-main);
+}
+
+/* カードコンテナ：枚数に依存しない縦積みレイアウト */
+.harness-cards-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+/* デフォルト / PC (769px〜): B案 (横長カード：左タイトル / 中央 詳細 / 右 ボタン) */
+.harness-card {
+    background: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 12px;
+    padding: 18px 24px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.harness-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+    border-color: var(--claude-accent);
+}
+
+.harness-card-header {
+    width: 150px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--claude-border);
+    border-bottom: none;
+    padding-right: 16px;
+    padding-bottom: 0;
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.harness-card-title {
+    font-family: var(--font-serif);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--claude-text-main);
+}
+
+.harness-card-subtitle {
+    display: block;
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    margin-top: 2px;
+}
+
+.harness-feature-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    background-color: var(--claude-sidebar-bg);
+    color: var(--claude-text-sub);
+    border: 1px solid var(--claude-border);
+}
+
+.harness-feature-badge.feature-highlight {
+    background-color: rgba(204, 90, 55, 0.1);
+    color: var(--claude-accent);
+    border-color: rgba(204, 90, 55, 0.3);
+}
+
+.harness-card-body {
+    flex: 1;
+    margin-bottom: 0;
+    padding: 0 8px;
+}
+
+.harness-details-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--claude-text-main);
+    line-height: 1.5;
+}
+
+.harness-details-list li {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.detail-label {
+    font-weight: 600;
+    color: var(--claude-text-sub);
+    flex-shrink: 0;
+    min-width: 48px;
+}
+
+.detail-value {
+    flex: 1;
+    min-width: 0;
+    color: var(--claude-text-main);
+}
+
+.detail-subtext {
+    font-size: 12px;
+    color: var(--claude-text-sub);
+}
+
+.harness-card-footer {
+    width: 150px;
+    flex-shrink: 0;
+    margin-top: 0;
+    padding-top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.harness-select-btn {
+    width: 100%;
+    padding: 12px;
+    background-color: var(--claude-accent);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+    box-shadow: 0 2px 4px rgba(204, 90, 55, 0.2);
+}
+
+.harness-select-btn:hover {
+    background-color: var(--claude-accent-hover);
+}
+
+.harness-select-btn:active {
+    transform: scale(0.98);
+}
+
+/* スマホ (〜768px): A案 (縦長ポートレートカード：タイトル上 → 詳細 → ボタン下。1列積み) */
+@media (max-width: 768px) {
+    .harness-picker-modal {
+        padding: 20px;
+    }
+
+    .harness-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 14px;
+        padding: 16px;
+    }
+
+    .harness-card:hover {
+        transform: translateY(-4px);
+    }
+
+    .harness-card-header {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--claude-border);
+        padding-right: 0;
+        padding-bottom: 10px;
+    }
+
+    .harness-card-body {
+        padding: 0;
+    }
+
+    .harness-card-footer {
+        width: 100%;
+    }
+}
+
+.harness-picker-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    background-color: rgba(0, 0, 0, 0.02);
+    border: 1px dashed var(--claude-border);
+    padding: 10px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.notice-icon {
+    font-size: 14px;
+}
+
+/* Progress & Auth area in Harness Picker */
+#harness-picker-progress {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--claude-border);
+}
+
+#harness-auth-code-display {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: var(--claude-text-main);
+    background-color: var(--claude-card-bg);
+    border: 2px dashed var(--claude-accent);
+    border-radius: 10px;
+    padding: 16px 20px;
+    text-align: center;
+    word-break: break-all;
+    user-select: all;
+    -webkit-user-select: all;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(204, 90, 55, 0.08);
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+#harness-auth-code-display:hover {
+    background-color: var(--active-room-bg);
+    border-color: var(--claude-accent-hover);
+}
+
+#harness-picker-status.form-hint,
+#harness-picker-status {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--claude-text-sub);
+    line-height: 1.4;
+}
+
+#harness-auth-code-row {
+    display: flex;
+    gap: 8px;
+}
+
+#harness-auth-code {
+    flex: 1;
+}
+
+#harness-auth-code-submit {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+
+

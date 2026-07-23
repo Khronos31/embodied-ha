@@ -36,10 +36,55 @@ unset _OPT_KEY
 export HA_URL="${HA_URL:-http://supervisor/core/api}"
 
 # --- Claude CLI ---
-_OPT_CONFIG_DIR=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_config_dir',''))" 2>/dev/null || echo "")
-export CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+# 同梱廃止(増分5a): claudeはWeb UIからDIY配置先(binary_path、既定 /data/claude-cli/bin/claude)へ
+# インストールされる。コンテナ内の配置先は常にこのDIYパスなので、それをCLAUDE_BINへ配線する
+# (未配置でも将来のパスを指すだけ。runtimeは resolve_claude_bin() の実在確認でreadyになってから
+#  起動するため、未配置パスを実行することはない)。resolve_claude_bin()ではなくbinary_pathを使うのは、
+# 起動時にPATH版claudeを拾って絶対パスで固定してしまう(後のDIYインストールとdesyncする)のを避けるため。
+# EHA_CLAUDE_BIN(invoke-agent.sh優先)はCLAUDE_BINを継承し、両者が食い違わないようにする。
+_CLAUDE_BIN_TARGET=$(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import claude_setup; print(claude_setup.binary_path())" 2>/dev/null || echo "/data/claude-cli/bin/claude")
+export CLAUDE_BIN="${CLAUDE_BIN:-$_CLAUDE_BIN_TARGET}"
+export EHA_CLAUDE_BIN="${EHA_CLAUDE_BIN:-$CLAUDE_BIN}"
+unset _CLAUDE_BIN_TARGET
 export EHA_TOOLS_PATH="${EHA_TOOLS_PATH:-/usr/local/bin}"
 export PATH="${EHA_TOOLS_PATH}:${PATH}"
+
+# --- Codex CLI（Web UIで任意導入）---
+# 認証はCLIの有無にかかわらず永続領域へ統一する。invoke-agent.shもこの値を見る。
+export CODEX_HOME="/data/codex-home"
+if [ -x /data/codex-cli/bin/codex ]; then
+    export EHA_CODEX_BIN="/data/codex-cli/bin/codex"
+fi
+
+# --- 選択ハーネスを実行時ハーネスへ配線（Step4増分1a）---
+# /data/selected_harness が valid なら EHA_AGENT_HARNESS へ充当し、invoke-agent.sh が
+# 選択した CLI を起動する。missing/invalid なら未設定のまま = invoke-agent.sh の claude 既定
+# （旧個体グランドファザー）。valid フラグは既存 env より優先（effective_harness 単一規則）。
+_SELECTED_HARNESS=$(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import harness_state; print(harness_state.get_selected_harness() or '')" 2>/dev/null || true)
+if [ -n "${_SELECTED_HARNESS:-}" ]; then
+    export EHA_AGENT_HARNESS="$_SELECTED_HARNESS"
+    echo "[run] 選択ハーネス: EHA_AGENT_HARNESS=${_SELECTED_HARNESS}"
+else
+    # valid フラグが無ければ invoke-agent.sh の claude 既定に委ねる。継承された古い値を
+    # 残すと valid フラグ優先が崩れる(sol 1a-review Med3)ため、明示的に外す。
+    unset EHA_AGENT_HARNESS
+fi
+
+# 選択ハーネス(未選択時は claude 既定)の default ティア model/effort を agent_prefs.json から
+# EHA_<H>_MODEL_DEFAULT / EFFORT へ配線(Step4増分2)。prefs 不在/未設定なら何も export せず、
+# invoke-agent.sh の組み込み既定に委ねる(prefs の無い既存個体は既定 byte 不変)。agy モデル名は
+# 空白を含むため IFS=tab で読む。process substitution で while ループを現在シェルに置き export を残す。
+_EFFECTIVE_HARNESS="${_SELECTED_HARNESS:-claude}"
+while IFS=$'\t' read -r _pk _pv; do
+    # 既知の5キーだけを export(不正レコード注入を fail-soft で無視・sol High の二層目防御。
+    # 一層目は agent_prefs 側の制御文字拒否)。
+    case "$_pk" in
+        EHA_CLAUDE_MODEL_DEFAULT|EHA_CLAUDE_EFFORT_DEFAULT|EHA_CODEX_MODEL_DEFAULT|EHA_CODEX_REASONING_EFFORT_DEFAULT|EHA_AGY_MODEL_DEFAULT)
+            export "$_pk=$_pv" ;;
+        *) : ;;
+    esac
+done < <(python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import agent_prefs; [print(f'{k}\t{v}') for k, v in agent_prefs.env_overrides('${_EFFECTIVE_HARNESS}').items()]" 2>/dev/null || true)
+unset _SELECTED_HARNESS _EFFECTIVE_HARNESS _pk _pv
 
 # --- PulseAudio（audio: true で注入されるソケット）---
 # HAOS は PULSE_SERVER を自動セットしないため、ソケットが存在する場合は手動で設定する。
@@ -81,6 +126,7 @@ mkdir -p /data/embodied-ha
 # から記憶・ログ・設定を直接閲覧・編集でき、HAバックアップにも含まれる。
 # （config:rw マウント前提。未マウント環境では /data にフォールバック）
 export EHA_DATA_DIR="${EHA_DATA_DIR:-/config/embodied-ha}"
+export EHA_MQTT_PREFIX="${EHA_MQTT_PREFIX:-embodied_ha}"
 if ! mkdir -p "$EHA_DATA_DIR" 2>/dev/null; then
     EHA_DATA_DIR="/data/embodied-ha"
     mkdir -p "$EHA_DATA_DIR"
@@ -125,6 +171,18 @@ mkdir -p "$EHA_ANTIGRAVITY_HOME" "$EHA_ANTIGRAVITY_BIN_DIR"
 echo "[run] Antigravity home: ${EHA_ANTIGRAVITY_HOME}"
 echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
 
+# --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
+# agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
+# （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
+#  Fable 実機レビュー 2026-07-20）。未インストール時は念のため残存リダイレクトを掃除する
+# （通常はコンテナ再作成で /etc/hosts が再生成されるため不要だが冪等・防御的に）。
+if python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import antigravity_setup; sys.exit(0 if antigravity_setup.is_installed() else 1)" 2>/dev/null; then
+    python3 "$SCRIPT_DIR/agy_update_freeze.py" add 2>&1 | sed 's/^/[run] /' \
+        || echo "[run] agy-freeze: hosts リダイレクト追加失敗（凍結なしで続行）"
+else
+    python3 "$SCRIPT_DIR/agy_update_freeze.py" remove 2>&1 | sed 's/^/[run] /' || true
+fi
+
 # --- agy 用 MCP config 生成（Antigravityが音声解析セッションで使うMCPサーバー設定）---
 python3 -c "
 import os, sys
@@ -141,11 +199,15 @@ else:
 " 2>&1 || true
 
 # --- Claude 設定ディレクトリ ---
-# デフォルトは EHA_DATA_DIR/.claude（/config/embodied-ha/.claude）。
-# アンインストール時に /data/ が消えても記憶・認証が /config/ 側に残る。
-# options で claude_config_dir を指定した場合はそちらを優先。
-export CLAUDE_CONFIG_DIR="${_OPT_CONFIG_DIR:-${EHA_DATA_DIR}/.claude}"
-unset _OPT_CONFIG_DIR
+# 解決は claude_setup.resolve_config_dir に一本化(§13.9: claude_config_dirオプション撤去)。
+# 旧既定(実体あれば継続=既存個体は無移動) > 新既定 /data/claude-home の2段。ユーザーは変更不可。
+export CLAUDE_CONFIG_DIR
+CLAUDE_CONFIG_DIR=$(SCRIPT_DIR="$SCRIPT_DIR" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ.get('SCRIPT_DIR', '/app'))
+import claude_setup
+print(claude_setup.resolve_config_dir(sys.argv[1]))
+" "$EHA_DATA_DIR") || CLAUDE_CONFIG_DIR="${EHA_DATA_DIR}/.claude"
 echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 
 # --- Claude の作業ディレクトリ ---
@@ -304,20 +366,20 @@ print(d.get("host",""), d.get("port", 1883), d.get("username",""), d.get("passwo
     }
 
     # 内省ログ（loop/observe ループが書き込む）
-    _pub -t "homeassistant/sensor/embodied_ha_observation/config" -m \
-        '{"name":"Embodied HA 内省","unique_id":"embodied_ha_observation","state_topic":"embodied_ha/observation/state","icon":"mdi:thought-bubble","entity_category":"diagnostic"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_observation/config" -m \
+        '{"name":"Embodied HA 内省","unique_id":"'"${EHA_MQTT_PREFIX}"'_observation","state_topic":"'"${EHA_MQTT_PREFIX}"'/observation/state","icon":"mdi:thought-bubble","entity_category":"diagnostic"}'
 
     # 直近の発話
-    _pub -t "homeassistant/sensor/embodied_ha_last_speak/config" -m \
-        '{"name":"Embodied HA 発話","unique_id":"embodied_ha_last_speak","state_topic":"embodied_ha/last_speak/state","icon":"mdi:message-text"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_last_speak/config" -m \
+        '{"name":"Embodied HA 発話","unique_id":"'"${EHA_MQTT_PREFIX}"'_last_speak","state_topic":"'"${EHA_MQTT_PREFIX}"'/last_speak/state","icon":"mdi:message-text"}'
 
     # 感情（照明の色変え等の自動化に使える）
-    _pub -t "homeassistant/sensor/embodied_ha_emotion/config" -m \
-        '{"name":"Embodied HA 感情","unique_id":"embodied_ha_emotion","state_topic":"embodied_ha/emotion/state","icon":"mdi:heart"}'
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_emotion/config" -m \
+        '{"name":"Embodied HA 感情","unique_id":"'"${EHA_MQTT_PREFIX}"'_emotion","state_topic":"'"${EHA_MQTT_PREFIX}"'/emotion/state","icon":"mdi:heart"}'
 
     # チャット入力（HA UI → アドオン）
-    _pub -t "homeassistant/text/embodied_ha_chat/config" -m \
-        '{"name":"Embodied HA チャット入力","unique_id":"embodied_ha_chat","command_topic":"embodied_ha/chat/set","state_topic":"embodied_ha/chat/state","icon":"mdi:chat","max":500}'
+    _pub -t "homeassistant/text/${EHA_MQTT_PREFIX}_chat/config" -m \
+        '{"name":"Embodied HA チャット入力","unique_id":"'"${EHA_MQTT_PREFIX}"'_chat","command_topic":"'"${EHA_MQTT_PREFIX}"'/chat/set","state_topic":"'"${EHA_MQTT_PREFIX}"'/chat/state","icon":"mdi:chat","max":500}'
 
     CHARACTER_LABEL=$(python3 - <<'PYEOF'
 import json, os
@@ -336,31 +398,33 @@ PYEOF
     export CHARACTER_LABEL
 
     # 観察トリガーボタン
-    _pub -t "homeassistant/button/embodied_ha_observe/config" -m \
-        '{"name":"Embodied HA ループ","unique_id":"embodied_ha_loop","command_topic":"embodied_ha/loop/trigger","icon":"mdi:eye","payload_press":"LOOP"}'
+    _pub -t "homeassistant/button/${EHA_MQTT_PREFIX}_observe/config" -m \
+        '{"name":"Embodied HA ループ","unique_id":"'"${EHA_MQTT_PREFIX}"'_loop","command_topic":"'"${EHA_MQTT_PREFIX}"'/loop/trigger","icon":"mdi:eye","payload_press":"LOOP"}'
 
-    _pub -t "homeassistant/sensor/embodied_ha_body_physical_room/config" -m \
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_body_physical_room/config" -m \
         "$(python3 - <<'PYEOF'
 import json, os
 name = os.environ.get('CHARACTER_LABEL', 'Claude')
+prefix = os.environ['EHA_MQTT_PREFIX']
 payload = {
   'name': f'Embodied HA {name}の身体がある場所',
-  'unique_id': 'embodied_ha_body_physical_room',
-  'state_topic': 'embodied_ha/body/physical_room/state',
+  'unique_id': f'{prefix}_body_physical_room',
+  'state_topic': f'{prefix}/body/physical_room/state',
   'icon': 'mdi:map-marker',
 }
 print(json.dumps(payload, ensure_ascii=False))
 PYEOF
 )"
 
-    _pub -t "homeassistant/sensor/embodied_ha_body_current_place/config" -m \
+    _pub -t "homeassistant/sensor/${EHA_MQTT_PREFIX}_body_current_place/config" -m \
         "$(python3 - <<'PYEOF'
 import json, os
 name = os.environ.get('CHARACTER_LABEL', 'Claude')
+prefix = os.environ['EHA_MQTT_PREFIX']
 payload = {
   'name': f'Embodied HA {name}のいる場所',
-  'unique_id': 'embodied_ha_body_current_place',
-  'state_topic': 'embodied_ha/body/current_place/state',
+  'unique_id': f'{prefix}_body_current_place',
+  'state_topic': f'{prefix}/body/current_place/state',
   'icon': 'mdi:radar',
 }
 print(json.dumps(payload, ensure_ascii=False))
@@ -390,30 +454,6 @@ EHA_LOG_DIR="$EHA_LOG_DIR" python3 "$SCRIPT_DIR/init_fts.py" \
 echo "[run] daemon.py 起動（web + watchdog）"
 python3 "$SCRIPT_DIR/daemon.py" &
 DAEMON_PID=$!
-
-# --- 認証確認（未設定なら Web UI セットアップ完了まで待機）---
-_auth_ok() {
-    [ -n "${ANTHROPIC_API_KEY:-}" ] && return 0
-    # サブスク認証は OAuthトークン本体の有無で判定する。
-    # .claude.json の userID はログイン記録であって認証実体ではない（トークンが
-    # 無ければ claude は "Not logged in" になる）ので判定に使わない。
-    [ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ] && return 0
-    [ -f "${CLAUDE_CONFIG_DIR}/credentials.json" ] && return 0
-    return 1
-}
-if ! _auth_ok; then
-    echo "[run] Claude 未認証。Web UI でセットアップしてください（ポート ${INGRESS_PORT:-8099}）..."
-    until _auth_ok; do
-        sleep 5
-        echo "[auth] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR} / files: $(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -printf '%f ' 2>/dev/null || echo '(ディレクトリなし)')"
-        if [ -f "${CLAUDE_CONFIG_DIR}/.credentials.json" ]; then
-            echo "[auth] .credentials.json: あり（認証実体OK）"
-        else
-            echo "[auth] .credentials.json: なし（未認証。.claude.jsonのuserIDは認証実体ではない）"
-        fi
-    done
-    echo "[run] 認証完了。daemon 起動..."
-fi
 
 # --- daemon.py を監視し続ける ---
 wait "$DAEMON_PID"

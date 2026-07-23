@@ -362,6 +362,15 @@ _CHAT_MCP_SERVERS = (
     "body", "sensors", "http", "lounge", "game", "song",
 )
 
+# codex は本環境の bwrap 制約でシェル経由 Read が不可なので files MCP で Read を提供する。
+# claude は native Read、agy は native read_file(config.json の read_file(*) grant で headless でも通る・
+# 2026-07-23 実機確認)を使うため files MCP は付けない。→ files MCP は codex 限定。
+_FILES_MCP_HARNESSES = frozenset({"codex"})
+
+
+def _effective_harness() -> str:
+    return (os.environ.get("EHA_AGENT_HARNESS") or "claude").strip().lower()
+
 
 def _read_http_post_enabled(prefs_file):
     """Mirror mcp-config.py's _http_tools(): http_post is only an active tool
@@ -427,6 +436,13 @@ def build_invoke_agent_chat_command(
         # that kills the queued-listen audio path (sol review, 2026-07-17).
         raise ValueError("build_invoke_agent_chat_command: sound_file and content_json_path are mutually exclusive")
     allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
+    mcp_servers = _CHAT_MCP_SERVERS
+    if _effective_harness() in _FILES_MCP_HARNESSES:
+        allowed = allowed + ",mcp__files__read_file"
+        # default の Codex モデルは大量の tool schema を選別するため、末尾へ足すと
+        # read_file だけがモデルから見えなくなる。Codex/agy の native Read 代替は
+        # 基本能力なので先頭に置き、tool 選別時にも必ず残す。
+        mcp_servers = ("files",) + mcp_servers
     allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
     cmd = [
         "bash",
@@ -436,11 +452,17 @@ def build_invoke_agent_chat_command(
     ]
     if sound_file:
         cmd += ["--sound-file", sound_file, "--agent-site", "chat"]
+    else:
+        # chat は下で --mcp-servers を常に付けるため、agy 選択時に run_agy が
+        # --agent-site 必須で落ちないよう、通常ターンでも --agent-site chat を常に付ける
+        # (sound_file 経路は上で付与済み)。claude/codex は無視するため3ハーネス安全
+        # (案A・[[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
+        cmd += ["--agent-site", "chat"]
     if allowed_builtins and not sound_file:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
-    cmd += ["--mcp-servers", " ".join(_CHAT_MCP_SERVERS)]
+    cmd += ["--mcp-servers", " ".join(mcp_servers)]
     cmd += ["--json-schema", json.dumps(chat_schema(voice=(chat_source == "voice")), ensure_ascii=False)]
     if content_json_path is not None:
         cmd += ["--content-json", f"@{content_json_path}"]

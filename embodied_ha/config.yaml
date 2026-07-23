@@ -1,5 +1,5 @@
 name: Embodied HA
-version: "1.28.0"
+version: "2.0.0"
 slug: embodied_ha
 description: "A little spirit moves into your smart home. Home Assistant, embodied: eyes from cameras, ears from microphones, a voice from speakers — and memories that grow into a life together."
 arch:
@@ -8,7 +8,7 @@ arch:
 init: true
 startup: application
 boot: manual
-# /config を読み書きマウント（/config/.tools の認証・CLIを再利用し、スクリプト群も参照）
+# /config を読み書きマウント
 map:
   - config:rw
 audio: true
@@ -19,16 +19,16 @@ hassio_api: true
 homeassistant_api: true
 ingress: true
 ingress_port: 8099
+# 管理者のみUIへ到達可能にする(既定trueだが明示・sol M4)
+panel_admin: true
 panel_icon: mdi:robot-outline
 options:
   resident_name: "ユーザー"
   claude_api_key: ""
-  claude_config_dir: ""
   claude_cwd: ""
   autonomous_control: false
 schema:
   resident_name: str
   claude_api_key: str?
-  claude_config_dir: str?
   claude_cwd: str?
   autonomous_control: bool

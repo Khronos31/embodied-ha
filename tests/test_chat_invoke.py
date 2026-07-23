@@ -10,6 +10,7 @@ try/exceptで包まれたlocation_belief.json/preferences.jsonの読み取りの
 """
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -223,11 +224,13 @@ def _arg_after(cmd, flag):
 
 class InvokeAgentChatPathTests(unittest.TestCase):
     def test_command_splits_builtin_and_mcp_tools_for_chat(self):
-        cmd = chat_invoke.build_invoke_agent_chat_command(
-            chat_source="chat",
-            script_dir=str(EMBODIED_HA_DIR),
-            user_prompt="こんにちは",
-        )
+        # 既定(claude)は files MCP を付けない(決定2: claude native Read 維持)。
+        with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}):
+            cmd = chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat",
+                script_dir=str(EMBODIED_HA_DIR),
+                user_prompt="こんにちは",
+            )
         self.assertEqual(cmd[:4], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh"), "--model", "default"])
         self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
 
@@ -239,12 +242,37 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertTrue(common_mcp_tools.issubset(allowed_mcp_tools))
         self.assertIn("mcp__audio__speak", allowed_mcp_tools)
         self.assertNotIn("mcp__audio__use_device_speaker", allowed_mcp_tools)
+        self.assertNotIn("mcp__files__read_file", allowed_mcp_tools)  # claude=native Read
 
         self.assertEqual(
             _arg_after(cmd, "--mcp-servers"),
             "memory ha sociality hacontrol camera audio body sensors http lounge game song",
         )
         self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
+
+    def test_codex_gets_files_mcp_but_agy_and_claude_do_not(self):
+        # codex は bwrap でシェル Read 不可のため files MCP(先頭+read_file)。agy は native read_file
+        # (read_file(*) grant)、claude は native Read を使うため files MCP は付けない(2026-07-23)。
+        with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "codex"}):
+            cmd = chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), user_prompt="こんにちは",
+            )
+        servers = _arg_after(cmd, "--mcp-servers").split(" ")
+        self.assertIn("files", servers)
+        self.assertEqual(servers[0], "files")
+        self.assertIn("mcp__files__read_file", set(_arg_after(cmd, "--allowed-mcp-tools").split(",")))
+
+        for harness in ("agy", "claude"):
+            with self.subTest(harness=harness):
+                with patch.dict(os.environ, {"EHA_AGENT_HARNESS": harness}):
+                    cmd = chat_invoke.build_invoke_agent_chat_command(
+                        chat_source="chat", script_dir=str(EMBODIED_HA_DIR), user_prompt="こんにちは",
+                    )
+                servers = _arg_after(cmd, "--mcp-servers").split(" ")
+                self.assertNotIn("files", servers)
+                self.assertNotIn(
+                    "mcp__files__read_file", set(_arg_after(cmd, "--allowed-mcp-tools").split(",")),
+                )
 
     def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
         # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで
@@ -296,6 +324,19 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
         self.assertNotIn("--allowed-builtins", cmd)
         self.assertIn("--allowed-mcp-tools", cmd)
+        self.assertIn("--mcp-servers", cmd)
+
+    def test_command_without_sound_file_still_sets_agent_site_chat(self):
+        # 案A: chat は --mcp-servers を常に付けるため、通常ターンでも --agent-site chat を
+        # 付ける(agy選択時に invoke-agent.sh run_agy が --agent-site 必須で落ちないように)。
+        cmd = chat_invoke.build_invoke_agent_chat_command(
+            chat_source="chat",
+            script_dir=str(EMBODIED_HA_DIR),
+            user_prompt="こんにちは",
+        )
+
+        self.assertNotIn("--sound-file", cmd)
+        self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
         self.assertIn("--mcp-servers", cmd)
 
     def test_command_rejects_sound_file_with_content_json(self):

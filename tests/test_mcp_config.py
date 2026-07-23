@@ -141,6 +141,71 @@ class McpConfigFormatTests(unittest.TestCase):
             self.assertEqual(ha_config["env"]["SUPERVISOR_TOKEN"], "secret-token")
             self.assertEqual(ha_config[CODEX_OFFICIAL_MCP_ALLOWLIST_KEY], ["ha_get"])
 
+    def test_format_codex_auto_approves_all_first_party_servers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "profile.config.toml"
+
+            self.run_config(
+                [
+                    "--format",
+                    "codex",
+                    "--allowed-mcp-tools",
+                    "mcp__files__read_file,mcp__ha__ha_get",
+                    str(out_path),
+                    "files",
+                    "ha",
+                ],
+            )
+
+            with out_path.open("rb") as fh:
+                profile = tomllib.load(fh)
+            self.assertEqual(
+                profile["mcp_servers"]["files"]["default_tools_approval_mode"],
+                "approve",
+            )
+            # F11-A1(2026-07-23): developer_instruction を全 MCP 向けに一般化(code-mode の
+            # ALL_TOOLS registry を照合させて confabulation を抑える)。files 提示時は read_file
+            # ガイドも併記される。
+            self.assertIn("ALL_TOOLS", profile["developer_instructions"])
+            self.assertIn(
+                "do not rely on earlier conversation claims",
+                profile["developer_instructions"],
+            )
+            self.assertIn("files MCP server's read_file tool", profile["developer_instructions"])
+            # F10(2026-07-23): 承認は files 限定ではなく全 first-party server に付与する。
+            # files 限定だと codex chat が ha/memory/body/game 等を "user cancelled" で
+            # 一切呼べない（実機E2Eで判明）。ha も approve されること。
+            self.assertEqual(
+                profile["mcp_servers"]["ha"]["default_tools_approval_mode"],
+                "approve",
+            )
+
+            ha_only_path = Path(tmp) / "ha-only.config.toml"
+            self.run_config(
+                [
+                    "--format",
+                    "codex",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    str(ha_only_path),
+                    "ha",
+                ],
+            )
+            with ha_only_path.open("rb") as fh:
+                ha_only_profile = tomllib.load(fh)
+            # F11-A1: 一般 code-mode instruction は MCP server がある限り付く(files 非同席でも)。
+            self.assertIn("ALL_TOOLS", ha_only_profile["developer_instructions"])
+            # ただし read_file 固有ガイドは files 提示時だけなので付かない。
+            self.assertNotIn(
+                "files MCP server's read_file tool",
+                ha_only_profile["developer_instructions"],
+            )
+            # 承認は first-party 一律なので files 非同席でも ha は approve される（F10）。
+            self.assertEqual(
+                ha_only_profile["mcp_servers"]["ha"]["default_tools_approval_mode"],
+                "approve",
+            )
+
     def test_official_allowlist_key_names_are_not_typoed(self):
         self.assertEqual(CODEX_OFFICIAL_MCP_ALLOWLIST_KEY, "enabled_tools")
         self.assertEqual(GEMINI_OFFICIAL_MCP_ALLOWLIST_KEY, "includeTools")
@@ -297,6 +362,17 @@ class ServerSpecsTests(unittest.TestCase):
 
     def test_server_specs_match_runtime_tools_with_default_preferences(self):
         self.assert_server_specs_match_runtime_tools()
+
+    def test_files_server_env_excludes_secrets(self):
+        # files MCP は HA へアクセスしないため COMMON_ENV(SUPERVISOR_TOKEN 等の秘密)を渡さない=最小権限。
+        # (本命の防御は files-mcp.py の /proc・/sys 拒否+NUL 検出。これはその二重化。)
+        with tempfile.TemporaryDirectory() as tmp:
+            module, env = self.load_module(tmp)
+            with mock.patch.dict(os.environ, env, clear=False):
+                files = module.SERVER_SPECS["files"].build()
+        self.assertNotIn("SUPERVISOR_TOKEN", files["env"])
+        self.assertNotIn("HA_URL", files["env"])
+        self.assertIn("PATH", files["env"])
 
     def test_server_specs_match_runtime_tools_when_http_post_enabled(self):
         self.assert_server_specs_match_runtime_tools({"http_post_enabled": True})

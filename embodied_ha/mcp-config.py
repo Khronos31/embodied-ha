@@ -37,9 +37,25 @@ _ENV_KEYS = (
     "EHA_ACTIVE_LISTEN_RETENTION_HOURS", "EHA_BACKGROUND_AUDIO_LOG_FILE",
     "EHA_NON_SPEECH_AUDIO_EVENTS_FILE", "EHA_AUDIO_EVENT_TAGS_FILE", "EHA_AUDIO_WAV_DIR",
     "EHA_ROOM_GRAPH_FILE", "EHA_BODY_LOCATION_FILE", "EHA_BODY_LOCATION_LOG_FILE", "EHA_ANOMALY_STATE_FILE",
-    "EHA_TOOLS_PATH", "EHA_ACTOR", "PATH",
+    "EHA_TOOLS_PATH", "EHA_ACTOR", "EHA_MQTT_PREFIX", "PATH",
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
+
+# game-mcp は CPU 戦(WordVec)で invoke-agent.sh 経由に選択ハーネスを再起動する唯一の MCP
+# サーバー。MCP サーバーは COMMON_ENV(明示 env)からのみ起動され親環境を継承しないため、
+# nested invoke に要る「選択ハーネス + その CLI パス/ホーム/認証/cwd」を game 限定で明示注入する
+# (Step4増分1b・sol H3)。ANTHROPIC_API_KEY 等の認証情報は全 MCP へ広げず、first-party の
+# game サーバーだけに限定する(存在するものだけ渡す)。
+_GAME_NESTED_ENV_KEYS = (
+    "EHA_AGENT_HARNESS", "EHA_AGENT_CWD",
+    # claude: bin 解決(EHA_CLAUDE_BIN>CLAUDE_BIN>DIY) + cwd + 認証(config dir / API key)
+    "EHA_CLAUDE_BIN", "CLAUDE_BIN", "EHA_CLAUDE_CWD", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY",
+    # codex: bin + home(認証)
+    "EHA_CODEX_BIN", "CODEX_HOME",
+    # agy: bin + home(認証)
+    "EHA_ANTIGRAVITY_BIN", "EHA_ANTIGRAVITY_BIN_DIR", "EHA_ANTIGRAVITY_HOME",
+)
+GAME_NESTED_ENV = {k: os.environ[k] for k in _GAME_NESTED_ENV_KEYS if k in os.environ}
 
 
 def _load_prefs():
@@ -57,8 +73,14 @@ def _load_prefs():
 prefs = _load_prefs()
 
 
-def _server(script, extra_args=None, extra_env=None):
-    env = dict(COMMON_ENV)
+# files MCP のような「HA へアクセスしない」サーバー向けの最小 env。COMMON_ENV(SUPERVISOR_TOKEN 等の
+# 秘密を含む)を渡さない=最小権限。read_file が万一 /proc/self/environ 相当を読んでも秘密が無い
+# (本命の防御は files-mcp.py 側の /proc・/sys 拒否+NUL 検出。これはその二重化)。
+MINIMAL_ENV = {"PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")}
+
+
+def _server(script, extra_args=None, extra_env=None, base_env=None):
+    env = dict(COMMON_ENV if base_env is None else base_env)
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items() if v is not None})
     return {
@@ -120,6 +142,10 @@ SERVER_SPECS = {
     )),
     "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
+    # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を
+    # シェルなしで最小権限提供する(2026-07-22)。claude は native Read を使うので通常は不要だが
+    # ハーネス非依存で持たせておく。
+    "files": ServerSpec(lambda: _server("files-mcp.py", base_env=MINIMAL_ENV), ("read_file",)),  # ファイル読み取り(read-anything+secure-read・最小env)
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
     # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
     # Claude Codeの--allowedToolsは実行時にMCPツール単位で拒否できるが、tools/listの可視性は
@@ -176,7 +202,7 @@ SERVER_SPECS = {
         "get_turn_taking_state",
         "ingest_interaction",
     )),
-    "game": ServerSpec(lambda: _server("game-mcp.py"), (
+    "game": ServerSpec(lambda: _server("game-mcp.py", extra_env=GAME_NESTED_ENV), (
         "game_wiki6_start",
         "game_wiki6_getlinks",
         "game_wordvec_race_start",
@@ -259,6 +285,33 @@ def _toml_array(values):
 
 def _write_codex_profile(path, servers, allowed_tools):
     lines = []
+    # Codex 0.144.4 + gpt-5.6-terra は tool_mode=code_mode_only で、MCP tool を
+    # (1)モデルへ直接提示される定義層 と (2)exec の JS から ALL_TOOLS/tools.<name> で
+    # 解決する遅延 registry 層 の二層で扱う。Terra は(1)だけを見て MCP tool を「利用不能」と
+    # 誤判定しうる(70-tool 隔離実験で無指示 0/70 正答・本 instruction で 70/70=2026-07-23 Codex
+    # red-team・[[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]] F11-A1)。これは tool の
+    # 接続契約なので user prompt ではなく developer instruction に置く(F6 の files 限定・read_file
+    # 中心を全 MCP へ一般化)。model_instructions_file は built-in base instructions を置換するため使わない。
+    instructions = []
+    if servers:
+        instructions.append(
+            "The MCP tools in this run are exposed through the code-mode exec runtime: they live in "
+            "the exec ALL_TOOLS registry and are invoked via the tools.<name> object, not only as "
+            "directly-listed function definitions. Do not judge a tool's availability from the "
+            "directly-visible definitions alone, and do not rely on earlier conversation claims about "
+            "what is or is not available. Before telling the user a tool is unavailable, look it up by "
+            "its exact name in ALL_TOOLS (for a side-effecting tool prefer this registry check over "
+            "invoking it just to probe), or make one schema-valid call, and base your answer on the "
+            "current result rather than on what you said earlier."
+        )
+    if "files" in servers:
+        instructions.append(
+            "When the user asks to read a file, use the files MCP server's read_file tool with an "
+            "absolute or relative regular-file path (it does not list directories)."
+        )
+    if instructions:
+        lines.append("developer_instructions = " + _toml_string(" ".join(instructions)))
+        lines.append("")
     for name, server in servers.items():
         lines.append(f"[mcp_servers.{name}]")
         lines.append(f"command = {_toml_string(server['command'])}")
@@ -266,6 +319,14 @@ def _write_codex_profile(path, servers, allowed_tools):
             lines.append(f"args = {_toml_array(server['args'])}")
         if allowed_tools.get(name):
             lines.append(f"enabled_tools = {_toml_array(allowed_tools[name])}")
+        # Codex の非対話実行は approval_policy=never のため、注釈なし MCP tool は
+        # "user cancelled MCP tool call" として拒否される。ここで公開する server は
+        # すべて同梱・同一 addon プロセス内の first-party（個体自身の身体）であり、
+        # 非対話では承認する人間が居ないので、承認ゲートは「安全に手動承認」ではなく
+        # 「ツールを永久に使えなくする」だけを意味しセキュリティ利益を持たない。よって
+        # 全 server を自動承認する。files 限定では memory/ha/body/game 等 chat の全
+        # first-party tool が "user cancelled" で全滅すると実機E2Eで判明（2026-07-23・F10）。
+        lines.append('default_tools_approval_mode = "approve"')
         env = server.get("env") or {}
         if env:
             lines.append("")

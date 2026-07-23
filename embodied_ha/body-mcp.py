@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Body/location MCP server for Embodied HA.
 
-This server gives Akane a lightweight embodied position model. It does not
+This server gives the instance a lightweight embodied position model. It does not
 forbid remote HA access; it records whether perception/action is direct or
 remote by making the current body location explicit.
 """
@@ -14,6 +14,7 @@ import threading
 from typing import Any
 
 from embodied_action import action_fields_for_move, apply_action_to_body_state
+from instance_identity import MQTT_PREFIX
 from mcp_lib import serve, text
 from room_graph import data_dir as _data_dir
 from room_graph import (
@@ -187,8 +188,8 @@ def publish_body_presence(state: dict[str, Any]) -> None:
     if mqtt_pass:
         base.extend(["-P", mqtt_pass])
     for topic, payload in (
-        ("embodied_ha/body/physical_room/state", physical_room),
-        ("embodied_ha/body/current_place/state", current_place),
+        (f"{MQTT_PREFIX}/body/physical_room/state", physical_room),
+        (f"{MQTT_PREFIX}/body/current_place/state", current_place),
     ):
         try:
             subprocess.run(base + ["-r", "-t", topic, "-m", payload], capture_output=True, text=True, timeout=5)
@@ -321,7 +322,7 @@ def move_to(args: dict[str, Any]):
 
 
 def _available_cameras(prefs: dict[str, Any]) -> list[dict]:
-    """侵入候補のカメラ一覧（entity/room/label/PTZ可否）。侵入失敗時にあかねへ提示し、
+    """侵入候補のカメラ一覧（entity/room/label/PTZ可否）。侵入失敗時に個体へ提示し、
     switch等を掴んでしまっても正しい camera.* エンティティが分かるようにする。"""
     roster = []
     for cam in prefs.get("cameras", []):

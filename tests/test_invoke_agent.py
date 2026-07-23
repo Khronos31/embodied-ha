@@ -322,14 +322,11 @@ class InvokeAgentTests(unittest.TestCase):
                 from pathlib import Path
 
                 args = sys.argv[1:]
-                schema_path = args[args.index("--output-schema") + 1]
                 out_path = args[args.index("-o") + 1]
                 prompt = args[-1]
-                schema = Path(schema_path).read_text(encoding="utf-8")
                 Path({record.as_posix()!r}).write_text(
                     json.dumps({{
                         "args": args,
-                        "schema": schema,
                         "prompt": prompt,
                     }}, ensure_ascii=False),
                     encoding="utf-8",
@@ -357,8 +354,28 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(args[:2], ["exec", "--skip-git-repo-check"])
             self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-luna")
             self.assertEqual(args[args.index("--config") + 1], "model_reasoning_effort=low")
-            self.assertEqual(payload["schema"], schema)
-            self.assertEqual(payload["prompt"], "SYS\n\nhello")
+            # 契約(F11-B1・2026-07-23): codex 既定の built-in 実行系/apps を明示 hardening する。
+            # read-only sandbox + apps/shell_tool 等の feature 無効化。exec は残す(MCP 中核)。
+            self.assertEqual(args[args.index("--sandbox") + 1], "read-only")
+            disabled = [args[i + 1] for i, a in enumerate(args) if a == "--disable"]
+            for feature in (
+                "apps",
+                "shell_tool",
+                "image_generation",
+                "goals",
+                "multi_agent",
+                "tool_suggest",
+            ):
+                self.assertIn(feature, disabled)
+            # --ignore-user-config は使わない: transient --profile ごと無視され MCP が全滅するため
+            # (2026-07-23 実機 A/B 実証)。
+            self.assertNotIn("--ignore-user-config", args)
+            # 契約変更(F5・2026-07-23): codex は --output-schema(OpenAI strict)を使わず、agy 同様に schema を
+            # prompt へ埋め込む(EHA の任意キー object は strict で表現不可)。
+            self.assertNotIn("--output-schema", args)
+            self.assertTrue(payload["prompt"].startswith("SYS\n\nhello"))
+            self.assertIn(schema, payload["prompt"])
+            self.assertTrue(payload["prompt"].endswith("JSON:\n"))
 
     def test_agy_appends_schema_to_prompt_and_extracts_json(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -702,6 +719,43 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn("command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です", prompt)
             self.assertRegex(prompt, r"@\S+\.webm")
 
+    def test_sound_file_uses_session_model_over_default_tier_for_agy(self):
+        # sol Med3: agy 選択でも深聴き(EHA_SESSION_MODEL 指定)は default ティア prefs より
+        # session モデルを優先し、STT 品質を prefs で劣化させない。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            agy = tmpdir / "agy"
+            wav_path = tmpdir / "input.wav"
+            write_silent_wav(wav_path)
+            write_executable(
+                agy,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:]}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+            result = self.run_wrapper(
+                ["--model", "lite", "--sound-file", wav_path.as_posix(), "listen"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": agy.as_posix(),
+                    "EHA_AGY_MODEL_DEFAULT": "Gemini 3.5 Flash (Low)",  # prefs 相当の低モデル
+                    "EHA_SESSION_MODEL": "Gemini 3.5 Flash (High)",     # 深聴きが指定する音声モデル
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (High)")
+
     def test_sound_file_missing_dies(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -971,28 +1025,51 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertIn("not --allowed-mcp-tools", help_text)
         self.assertIn("Per-server partial allowlists", help_text)
 
-    def test_codex_rejects_allowed_builtins(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "codex"
-            write_executable(
-                fake,
-                """
-                #!/usr/bin/env bash
-                echo "codex must not be called" >&2
-                exit 99
-                """,
-            )
+    def test_codex_accepts_allowed_builtins_and_maps_web_search(self):
+        # 契約変更(2026-07-23・F4): --allowed-builtins は全ハーネス共通の能力意図。codex では
+        # die せず受理し、WebSearch 意図の有無を native web_search(live/disabled)へ翻訳する。
+        # Read は files MCP が担うため codex へ raw フラグは渡さない。
+        for builtins, expected_web in (
+            ("Read", "web_search=disabled"),
+            ("Read,WebSearch", "web_search=live"),
+            ("Read, WebSearch", "web_search=live"),  # 空白付きCSVも正規化して判定(sol Med)
+        ):
+            with self.subTest(builtins=builtins):
+                with tempfile.TemporaryDirectory() as tmp:
+                    record = Path(tmp) / "args.json"
+                    fake = Path(tmp) / "codex"
+                    write_executable(
+                        fake,
+                        f"""
+                        #!/usr/bin/env python3
+                        import json
+                        import sys
+                        from pathlib import Path
 
-            result = self.run_wrapper(
-                ["--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
-                {
-                    "EHA_AGENT_HARNESS": "codex",
-                    "EHA_CODEX_BIN": fake.as_posix(),
-                },
-            )
+                        args = sys.argv[1:]
+                        out_path = args[args.index("-o") + 1]
+                        Path({record.as_posix()!r}).write_text(
+                            json.dumps(args), encoding="utf-8"
+                        )
+                        Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                        """,
+                    )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("--allowed-builtins is not supported for codex", result.stderr)
+                    result = self.run_wrapper(
+                        ["--allowed-builtins", builtins, "hello"],
+                        {
+                            "EHA_AGENT_HARNESS": "codex",
+                            "EHA_CODEX_BIN": fake.as_posix(),
+                        },
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn(
+                        "--allowed-builtins is not supported for codex", result.stderr
+                    )
+                    args = json.loads(record.read_text(encoding="utf-8"))
+                    self.assertIn(expected_web, args)
+                    self.assertNotIn("--allowed-builtins", args)
 
     def test_codex_rejects_content_json_including_at_path_form(self):
         # content_json_set(2026-07-16の@<path>対応)がinline/@path両方の指定を
@@ -1150,6 +1227,45 @@ class InvokeAgentTests(unittest.TestCase):
                 ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
+    def test_agy_grants_read_file_when_read_builtin_intended(self):
+        # F9(2026-07-23): agy native read_file は config.json globalPermissionGrants の read_file(*) grant で
+        # headless でも通る(実機確認)。Read 意図(--allowed-builtins Read)がある時だけ配布する。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"userSettings": {}}', encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home,
+                ["--mcp-servers", "ha", "--allowed-builtins", "Read"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            allow = config["userSettings"]["globalPermissionGrants"]["allow"]
+            self.assertIn("read_file(*)", allow)
+            self.assertIn("mcp(ha/*)", allow)
+
+    def test_agy_does_not_grant_read_file_without_read_builtin(self):
+        # Read 意図が無ければ read_file(*) は配らない(intent gate)。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text('{"userSettings": {}}', encoding="utf-8")
+
+            result = self._run_agy_with_servers(
+                tmpdir, agy_home, ["--mcp-servers", "ha"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            allow = config["userSettings"]["globalPermissionGrants"]["allow"]
+            self.assertNotIn("read_file(*)", allow)
+
     def test_agy_permission_grants_merge_is_add_only_and_dedupes(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
@@ -1253,29 +1369,36 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(config_path.stat().st_mtime_ns, mtime_before)
 
-    def test_agy_mcp_requires_agent_site_and_rejects_allowed_builtins(self):
+    def test_agy_mcp_requires_agent_site_and_accepts_allowed_builtins(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = self.write_project_fake_agy(Path(tmp))
+            # hermetic: agent-site の作業場所を temp に固定し、repo 直下 chat/.agents を作らない(sol Med)。
+            work = Path(tmp) / "work"
+            work.mkdir()
 
             missing_site = self.run_wrapper(
                 ["--mcp-servers", "ha", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": work.as_posix(),
                 },
             )
-            bad_builtins = self.run_wrapper(
+            # 契約変更(2026-07-23・F4): agy も --allowed-builtins で die しない。Read は files MCP、
+            # WebSearch(agy native)の grant 形式は 2.1.0(§8)。ここでは受理して無視することを確認。
+            with_builtins = self.run_wrapper(
                 ["--agent-site", "chat", "--mcp-servers", "ha", "--allowed-builtins", "Read", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": work.as_posix(),
                 },
             )
 
             self.assertNotEqual(missing_site.returncode, 0)
             self.assertIn("--agent-site is required for agy MCP config", missing_site.stderr)
-            self.assertNotEqual(bad_builtins.returncode, 0)
-            self.assertIn("--allowed-builtins is not supported for agy", bad_builtins.stderr)
+            self.assertEqual(with_builtins.returncode, 0, with_builtins.stderr)
+            self.assertNotIn("--allowed-builtins is not supported for agy", with_builtins.stderr)
 
     def test_agent_site_is_ignored_by_codex_cwd_selection(self):
         with tempfile.TemporaryDirectory() as tmp:

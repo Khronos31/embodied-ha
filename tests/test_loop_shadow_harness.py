@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "embodied_ha"))
 
 from loop_shadow_harness import (  # noqa: E402
-    RUNTIME_FILES,
     capture_runtime_side_effects,
     comparable_wiring_trace,
     make_runtime,

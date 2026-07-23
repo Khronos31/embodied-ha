@@ -644,15 +644,16 @@ async function checkBackendMode() {
             isStandaloneMode = false;
             console.log("[API] Connected to Web UI backend. Swapped to live sync mode.");
 
-            // Check auth before loading messages
+            // Check harness readiness before loading messages (Step4: aggregate overview,
+            // not the Claude-only status). Not ready → first-run harness picker/wizard.
             try {
-                const authRes = await fetch(`${base}/api/setup/status`);
-                const authData = await authRes.json();
-                if (!authData.authenticated) {
-                    enterSetupMode();
+                const ovRes = await fetch(`${base}/api/setup/overview`);
+                const ov = await ovRes.json();
+                if (!ov.ready) {
+                    enterHarnessSetup(ov);
                     return;
                 }
-            } catch (_) { /* auth check failed, proceed to normal mode */ }
+            } catch (_) { /* overview check failed, proceed to normal mode */ }
 
             // キャラクター名を先に読み込む（fetchMessages が sender に焼き込むため、
             // メッセージ取得より前に characterName を確定させる）
@@ -1037,6 +1038,290 @@ async function setupSuccess() {
     window.location.reload();
 }
 
+// --- Harness Picker / first-run wizard (Step4) ---
+// Design (markup+CSS) by Antigravity; flow logic (below) wired by Claude.
+// Backend contract:
+//   GET  /api/setup/overview                -> {selection_state, selected, effective, ready, harnesses}
+//   install (records selection via CAS): claude/codex = POST SSE, agy = GET SSE
+//   login: claude/agy = GET SSE, codex = POST SSE; code submit via POST
+// install/login/code are ingress-guarded and work from the browser via ingress.
+// ※claude install は backend が do_POST・テストも POST(test_claude_setup/test_setup_guard)なのに
+//   ここだけ GET を宣言していたため GET→404 フォールスルーで「インストールに失敗しました」になり、
+//   run_install に到達せず backend ログにも出ない不具合だった(2026-07-23実機E2Eで特定・POSTへ修正)。
+
+const HARNESS_ENDPOINTS = {
+    claude: {
+        install: { method: 'POST', url: '/api/setup/claude/install' },
+        login: { method: 'GET', url: '/api/setup/claude/login' },
+        code: '/api/setup/claude/login-code',
+    },
+    codex: {
+        install: { method: 'POST', url: '/api/setup/codex/install' },
+        login: { method: 'POST', url: '/api/setup/codex/login' },
+        code: null, // device-auth: user completes on the device page, no code returned
+    },
+    agy: {
+        install: { method: 'GET', url: '/api/setup/antigravity/install' },
+        login: { method: 'GET', url: '/api/setup/antigravity/login' },
+        code: '/api/setup/antigravity/input',
+    },
+};
+
+function enterHarnessSetup(overview) {
+    setupMode = true;
+    const picker = document.getElementById('harness-picker');
+    if (picker) picker.hidden = false;
+    // A harness is chosen but not yet ready (interrupted install/auth) -> resume it.
+    if (overview && overview.selection_state === 'valid' && overview.selected) {
+        selectHarness(overview.selected);
+    }
+}
+
+async function fetchOverview() {
+    const res = await fetch(`${base}/api/setup/overview`);
+    return res.json();
+}
+
+function harnessShowProgress() {
+    const p = document.getElementById('harness-picker-progress');
+    if (p) p.hidden = false;
+}
+
+function harnessSetStatus(text, kind) {
+    harnessShowProgress();
+    const el = document.getElementById('harness-picker-status');
+    if (el) { el.hidden = false; el.textContent = text; el.className = 'form-hint' + (kind ? ' ' + kind : ''); }
+}
+
+// 認証UI(URLボタン/コード表示/コード入力)を初期状態に戻す。
+function harnessResetAuthUi() {
+    const url = document.getElementById('harness-auth-url');
+    const disp = document.getElementById('harness-auth-code-display');
+    const row = document.getElementById('harness-auth-code-row');
+    if (url) { url.hidden = true; url.innerHTML = ''; }
+    if (disp) { disp.hidden = true; disp.textContent = ''; }
+    if (row) { row.hidden = true; }
+}
+
+function harnessShowAuthUrl(url) {
+    const el = document.getElementById('harness-auth-url');
+    if (!el) return;
+    el.hidden = false;
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    a.className = 'setup-choice-btn';
+    a.style.cssText = 'text-decoration:none;text-align:center;display:flex;justify-content:center;margin-bottom:10px;';
+    a.textContent = '🔗 認証ページを開く';
+    el.innerHTML = '';
+    el.appendChild(a);
+}
+
+// codex: 端末に貼るコードをこちらが表示する(貼り戻し無し)。コピーボタン付き。
+function harnessShowCodeDisplay(code) {
+    const disp = document.getElementById('harness-auth-code-display');
+    if (!disp) return;
+    disp.hidden = false;
+    disp.innerHTML = '';
+    disp.style.display = 'flex';
+    disp.style.alignItems = 'center';
+    disp.style.justifyContent = 'space-between';
+    disp.style.gap = '12px';
+    const codeSpan = document.createElement('span');
+    codeSpan.className = 'harness-code-value';
+    codeSpan.textContent = code;
+    codeSpan.style.flex = '1';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'setup-send-btn';
+    btn.textContent = 'コピー';
+    btn.onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(code);
+            btn.textContent = 'コピーしました';
+            setTimeout(() => { btn.textContent = 'コピー'; }, 1500);
+        } catch (_) {
+            // クリップボード不可の環境ではコードを選択状態にする(手動コピー用)。
+            const range = document.createRange();
+            range.selectNodeContents(codeSpan);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    };
+    disp.appendChild(codeSpan);
+    disp.appendChild(btn);
+}
+
+function harnessFail(text) {
+    harnessSetStatus('⚠ ' + text, 'error');
+    document.querySelectorAll('.harness-select-btn').forEach(b => { b.disabled = false; });
+    document.querySelectorAll('.harness-card').forEach(c => c.classList.remove('harness-card-dimmed'));
+}
+
+// Read a text/event-stream from a fetch response (works for GET and POST, unlike EventSource).
+async function harnessStreamSSE(method, url, body, handlers) {
+    let res;
+    try {
+        res = await fetch(`${base}${url}`, {
+            method,
+            headers: body ? { 'Content-Type': 'application/json' } : {},
+            body: body ? JSON.stringify(body) : undefined,
+        });
+    } catch (e) { handlers.onError && handlers.onError(String(e)); return; }
+    if (!res.ok || !res.body) { handlers.onError && handlers.onError('HTTP ' + res.status); return; }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, sep);
+            buf = buf.slice(sep + 2);
+            let event = 'message', data = '';
+            for (const line of block.split('\n')) {
+                if (line.startsWith('event:')) event = line.slice(6).trim();
+                else if (line.startsWith('data:')) data += line.slice(5).trim();
+            }
+            let payload = null;
+            try { payload = data ? JSON.parse(data) : null; } catch (_) { payload = { text: data }; }
+            if (event === 'line') handlers.onLine && handlers.onLine(payload);
+            // agy(Antigravity)の login backend は line ではなく url/waiting_code の typed イベントを送る。
+            // ピッカーは onLine(text から URL 正規表現抽出)経路なので、url イベントを {text:url} として流し込む
+            // (agy は usesCodeInput=true なので URL 表示＋コード入力欄が出る)。claude/codex は url を送らないため無影響。
+            else if (event === 'url') handlers.onLine && handlers.onLine({ text: (payload && payload.url) || '' });
+            else if (event === 'waiting_code') handlers.onLine && handlers.onLine({ text: 'authorization code' });
+            else if (event === 'done') handlers.onDone && handlers.onDone(payload);
+            else if (event === 'error') handlers.onError && handlers.onError((payload && payload.error) || 'error');
+        }
+    }
+}
+
+function harnessInstall(harness) {
+    const ep = HARNESS_ENDPOINTS[harness].install;
+    harnessSetStatus('ダウンロード / インストール中… ⏳');
+    return new Promise((resolve) => {
+        harnessStreamSSE(ep.method, ep.url, null, {
+            onLine: () => { /* 生ログは出さない(ターミナル廃止)。状態表示のみ */ },
+            onDone: () => resolve(true),
+            onError: () => resolve(false),
+        });
+    });
+}
+
+// 認証フローは2種類:
+//  claude/agy: 認証ページを開いてログイン→ブラウザに出たコードをこちらの入力欄に貼り付け。
+//  codex     : URLとコードをこちらが表示→ユーザーがブラウザ側でそのコードを入力(貼り戻し無し)。
+function harnessLogin(harness) {
+    const ep = HARNESS_ENDPOINTS[harness].login;
+    const usesCodeInput = !!HARNESS_ENDPOINTS[harness].code; // claude/agy
+    harnessSetStatus('ログインの準備をしています… ⏳');
+    let sawUrl = false;
+    let shownCode = false;
+    return new Promise((resolve) => {
+        harnessStreamSSE(ep.method, ep.url, null, {
+            onLine: (p) => {
+                const text = p && p.text ? p.text : '';
+                if (!text) return;
+                const um = text.match(/https?:\/\/\S+/);
+                if (um && !sawUrl) {
+                    sawUrl = true;
+                    harnessShowAuthUrl(um[0]);
+                    if (usesCodeInput) {
+                        harnessSetStatus('認証ページを開いてログインし、表示されたコードを下に貼り付けてください。');
+                        harnessShowCodeInput(harness);
+                    }
+                }
+                if (!usesCodeInput && !shownCode) {
+                    // codex: device コード(例 ABCD-1234)を抽出して表示する。
+                    const cm = text.match(/\b[A-Z0-9]{4,8}-[A-Z0-9]{4,8}\b/);
+                    if (cm) {
+                        shownCode = true;
+                        harnessShowCodeDisplay(cm[0]);
+                        harnessSetStatus('認証ページを開き、このコードを入力して承認してください。完了すると自動で起動します。');
+                    }
+                }
+            },
+            onDone: async () => { await harnessPollReady(); resolve(true); },
+            onError: (msg) => { harnessFail('ログインに失敗しました: ' + msg); resolve(false); },
+        });
+    });
+}
+
+// claude/agy 用: こちらの入力欄に貼られたコードをバックエンドへ送る。
+function harnessShowCodeInput(harness) {
+    const row = document.getElementById('harness-auth-code-row');
+    const input = document.getElementById('harness-auth-code');
+    const submit = document.getElementById('harness-auth-code-submit');
+    if (!row || !input || !submit) return;
+    row.hidden = false;
+    if (row.dataset.wired) return;  // 既に配線済みなら二重配線しない
+    row.dataset.wired = '1';
+    setTimeout(() => input.focus(), 50);
+    const submitCode = async () => {
+        const code = (input.value || '').trim();
+        if (!code) return;
+        submit.disabled = true;
+        try {
+            await fetch(`${base}${HARNESS_ENDPOINTS[harness].code}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, text: code }),
+            });
+        } catch (_) { /* ignore; readiness poll will confirm */ }
+        harnessSetStatus('コードを送信しました。認証完了を確認しています… ⏳');
+        await harnessPollReady();
+    };
+    submit.onclick = submitCode;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submitCode(); } };
+}
+
+async function harnessPollReady() {
+    harnessSetStatus('起動準備を確認しています… ⏳');
+    for (;;) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+            const ov = await fetchOverview();
+            if (ov.ready) {
+                harnessSetStatus('✓ 準備ができました。起動しています…');
+                await new Promise(r => setTimeout(r, 1500));
+                window.location.reload();
+                return;
+            }
+        } catch (_) { /* keep polling */ }
+    }
+}
+
+async function selectHarness(harness) {
+    if (!HARNESS_ENDPOINTS[harness]) return;
+    document.querySelectorAll('.harness-select-btn').forEach(b => { b.disabled = true; });
+    document.querySelectorAll('.harness-card').forEach(c => {
+        c.classList.toggle('harness-card-selected', c.dataset.harness === harness);
+        c.classList.toggle('harness-card-dimmed', c.dataset.harness !== harness);
+    });
+    harnessResetAuthUi();
+    try {
+        let ov = await fetchOverview();
+        let st = (ov.harnesses || {})[harness] || {};
+        if (!st.installed) {
+            const ok = await harnessInstall(harness);
+            if (!ok) { harnessFail('インストールに失敗しました。'); return; }
+            ov = await fetchOverview();
+            st = (ov.harnesses || {})[harness] || {};
+        }
+        if (ov.ready && ov.selected === harness) { await harnessPollReady(); return; }
+        if (!st.authenticated) {
+            await harnessLogin(harness);
+        } else {
+            await harnessPollReady();
+        }
+    } catch (e) {
+        harnessFail('セットアップ中にエラーが発生しました: ' + e);
+    }
+}
+
 // ===========================
 // Settings Panel Integration
 // ===========================
@@ -1336,7 +1621,28 @@ function setAntigravityAuthStatus(message, kind = 'info') {
     statusEl.className = `form-hint ${kind}`.trim();
 }
 
-function renderAntigravityStatus(data) {
+function renderAntigravityStatus(data, selectedHarness) {
+    // §13.2/13.3: when Antigravity itself is the running harness, its install/auth/
+    // management controls would break the live agent (uninstall/clear-auth are the
+    // dangerous ones). Hide the whole management area and show an explanatory notice.
+    const agySelected = selectedHarness === 'agy';
+    const notice = document.getElementById('antigravity-selected-notice');
+    const dashboard = document.getElementById('antigravity-dashboard-box');
+    const setupActions = document.getElementById('antigravity-setup-actions');
+    const authUi = document.getElementById('antigravity-auth-ui');
+    if (notice) notice.style.display = agySelected ? '' : 'none';
+    if (agySelected) {
+        if (dashboard) dashboard.style.display = 'none';
+        if (setupActions) setupActions.style.display = 'none';
+        if (authUi) authUi.style.display = 'none';
+        const dz = document.getElementById('antigravity-danger-zone');
+        if (dz) dz.style.display = 'none';
+        return;
+    }
+    if (dashboard) dashboard.style.display = '';
+    if (setupActions) setupActions.style.display = '';
+    if (authUi) authUi.style.display = '';
+
     const statusEl = document.getElementById('antigravity-status-text');
     if (statusEl) {
         statusEl.style.display = 'block';
@@ -1403,12 +1709,27 @@ function renderAntigravityStatus(data) {
     }
 }
 
+async function fetchSelectedHarness() {
+    // Best-effort: the selected harness gates the experimental tab's controls.
+    // On any failure, return null (treat as non-agy → controls shown as before).
+    try {
+        const res = await fetch(`${base}/api/setup/overview`);
+        const ov = await res.json();
+        return ov && ov.selection_state === 'valid' ? ov.selected : null;
+    } catch (_) {
+        return null;
+    }
+}
+
 async function refreshAntigravityStatus() {
     try {
-        const res = await fetch(`${base}/api/setup/antigravity/status`);
+        const [res, selectedHarness] = await Promise.all([
+            fetch(`${base}/api/setup/antigravity/status`),
+            fetchSelectedHarness(),
+        ]);
         const data = await res.json();
         antigravitySetupState = data;
-        renderAntigravityStatus(data);
+        renderAntigravityStatus(data, selectedHarness);
         if (data.installing) {
             appendAntigravityLog('Antigravity CLI をインストール中です。');
         } else if (!data.installed) {

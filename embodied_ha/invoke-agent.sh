@@ -14,8 +14,10 @@ Options:
                              via prompt prefix approximation)
   --append-system-prompt TXT Append to the harness/system prompt (Claude native
                              --append-system-prompt; Codex/Antigravity via prompt prefix)
-  --allowed-builtins CSV     Built-in tool allow-list for Claude Code only
-                             (currently: Read, WebSearch)
+  --allowed-builtins CSV     Harness-agnostic capability intent (currently: Read,
+                             WebSearch). claude=native --allowed-builtins; codex=WebSearch
+                             gates native web_search, Read is served by the files MCP;
+                             agy=Read via files MCP, WebSearch grant is 2.1.0 (§8).
   --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; must cover every
                              selected MCP server. Per-server partial allowlists
                              are allowed: Claude blocks unlisted tool execution,
@@ -249,8 +251,17 @@ case "$harness:$logical_model" in
     model="${EHA_AGY_MODEL_LITE:-Gemini 3.5 Flash (Low)}"
     ;;
 esac
-if [[ "$harness" == "agy" && -n "$sound_file" && "$harness_was_agy" != "true" ]]; then
-  model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
+if [[ "$harness" == "agy" && -n "$sound_file" ]]; then
+  # 音声モデルの優先順位(sol Med3): (1)明示された EHA_SESSION_MODEL を最優先。深聴き音声
+  # セッション(listen_queue)はこれを音声既定Highに設定するため、選択ハーネスが agy で default
+  # ティア prefs(EHA_AGY_MODEL_DEFAULT)を Low にしても STT には波及しない。(2)EHA_SESSION_MODEL
+  # 未設定かつ元々 agy 選択でない(claude 等の非 agy 個体)なら音声専用既定へ。(3)元々 agy 選択かつ session
+  # モデル未指定なら default ティアのまま(既存の意図的挙動を保持)。
+  if [[ -n "${EHA_SESSION_MODEL:-}" ]]; then
+    model="$EHA_SESSION_MODEL"
+  elif [[ "$harness_was_agy" != "true" ]]; then
+    model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
+  fi
 fi
 
 extract_result_json() {
@@ -435,7 +446,19 @@ print(json.dumps({"type": "user", "message": {"role": "user", "content": content
 }
 
 run_claude() {
-  local bin="${EHA_CLAUDE_BIN:-${CLAUDE_BIN:-claude}}"
+  # 同梱廃止(増分5a): claudeバイナリを実在確認しながら解決する。優先順位は
+  # resolve_claude_bin()(ready判定・login・game-mcpと同じ)と一致させる:
+  # EHA_CLAUDE_BIN(実在) > CLAUDE_BIN(実在) > 既知DIYパス(実在) > PATHのclaude。
+  # env値が存在しないパスを指していても(run.shは未配置時に将来のDIYパスを指す)、実在確認で
+  # 読み飛ばしてDIY/PATHへフォールバックするため、readinessが見る実体と食い違わない。
+  # 実在確認は resolve_claude_bin() の isfile+X_OK と一致させる(-f で実行可能ディレクトリを弾く)。
+  # DIY 既知パスは EHA_CLAUDE_INSTALL_ROOT を尊重(run.sh/claude_setup.install_root と同じ既定)。
+  local bin="" _cand
+  local _diy="${EHA_CLAUDE_INSTALL_ROOT:-/data/claude-cli}/bin/claude"
+  for _cand in "${EHA_CLAUDE_BIN:-}" "${CLAUDE_BIN:-}" "$_diy"; do
+    if [[ -n "$_cand" && -f "$_cand" && -x "$_cand" ]]; then bin="$_cand"; break; fi
+  done
+  [[ -n "$bin" ]] || bin="claude"
   local cwd="${EHA_AGENT_CWD:-${EHA_CLAUDE_CWD:-$PWD}}"
   local stdout
   local mcp_config_arg="$mcp_config"
@@ -480,11 +503,19 @@ run_claude() {
 }
 
 run_codex() {
-  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for codex in invoke-agent.sh yet"
+  # --allowed-builtins は全ハーネス共通の能力意図(Read/WebSearch)。codex では Read は files MCP が
+  # 担うため no-op、WebSearch は下で codex native の web_search を制御する(die しない)。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
   [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
 
-  local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-codex}}"
+  local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-}}"
+  if [[ -z "$bin" ]]; then
+    if [[ -x /data/codex-cli/bin/codex ]]; then
+      bin="/data/codex-cli/bin/codex"
+    else
+      bin="codex"
+    fi
+  fi
   local cwd="${EHA_AGENT_CWD:-${EHA_CODEX_CWD:-$PWD}}"
   local full_prompt="$prompt"
   local profile_name=""
@@ -494,6 +525,37 @@ run_codex() {
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  # F11-B1(2026-07-23・Codex red-team [[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]]):
+  # codex 既定は built-in 実行系(exec_command/apply_patch/write_stdin)と ChatGPT apps(codex_apps・
+  # ユーザーの CODEX_HOME 認証由来)を露出する。住み込み個体には不要かつ危険なので明示 hardening する。
+  #   --sandbox read-only    : default/global config のドリフトに依存せず書込みを塞ぐ(exec は残るが write 不可)
+  #   --disable apps         : mcp__codex_apps__* を除去(feature フラグ由来なので user-config 非依存)
+  #   --disable shell_tool   : exec_command / write_stdin を除去
+  #   --disable image_generation/goals/multi_agent/tool_suggest : chat に不要な surface を削減
+  # exec(code-mode の MCP 呼出し中核)と apply_patch は残るが、read-only sandbox で書込みは拒否される。
+  # flag 実在は codex 0.144.4 の --help / features list で確認済。
+  # ★--ignore-user-config は「使わない」: EHA は MCP を CODEX_HOME 内の transient --profile で渡すため、
+  #   --ignore-user-config を付けると profile ごと無視され MCP tool も developer_instruction も全滅する
+  #   (2026-07-23 SCS で --json の mcp_tool_call 有無で A/B 実証: 付けると read_file 呼び出し消失・
+  #   外すと EHA_F11 canary 読取成功)。addon の CODEX_HOME は DIY で個人 global 設定を持たないため
+  #   継承リスクは元々低く、codex_apps 除去は --disable apps が担う。厳密な user-config 隔離が要る場合は
+  #   MCP を --profile でなく inline -c で渡す別実装が要る(将来課題・レポート§8/B-1)。
+  cmd+=("--sandbox" "read-only"
+        "--disable" "apps" "--disable" "shell_tool"
+        "--disable" "image_generation" "--disable" "goals"
+        "--disable" "multi_agent" "--disable" "tool_suggest")
+  # WebSearch 意図があれば codex native の live web_search を有効化、無ければ無効化して
+  # claude chat(WebSearch 非許可)とのパリティを取る。--allowed-builtins 未指定時は codex 既定に任せる。
+  # validate_allowed_builtins が要素を trim して受理する("Read, WebSearch"等)ため、判定前に空白を除去して
+  # 正規化する(生CSV部分一致だと空白付き要素を取りこぼす・sol Med)。
+  if [[ "$allowed_builtins_set" == "true" ]]; then
+    local _ab_norm="${allowed_builtins//[[:space:]]/}"
+    if [[ ",$_ab_norm," == *",WebSearch,"* ]]; then
+      cmd+=("--config" "web_search=live")
+    else
+      cmd+=("--config" "web_search=disabled")
+    fi
+  fi
   if [[ -n "$system_prompt_replace" ]]; then
     local instructions_path
     instructions_path="$(mktemp "${TMPDIR:-/tmp}/eha-codex-system-prompt.XXXXXX.md")"
@@ -517,17 +579,21 @@ run_codex() {
     TEMP_FILES+=("$profile_path")
     cmd+=("--profile" "$profile_name")
   fi
+  # json_schema は --output-schema(OpenAI strict response_format)ではなく prompt へ埋め込む(F5・2026-07-23)。
+  # EHA のスキーマは任意キーの object(cameras_add 等の {"type":"object"})を含み、OpenAI strict モード
+  # (全 object に additionalProperties:false 必須=任意キー不可)では表現できないため。agy と同じ
+  # prompt-injection にし、最終メッセージは -o で回収する(claude は native --json-schema のまま)。
   if [[ -n "$json_schema" ]]; then
-    # Keep process substitution here intentionally: this is the contract the
-    # wrapper exists to hide from callers, and it was verified from a Bash file.
-    "${cmd[@]}" --output-schema <(printf '%s' "$json_schema") -o >(cat) "$full_prompt" 1>&2
-  else
-    "${cmd[@]}" -o >(cat) "$full_prompt" 1>&2
+    full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi
+  # -o >(cat) の process substitution は wrapper が隠す契約(Bash ファイルから検証済み)。
+  "${cmd[@]}" -o >(cat) "$full_prompt" 1>&2
 }
 
 run_agy() {
-  [[ "$allowed_builtins_set" != "true" ]] || die "--allowed-builtins is not supported for agy in invoke-agent.sh yet"
+  # --allowed-builtins(Read/WebSearch)は agy では: Read は agy native の read_file を使う
+  # (config.json globalPermissionGrants の read_file(*) grant で headless でも通る・実機確認2026-07-23)。
+  # WebSearch(agy native)の headless 許可形式は未確定(§8)で 2.1.0。ここでは die せず受理する。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
 
@@ -572,6 +638,15 @@ run_agy() {
     for server in "${server_args[@]}"; do
       grants+="mcp(${server}/*)"$'\n'
     done
+    # Read 意図(--allowed-builtins Read)がある時は agy native read_file を config.json grant で許可する
+    # (agy 1.1.3+ の headless は settings.json permissions.allow を無視し config.json globalPermissionGrants
+    # だけが効く=実機確認。read-anything は既定 posture。claude の Read と同精度に intent で gate)。
+    if [[ "$allowed_builtins_set" == "true" ]]; then
+      local _agy_ab_norm="${allowed_builtins//[[:space:]]/}"
+      if [[ ",$_agy_ab_norm," == *",Read,"* ]]; then
+        grants+="read_file(*)"$'\n'
+      fi
+    fi
     ensure_agy_permission_grants "$agy_home" "$grants"
   fi
   local full_prompt="$prompt"

@@ -9,3 +9,6 @@ embodied_ha/github_app.pem
 embodied_ha/assets/wake_ack_candidates/
 embodied_ha/assets/wake_ack_pairs/
 embodied_ha/assets/*.bak
+tests/persona_names.local
+tests/test_no_hardcoded_persona_names.py
+tests/persona_names.example

@@ -636,15 +636,21 @@
 
                             <div class="experimental-desc-box" id="antigravity-description-box" style="margin-bottom: 16px;">
                                 <p class="section-desc">
-                                    エージェントが「音を聴きたい」と決意したとき、次のセッションで Antigravity（Google の AI エージェント）が一時的にハーネスを担い、録音した音声ファイルの内容や雰囲気を要約・記録します。Claude Code が音声に対応したら即座に取り外せる設計です。
+                                    エージェントが Claude Code や Codex の場合でも、「音を聴きたい」と決意したときは、そのセッションだけ一時的に Antigravity（Google Gemini）に切り替えて、録音した音声の内容や雰囲気を要約・記録します。
                                 </p>
                                 <p class="section-desc" style="margin-top: 6px; color: var(--claude-text-sub); font-size: 12px;">
                                     利用には Google アカウントへの認証が必要です。音声データは外部に送信されます。
                                 </p>
                             </div>
 
+                            <!-- 選択ハーネスが Antigravity のときは、導入/認証/管理操作を隠して代替文を出す
+                                 (稼働中ハーネスを壊す導線を防ぐ・§13.2/13.3)。app.js が出し分ける。 -->
+                            <div id="antigravity-selected-notice" class="section-desc" style="display: none;">
+                                このエージェントは現在 Antigravity で動作しているため、この機能（音声のための一時切り替え）は不要です。
+                            </div>
+
                             <!-- Status Dashboard -->
-                            <div class="antigravity-dashboard" style="margin-bottom: 20px;">
+                            <div class="antigravity-dashboard" id="antigravity-dashboard-box" style="margin-bottom: 20px;">
                                 <div class="dashboard-title">接続ステータス</div>
                                 <div class="dashboard-grid">
                                     <div class="dashboard-item">
@@ -672,7 +678,7 @@
                                 </div>
                             </div>
 
-                            <div class="btn-group" style="margin-top: 8px; flex-wrap: wrap; gap: 8px;">
+                            <div class="btn-group" id="antigravity-setup-actions" style="margin-top: 8px; flex-wrap: wrap; gap: 8px;">
                                 <button type="button" id="antigravity-install-btn" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2);" onclick="startAntigravityInstall()">インストール</button>
                                 <button type="button" id="antigravity-login-btn" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2); display: none;" onclick="startAntigravityLogin()">認証を開始</button>
                             </div>
@@ -812,6 +818,87 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- 初回ハーネス選択ピッカー -->
+    <div id="harness-picker" class="setup-overlay" hidden>
+        <div class="harness-picker-modal">
+            <header class="harness-picker-header">
+                <h2 class="harness-picker-title">Embodied HA 初回設定</h2>
+                <div id="harness-picker-intro" class="harness-picker-intro">
+                    <p>あなたの家に住み込むエージェントを選びます。基本的な機能に差はありませんが、性格や受け答えが変わります。<br>また、これらはそれぞれの「素の性格」で、character.mdや毎日の会話を通じて育っていきます。</p>
+                </div>
+            </header>
+
+            <div class="harness-cards-grid">
+                <!-- Claude Card -->
+                <div class="harness-card" id="harness-card-claude" data-harness="claude">
+                    <div class="harness-card-header">
+                        <h3 class="harness-card-title">Claude Code</h3>
+                    </div>
+                    <div class="harness-card-body">
+                        <ul class="harness-details-list">
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">Anthropic Claude</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">組み込みメモリ — Embodied HAの生成するメモリファイルの他、Claude Codeが自動でMEMORY.mdを作成します</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">丁寧で内省的。慎重に確認しながら進めるバランス型</span></li>
+                        </ul>
+                    </div>
+                    <div class="harness-card-footer">
+                        <button class="harness-select-btn" data-harness="claude" onclick="selectHarness('claude')">この子で始める</button>
+                    </div>
+                </div>
+
+                <!-- Codex Card -->
+                <div class="harness-card" id="harness-card-codex" data-harness="codex">
+                    <div class="harness-card-header">
+                        <h3 class="harness-card-title">Codex</h3>
+                    </div>
+                    <div class="harness-card-body">
+                        <ul class="harness-details-list">
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">OpenAI GPT</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">シンプルな標準構成 — 設定や記憶が一箇所に集約され、管理ファイルがあちこちに散らばりません</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">クールな実務家。無駄口を叩かず、確実に手を動かす</span></li>
+                        </ul>
+                    </div>
+                    <div class="harness-card-footer">
+                        <button class="harness-select-btn" data-harness="codex" onclick="selectHarness('codex')">この子で始める</button>
+                    </div>
+                </div>
+
+                <!-- Antigravity Card -->
+                <div class="harness-card" id="harness-card-agy" data-harness="agy">
+                    <div class="harness-card-header">
+                        <h3 class="harness-card-title">Antigravity</h3>
+                    </div>
+                    <div class="harness-card-body">
+                        <ul class="harness-details-list">
+                            <li><span class="detail-label">モデル:</span><span class="detail-value">Google Gemini</span></li>
+                            <li><span class="detail-label">特徴:</span><span class="detail-value">メディアファイルのマルチモーダル処理 — 音声・映像ファイルの直接解析ができます</span></li>
+                            <li><span class="detail-label">性格:</span><span class="detail-value">明るいムードメーカー。ノリが良くフットワークが軽い、ちょっとお調子者</span></li>
+                        </ul>
+                    </div>
+                    <div class="harness-card-footer">
+                        <button class="harness-select-btn" data-harness="agy" onclick="selectHarness('agy')">この子で始める</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="harness-picker-notice">
+                <span class="notice-icon">💡</span>
+                <span>未インストールのものは選択後にダウンロード→ログインへ進みます。</span>
+            </div>
+
+            <!-- 選択後の進行状況・認証表示領域 -->
+            <div id="harness-picker-progress" class="setup-choices" style="margin-top: 16px;" hidden>
+                <div id="harness-auth-url" hidden></div>
+                <div id="harness-auth-code-display" hidden></div>
+                <div id="harness-auth-code-row" class="setup-input-row" hidden>
+                    <input type="text" id="harness-auth-code" class="setup-input" placeholder="OAuth認証コードを入力..." autocomplete="off">
+                    <button type="button" id="harness-auth-code-submit" class="setup-send-btn">送信</button>
+                </div>
+                <div id="harness-picker-status" class="form-hint" hidden></div>
+            </div>
+        </div>
     </div>
 
     <!-- 共通編集モーダル -->

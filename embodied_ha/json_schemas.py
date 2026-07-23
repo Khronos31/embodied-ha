@@ -1,4 +1,4 @@
-"""あかねの応答用 --json-schema 定義（フェーズ4での実導入に向けた設計）。
+"""個体の応答用 --json-schema 定義（フェーズ4での実導入に向けた設計）。
 
 「共通コアスキーマ＋モード別追加プロパティ」の合成方式。additionalProperties は
 常に false（agent-hub の知見: OpenAI/codex 側の strict structured output 要件と

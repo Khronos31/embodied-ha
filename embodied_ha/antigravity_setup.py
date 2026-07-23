@@ -12,6 +12,18 @@ BIN_DIR_ENV = "EHA_ANTIGRAVITY_BIN_DIR"
 BIN_ENV = "EHA_ANTIGRAVITY_BIN"
 
 
+def subprocess_env() -> dict[str, str]:
+    """Return the minimal non-secret environment for the install script."""
+    current_path = os.environ.get(
+        "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+    return {
+        "HOME": home_dir(),
+        "PATH": f"{bin_dir()}:{current_path}",
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+    }
+
+
 def home_dir() -> str:
     return os.environ.get(HOME_ENV, "/data/")
 
@@ -142,4 +154,3 @@ def uninstall() -> dict:
     _remove_file(oauth_token_path(), removed_files)
     _remove_dir_if_empty(os.path.join(home_dir(), ".gemini", "antigravity-cli"))
     return {"removed_files": removed_files}
-
