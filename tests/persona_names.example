@@ -1,0 +1,14 @@
+# 出荷コード(embodied_ha/)にハードコードしてはいけない個体名・居住者名・maintainer handle を
+# 1行1件で列挙する。このファイルを persona_names.local にコピーし、あなたの環境の実名で埋める。
+#
+#   cp tests/persona_names.example tests/persona_names.local
+#
+# persona_names.local は .gitignore 済み=公開リポジトリに実名を含めないため。
+# test_no_hardcoded_persona_names.py が .local を読み、embodied_ha/ 内のハードコードを検出する。
+# .local が無ければテストは skip(=個々の環境で作る)。case-insensitive・漢字/かな/ローマ字を各行に。
+#
+# 例(架空・削除して実名に置き換える):
+# YourAgentName
+# エージェント名
+# ResidentName
+# 家族の名前

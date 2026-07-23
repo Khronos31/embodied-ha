@@ -72,7 +72,7 @@ fi
 
 # 選択ハーネス(未選択時は claude 既定)の default ティア model/effort を agent_prefs.json から
 # EHA_<H>_MODEL_DEFAULT / EFFORT へ配線(Step4増分2)。prefs 不在/未設定なら何も export せず、
-# invoke-agent.sh の組み込み既定に委ねる(prefs の無いあかねは既定 byte 不変)。agy モデル名は
+# invoke-agent.sh の組み込み既定に委ねる(prefs の無い既存個体は既定 byte 不変)。agy モデル名は
 # 空白を含むため IFS=tab で読む。process substitution で while ループを現在シェルに置き export を残す。
 _EFFECTIVE_HARNESS="${_SELECTED_HARNESS:-claude}"
 while IFS=$'\t' read -r _pk _pv; do
@@ -200,7 +200,7 @@ else:
 
 # --- Claude 設定ディレクトリ ---
 # 解決は claude_setup.resolve_config_dir に一本化(§13.9: claude_config_dirオプション撤去)。
-# 旧既定(実体あれば継続=既存あかね無移動) > 新既定 /data/claude-home の2段。ユーザーは変更不可。
+# 旧既定(実体あれば継続=既存個体は無移動) > 新既定 /data/claude-home の2段。ユーザーは変更不可。
 export CLAUDE_CONFIG_DIR
 CLAUDE_CONFIG_DIR=$(SCRIPT_DIR="$SCRIPT_DIR" python3 -c "
 import os, sys

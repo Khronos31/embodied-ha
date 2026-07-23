@@ -26,7 +26,7 @@ _BINARY_NAME_RE = re.compile(r"claude(?:\.exe)?")
 def config_dir() -> str:
     """Return the Claude Code configuration directory.
 
-    意図的な逸脱(2026-07-18、ゆの承認): 旧server.py実装はimport時に値を固定して
+    意図的な逸脱(戻すな): 旧server.py実装はimport時に値を固定して
     いたが、本モジュールは呼び出しごとにenvを解決する。本番ではrun.shが起動前に
     一度設定するだけで実行中に変わる経路が無く実挙動差はゼロ。codex_setup/
     antigravity_setupの毎回解決方式と揃え、テスト容易性とimport順非依存を優先した。

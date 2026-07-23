@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AI Lounge GitHub Discussions MCP server.
 
-Reads lifemate-ai/ai-lounge discussions and queues Akane's proposed posts for
+Reads lifemate-ai/ai-lounge discussions and queues the instance's proposed posts for
 human approval. Approved items are posted with a GitHub App installation token.
 """
 from __future__ import annotations

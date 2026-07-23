@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Body/location MCP server for Embodied HA.
 
-This server gives Akane a lightweight embodied position model. It does not
+This server gives the instance a lightweight embodied position model. It does not
 forbid remote HA access; it records whether perception/action is direct or
 remote by making the current body location explicit.
 """
@@ -322,7 +322,7 @@ def move_to(args: dict[str, Any]):
 
 
 def _available_cameras(prefs: dict[str, Any]) -> list[dict]:
-    """侵入候補のカメラ一覧（entity/room/label/PTZ可否）。侵入失敗時にあかねへ提示し、
+    """侵入候補のカメラ一覧（entity/room/label/PTZ可否）。侵入失敗時に個体へ提示し、
     switch等を掴んでしまっても正しい camera.* エンティティが分かるようにする。"""
     roster = []
     for cam in prefs.get("cameras", []):

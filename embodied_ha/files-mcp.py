@@ -8,9 +8,9 @@
 初期化できず、シェル経由のファイル読み取り(cat 等)が bwrap エラーで全滅する
 (2026-07-22 実測)。Claude Code の組み込み Read に相当する能力を、シェルを介さず
 EHA 管理プロセスで安全に提供するのがこの MCP。--dangerously-bypass(=HA 全体到達)を
-与えずに Read だけを最小権限で許すための薄いラッパー(ゆの案・2026-07-22)。
+与えずに Read だけを最小権限で許すための薄いラッパー。
 
-方針(ゆの決定 2026-07-22):
+方針:
   - read-anything: パス制限はしない(Claude の native Read と同じ到達範囲=コンテナ内どこでも)。
   - secure-read: O_NOFOLLOW で開き(末端 symlink 拒否)、fstat で regular file 確認
     (fifo/device/dir を拒否=ブロッキング/副作用回避)、size cap で OOM 回避。

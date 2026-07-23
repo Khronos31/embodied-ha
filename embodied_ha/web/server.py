@@ -694,7 +694,7 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
             print("[agy-login] method prompt, sending \\r", flush=True)
             # raw モードの矢印キー TUI では Enter は CR(\r)。LF(\n)だと選択が登録されず
-            # agy が「press ctrl+d again to exit」へ落ちる(2026-07-23 実機・ゆの指摘)。
+            # agy が「press ctrl+d again to exit」へ落ちる(2026-07-23 実機で確認)。
             # option 1(Google OAuth)は既にハイライト済みなので CR で確定。
             os.write(master_fd, b"\r")
             state["sent_method"] = True

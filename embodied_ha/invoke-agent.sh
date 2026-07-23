@@ -255,7 +255,7 @@ if [[ "$harness" == "agy" && -n "$sound_file" ]]; then
   # 音声モデルの優先順位(sol Med3): (1)明示された EHA_SESSION_MODEL を最優先。深聴き音声
   # セッション(listen_queue)はこれを音声既定Highに設定するため、選択ハーネスが agy で default
   # ティア prefs(EHA_AGY_MODEL_DEFAULT)を Low にしても STT には波及しない。(2)EHA_SESSION_MODEL
-  # 未設定かつ元々 agy 選択でない(あかね等)なら音声専用既定へ。(3)元々 agy 選択かつ session
+  # 未設定かつ元々 agy 選択でない(claude 等の非 agy 個体)なら音声専用既定へ。(3)元々 agy 選択かつ session
   # モデル未指定なら default ティアのまま(既存の意図的挙動を保持)。
   if [[ -n "${EHA_SESSION_MODEL:-}" ]]; then
     model="$EHA_SESSION_MODEL"

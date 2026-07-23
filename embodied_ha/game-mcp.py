@@ -259,8 +259,8 @@ _RACE_BASES = [
 
 
 # gensim パッケージ(/data/python-packages)も chiVe ベクトル(.kv, /data)も /data 配下にあり、
-# アドオン uninstall で消える(インストール済みフラグは preferences.json=/config 側に残す仕様=ゆの:
-# preferences.json はユーザー直接編集領域なのでフラグ場所は動かさない)。この不整合時、生の
+# アドオン uninstall で消える(インストール済みフラグは preferences.json=/config 側に残す。
+# preferences.json はユーザー直接編集領域なのでフラグの置き場所は動かさない)。この不整合時、生の
 # ImportError「No module named gensim」/ FileNotFoundError は一般ユーザーに意味不明なので、
 # 再インストール導線を示す文言へ翻訳する(2026-07-23)。
 _WORDVEC_UNAVAILABLE_MSG = (
@@ -584,8 +584,8 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
                 "start": start_key,
                 "game_over": True,
                 "winner": "cpu",
-                "reason": "あかねの手が前より近い",
-                "message": "あかねの手が前より近かったのでCPUの勝ちです。結果を会話ルームに報告してください。",
+                "reason": "あなたの手が前より近い",
+                "message": "あなたの手が前より近かったのでCPUの勝ちです。結果を会話ルームに報告してください。",
             }
             return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
 
@@ -618,12 +618,12 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
                 _delete_cpu_state(cpu_session_id)
                 result = {
                     "game_over": True,
-                    "winner": "akane",
+                    "winner": "player",
                     "reason": "CPUの手が語彙にありません",
                     "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
                     "cpu_move_raw": cpu_word,
                     "start": start_key,
-                    "message": "CPUが語彙外の単語しか出せませんでした。あかねの勝ちです。結果を会話ルームに報告してください。",
+                    "message": "CPUが語彙外の単語しか出せませんでした。あなたの勝ちです。結果を会話ルームに報告してください。",
                 }
                 return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
         sim_cpu = float(kv.similarity(cpu_key, start_key))
@@ -634,9 +634,9 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
                 "cpu_move": {"word": cpu_key, "sim": round(sim_cpu, 4)},
                 "start": start_key,
                 "game_over": True,
-                "winner": "akane",
+                "winner": "player",
                 "reason": "CPUの手が前より近い",
-                "message": "CPUの手が前より近かったのであかねの勝ちです。結果を会話ルームに報告してください。",
+                "message": "CPUの手が前より近かったのであなたの勝ちです。結果を会話ルームに報告してください。",
             }
             return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
 
@@ -839,13 +839,13 @@ def main() -> None:
         "game_wordvec_race_cpu_move": {
             "spec": {
                 "name": "game_wordvec_race_cpu_move",
-                "description": "WordVecレースのCPU戦を1手進める。あかねの手を判定し、CPUの手を返す。",
+                "description": "WordVecレースのCPU戦を1手進める。プレイヤーの手を判定し、CPUの手を返す。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "start": {"type": "string", "description": "お題の基準語"},
                         "last": {"type": "string", "description": "直前に出た単語"},
-                        "answer": {"type": "string", "description": "今回のあかねの手"},
+                        "answer": {"type": "string", "description": "今回のプレイヤーの手"},
                         "cpu_session_id": {"type": "string", "description": "start で発行された CPU セッション ID"},
                         "move_count": {"type": "integer", "description": "この対局で呼んだ回数の目安（省略可）"},
                     },

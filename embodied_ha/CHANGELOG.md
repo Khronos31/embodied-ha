@@ -11,7 +11,7 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 > 🚧 **開発中のドラフト。リリースまで内容は変動します。**
 > Draft under active development; contents may change before release.
 
-複数のハーネス（あかねを動かす AI）に対応しました。初回セットアップで **Claude Code / Codex / Antigravity** から選べます。
+複数のハーネス（この個体を動かす AI）に対応しました。初回セットアップで **Claude Code / Codex / Antigravity** から選べます。
 Multi-harness support: choose which AI runs your companion — **Claude Code / Codex / Antigravity** — during first-time setup.
 
 ### ⚠️ Breaking / 破壊的変更

@@ -9,7 +9,7 @@ run.sh reads `env_overrides(harness)` at boot and exports the corresponding
 ``EHA_<H>_MODEL_DEFAULT`` / effort env vars, which invoke-agent.sh already consumes.
 When the file is absent or a key is unset, nothing is exported and invoke-agent.sh
 falls back to its built-in defaults (sonnet/medium, terra/medium, Gemini flash) —
-so an instance with no prefs behaves exactly as before (byte-safe for あかね).
+so an instance with no prefs behaves exactly as before (byte-safe for existing instances).
 
 Changes take effect on the next run.sh boot; the save endpoint self-restarts to
 apply them (save-then-restart contract, sol Med6).
