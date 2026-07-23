@@ -262,6 +262,7 @@ class InvokeAgentChatPathTests(unittest.TestCase):
                     )
                 servers = _arg_after(cmd, "--mcp-servers").split(" ")
                 self.assertIn("files", servers)
+                self.assertEqual(servers[0], "files")
                 allowed_mcp_tools = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
                 self.assertIn("mcp__files__read_file", allowed_mcp_tools)
 

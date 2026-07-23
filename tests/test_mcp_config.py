@@ -141,6 +141,47 @@ class McpConfigFormatTests(unittest.TestCase):
             self.assertEqual(ha_config["env"]["SUPERVISOR_TOKEN"], "secret-token")
             self.assertEqual(ha_config[CODEX_OFFICIAL_MCP_ALLOWLIST_KEY], ["ha_get"])
 
+    def test_format_codex_auto_approves_only_read_only_files_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "profile.config.toml"
+
+            self.run_config(
+                [
+                    "--format",
+                    "codex",
+                    "--allowed-mcp-tools",
+                    "mcp__files__read_file,mcp__ha__ha_get",
+                    str(out_path),
+                    "files",
+                    "ha",
+                ],
+            )
+
+            with out_path.open("rb") as fh:
+                profile = tomllib.load(fh)
+            self.assertEqual(
+                profile["mcp_servers"]["files"]["default_tools_approval_mode"],
+                "approve",
+            )
+            self.assertIn("files MCP server's read_file tool", profile["developer_instructions"])
+            self.assertIn("Do not infer current tool availability", profile["developer_instructions"])
+            self.assertNotIn("default_tools_approval_mode", profile["mcp_servers"]["ha"])
+
+            ha_only_path = Path(tmp) / "ha-only.config.toml"
+            self.run_config(
+                [
+                    "--format",
+                    "codex",
+                    "--allowed-mcp-tools",
+                    "mcp__ha__ha_get",
+                    str(ha_only_path),
+                    "ha",
+                ],
+            )
+            with ha_only_path.open("rb") as fh:
+                ha_only_profile = tomllib.load(fh)
+            self.assertNotIn("developer_instructions", ha_only_profile)
+
     def test_official_allowlist_key_names_are_not_typoed(self):
         self.assertEqual(CODEX_OFFICIAL_MCP_ALLOWLIST_KEY, "enabled_tools")
         self.assertEqual(GEMINI_OFFICIAL_MCP_ALLOWLIST_KEY, "includeTools")

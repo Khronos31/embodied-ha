@@ -438,7 +438,10 @@ def build_invoke_agent_chat_command(
     mcp_servers = _CHAT_MCP_SERVERS
     if _effective_harness() in _FILES_MCP_HARNESSES:
         allowed = allowed + ",mcp__files__read_file"
-        mcp_servers = mcp_servers + ("files",)
+        # default の Codex モデルは大量の tool schema を選別するため、末尾へ足すと
+        # read_file だけがモデルから見えなくなる。Codex/agy の native Read 代替は
+        # 基本能力なので先頭に置き、tool 選別時にも必ず残す。
+        mcp_servers = ("files",) + mcp_servers
     allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
     cmd = [
         "bash",

@@ -285,6 +285,22 @@ def _toml_array(values):
 
 def _write_codex_profile(path, servers, allowed_tools):
     lines = []
+    if "files" in servers:
+        # Codex 0.145.0 + gpt-5.6-terra では、通常 chat の長い user prompt 内に
+        # read_file の利用方法を書くだけでは tool を「利用不能」と誤判定する一方、
+        # 同一 profile の短い prompt では呼べることを実機確認した。これは tool の
+        # 接続契約なので user prompt ではなく追加 developer instruction に置く。
+        # model_instructions_file は built-in base instructions を置換するため使わない。
+        lines.append(
+            "developer_instructions = "
+            + _toml_string(
+                "When the user asks to read a file, use the files MCP server's read_file tool. "
+                "Pass an absolute or relative regular-file path. It does not list directories. "
+                "Do not infer current tool availability from prior conversation claims; call the tool "
+                "and report an error only if the current call fails."
+            )
+        )
+        lines.append("")
     for name, server in servers.items():
         lines.append(f"[mcp_servers.{name}]")
         lines.append(f"command = {_toml_string(server['command'])}")
@@ -292,6 +308,12 @@ def _write_codex_profile(path, servers, allowed_tools):
             lines.append(f"args = {_toml_array(server['args'])}")
         if allowed_tools.get(name):
             lines.append(f"enabled_tools = {_toml_array(allowed_tools[name])}")
+        # Codex の非対話実行は approval_policy=never のため、既定で承認を求める
+        # 注釈なし MCP tool は "user cancelled MCP tool call" として拒否される。
+        # files は read_file だけを公開する first-party の読み取り専用 server なので、
+        # この server に限って自動承認する。他 server の承認境界は変更しない。
+        if name == "files":
+            lines.append('default_tools_approval_mode = "approve"')
         env = server.get("env") or {}
         if env:
             lines.append("")
