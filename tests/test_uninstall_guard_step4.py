@@ -67,6 +67,41 @@ class UninstallGuardTests(unittest.TestCase):
             self.assertTrue(h._uninstall_blocked_for_effective("claude"))
             self.assertEqual(h.send_json.call_args.args[1], 409)
 
+    def test_invalid_flag_blocks_all_uninstalls_without_raising(self):
+        # B-2(Codex red-team): read_selection() は corrupt/empty/unknown を例外でなく
+        # ("invalid", None) で返す。invalid を missing と同じく claude 扱いにすると codex/agy
+        # uninstall が fail-OPEN になる。実 invalid 経路(mock で raise させない)で全 target が
+        # 409 で fail-CLOSED になることを固定する。
+        for bad in ("garbage-not-a-harness\n", "", "  \n"):
+            with self.subTest(flag=repr(bad)):
+                self.flag.write_text(bad, encoding="utf-8")
+                # 実装の read_selection が本当に invalid を返すことも確認(mock 無し)。
+                state, _ = server.harness_state.read_selection()
+                self.assertEqual(state, "invalid")
+                h = self._handler()
+                for target in ("claude", "codex", "agy"):
+                    h.send_json.reset_mock()
+                    self.assertTrue(
+                        h._uninstall_blocked_for_effective(target),
+                        f"{target} uninstall must fail closed on invalid selection")
+                    self.assertEqual(h.send_json.call_args.args[1], 409)
+
+    def test_uninstall_acquires_lock_before_guard(self):
+        # B-3(Codex red-team): guard は mutation lock の内側で再判定する。lock がすでに保持
+        # されている(busy)時、uninstall は guard や uninstall 本体に到達する前に 409-busy を返す
+        # =lock を guard より先に取る順序であることを固定する(判定後・削除前の選択確定 TOCTOU 対策)。
+        self._select("codex")  # target(claude)とは別を選択
+        server._CLAUDE_MUTATION_LOCK.acquire()
+        try:
+            with mock.patch.dict(os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False), \
+                 mock.patch.object(server, "claude_setup") as claude_setup:
+                h = self._post("/api/setup/claude/uninstall")
+                h.do_POST()
+                self.assertEqual(h.send_json.call_args.args[1], 409)  # busy
+                claude_setup.uninstall.assert_not_called()
+        finally:
+            server._CLAUDE_MUTATION_LOCK.release()
+
     # --- wired into the POST handlers --------------------------------------------
 
     def _post(self, path):

@@ -65,9 +65,10 @@ When the add-on starts, the Web UI opens through Ingress.
 |---|---|---|
 | `resident_name` | `ユーザー` | The resident's name, used by the agent in conversation |
 | `claude_api_key` | empty | Anthropic API key. Leave empty when using a Claude.ai subscription |
-| `claude_config_dir` | empty | Claude config directory path. If empty, an existing `<data dir>/.claude` that already holds credentials or a `projects/` folder is kept (so upgrades never lose authentication or memory); otherwise a fresh install uses `/data/claude-home`, which is removed when the add-on is uninstalled. To reuse Claude authentication from Studio Code Server, set `/config/.tools/claude-home` |
-| `claude_cwd` | empty | Working directory used when launching Claude. Setting this to `/config` together with `claude_config_dir=/config/.tools/claude-home` lets it share memory with the Studio Code Server version of Claude Code |
+| `claude_cwd` | empty | Working directory used when launching the agent. When empty it defaults to the add-on's data directory (`<data dir>/workdir`). |
 | `autonomous_control` | `false` | When set to `true`, the autonomous loop (observe/explore) can also control home devices on its own |
+
+> **2.0.0 note:** the former `claude_config_dir` option was removed. The config/credential location is no longer user-configurable: fresh installs use `/data/claude-home`, and existing instances that already have a `<data dir>/.claude` with credentials or projects keep it automatically (grandfathered, byte-unchanged). See the CHANGELOG for the migration note if you previously used a custom path.
 
 ### 3. Automatic startup tasks
 

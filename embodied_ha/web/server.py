@@ -2196,6 +2196,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(
                 {"error": "cannot determine the active harness; refusing to uninstall"}, 409)
             return True
+        # read_selection() は corrupt/empty/unreadable を例外でなく ("invalid", None) で返す
+        # (Codex red-team B-2)。invalid を missing と同じく claude 扱いにすると、実際に稼働中かも
+        # しれない Codex/Agy の uninstall を許す fail-open になる。稼働中 harness を特定できない以上、
+        # invalid では target に関わらず全 uninstall を fail CLOSED(409)にする。missing のみ grandfather。
+        if state == "invalid":
+            self.send_json(
+                {"error": "cannot determine the active harness (invalid selection state); "
+                          "refusing to uninstall"}, 409)
+            return True
         effective = selected if state == "valid" else "claude"
         if effective == harness:
             self.send_json({
@@ -2292,12 +2301,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/claude/install":
             self._serve_setup_claude_install()
         elif path == "/api/setup/claude/uninstall":
-            if self._uninstall_blocked_for_effective("claude"):
-                return
             if not _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
                 self.send_json({"error": "Claude setup is busy"}, 409)
                 return
             try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定する。install の選択 CAS は
+                # 同じ mutation lock 下で行われるため、lock を保持している間は選択状態が変わらず、
+                # 「判定後・削除前に同 harness が選択確定する」TOCTOU を塞げる。
+                if self._uninstall_blocked_for_effective("claude"):
+                    return
                 result = claude_setup.uninstall()
                 self.send_json({"ok": True, **result})
             except Exception as e:
@@ -2331,12 +2343,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path == "/api/setup/antigravity/uninstall":
-            if self._uninstall_blocked_for_effective("agy"):
-                return
             if not _acquire_antigravity_destructive_locks():
                 self.send_json({"error": "Antigravity setup is busy"}, 409)
                 return
             try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定(TOCTOU 対策・claude 同様)。
+                if self._uninstall_blocked_for_effective("agy"):
+                    return
                 if antigravity_setup is None:
                     self.send_json({"error": "antigravity helpers unavailable"}, 500)
                     return
@@ -2373,12 +2386,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/codex/login":
             self._serve_setup_codex_login()
         elif path == "/api/setup/codex/uninstall":
-            if self._uninstall_blocked_for_effective("codex"):
-                return
             if not _acquire_codex_mutation("uninstall"):
                 self.send_json({"error": _codex_busy_error()}, 409)
                 return
             try:
+                # B-3(Codex red-team): guard を lock 取得後に再判定(TOCTOU 対策・claude 同様)。
+                if self._uninstall_blocked_for_effective("codex"):
+                    return
                 if codex_setup is None:
                     self.send_json({"error": "Codex helpers unavailable"}, 500)
                     return
