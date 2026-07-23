@@ -1042,13 +1042,16 @@ async function setupSuccess() {
 // Design (markup+CSS) by Antigravity; flow logic (below) wired by Claude.
 // Backend contract:
 //   GET  /api/setup/overview                -> {selection_state, selected, effective, ready, harnesses}
-//   install (records selection via CAS): claude/agy = GET SSE, codex = POST SSE
+//   install (records selection via CAS): claude/codex = POST SSE, agy = GET SSE
 //   login: claude/agy = GET SSE, codex = POST SSE; code submit via POST
 // install/login/code are ingress-guarded and work from the browser via ingress.
+// ※claude install は backend が do_POST・テストも POST(test_claude_setup/test_setup_guard)なのに
+//   ここだけ GET を宣言していたため GET→404 フォールスルーで「インストールに失敗しました」になり、
+//   run_install に到達せず backend ログにも出ない不具合だった(2026-07-23実機E2Eで特定・POSTへ修正)。
 
 const HARNESS_ENDPOINTS = {
     claude: {
-        install: { method: 'GET', url: '/api/setup/claude/install' },
+        install: { method: 'POST', url: '/api/setup/claude/install' },
         login: { method: 'GET', url: '/api/setup/claude/login' },
         code: '/api/setup/claude/login-code',
     },

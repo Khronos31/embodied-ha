@@ -1479,6 +1479,12 @@ class Handler(BaseHTTPRequestHandler):
                     _commit_selected_harness("claude")
                     q.put(("done", result))
                 except Exception as e:
+                    # 実エラーは SSE の error イベントで送るが、フロントが汎用文言へ潰すため
+                    # 診断できない(2026-07-23判明)。install 失敗は addon ログ(stdout)にも残す。
+                    # server.py は sys を import していないため stdout の print を使う(codebase 慣習)。
+                    import traceback
+                    print(f"[server] claude install failed: {type(e).__name__}: {e}", flush=True)
+                    print(traceback.format_exc(), flush=True)
                     q.put(("error", str(e)))
                 finally:
                     _CLAUDE_MUTATION_LOCK.release()

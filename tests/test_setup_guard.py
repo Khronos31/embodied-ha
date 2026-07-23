@@ -73,6 +73,31 @@ class SetupGuardTests(unittest.TestCase):
                     json.loads(raised.exception.read()), {"error": server._SETUP_GUARD_ERROR}
                 )
 
+    def test_frontend_install_methods_match_backend_routing(self):
+        """app.js の install method 宣言が backend の verb と一致すること。
+
+        2026-07-23 の回帰ガード: app.js が claude install を GET と宣言していたが backend は
+        POST(do_POST + MUTATION_ROUTES)で dispatch するため、GET が 404 へフォールスルーし、
+        ピッカーが install handler に到達しないまま汎用の「インストールに失敗しました」を出していた。
+        フロント/バックの method 契約を誰もクロスチェックしていなかったのが原因。
+        """
+        import re
+
+        app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
+        for method, path in self.MUTATION_ROUTES:
+            if not path.endswith("/install"):
+                continue
+            m = re.search(
+                r"install:\s*\{\s*method:\s*'(\w+)',\s*url:\s*'" + re.escape(path) + r"'",
+                app_js,
+            )
+            self.assertIsNotNone(m, f"app.js に {path} の install エントリが無い")
+            self.assertEqual(
+                m.group(1),
+                method,
+                f"frontend install method for {path} ({m.group(1)}) != backend verb ({method})",
+            )
+
     def test_only_ingress_source_is_allowed_unless_overridden_or_disabled(self):
         handler = object.__new__(server.Handler)
         handler.send_json = mock.Mock()
