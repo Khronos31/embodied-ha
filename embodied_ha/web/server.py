@@ -693,7 +693,10 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
     if not state.get("sent_method"):
         if "google" in line_lower or ("1." in line and "oauth" in line_lower):
             print("[agy-login] method prompt, sending \\r", flush=True)
-            os.write(master_fd, b"1\n")
+            # raw モードの矢印キー TUI では Enter は CR(\r)。LF(\n)だと選択が登録されず
+            # agy が「press ctrl+d again to exit」へ落ちる(2026-07-23 実機・ゆの指摘)。
+            # option 1(Google OAuth)は既にハイライト済みなので CR で確定。
+            os.write(master_fd, b"\r")
             state["sent_method"] = True
             return
 
@@ -716,17 +719,17 @@ def _antigravity_login_handle_line(line: str, state: dict, master_fd, q: queue.Q
 
     if "color scheme" in line_lower:
         print("[agy-login] color scheme prompt, sending \\r", flush=True)
-        os.write(master_fd, b"\n")
+        os.write(master_fd, b"\r")
         return
 
     if "terms of service" in line_lower or "terms" in line_lower:
         print("[agy-login] terms prompt, sending accept", flush=True)
-        os.write(master_fd, b"\x1b[B\x1b[C\n")
+        os.write(master_fd, b"\x1b[B\x1b[C\r")
         return
 
     if "trust" in line_lower and not state.get("auth_done"):
         print("[agy-login] trust prompt, sending \\r + marking done", flush=True)
-        os.write(master_fd, b"\n")
+        os.write(master_fd, b"\r")
         state["auth_done"] = True
         if antigravity_setup is not None:
             try:
