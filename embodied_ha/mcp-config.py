@@ -308,12 +308,14 @@ def _write_codex_profile(path, servers, allowed_tools):
             lines.append(f"args = {_toml_array(server['args'])}")
         if allowed_tools.get(name):
             lines.append(f"enabled_tools = {_toml_array(allowed_tools[name])}")
-        # Codex の非対話実行は approval_policy=never のため、既定で承認を求める
-        # 注釈なし MCP tool は "user cancelled MCP tool call" として拒否される。
-        # files は read_file だけを公開する first-party の読み取り専用 server なので、
-        # この server に限って自動承認する。他 server の承認境界は変更しない。
-        if name == "files":
-            lines.append('default_tools_approval_mode = "approve"')
+        # Codex の非対話実行は approval_policy=never のため、注釈なし MCP tool は
+        # "user cancelled MCP tool call" として拒否される。ここで公開する server は
+        # すべて同梱・同一 addon プロセス内の first-party（個体自身の身体）であり、
+        # 非対話では承認する人間が居ないので、承認ゲートは「安全に手動承認」ではなく
+        # 「ツールを永久に使えなくする」だけを意味しセキュリティ利益を持たない。よって
+        # 全 server を自動承認する。files 限定では memory/ha/body/game 等 chat の全
+        # first-party tool が "user cancelled" で全滅すると実機E2Eで判明（2026-07-23・F10）。
+        lines.append('default_tools_approval_mode = "approve"')
         env = server.get("env") or {}
         if env:
             lines.append("")
