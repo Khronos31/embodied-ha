@@ -17,6 +17,8 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 - ホスト本体のlocalスピーカー出力だけを1.5倍に増幅し、リミッターで音割れを抑えるようにしました。
   Increased local host-speaker playback gain by 1.5x with limiting; TCP and Home Assistant media-player outputs are unchanged.
+- Codex・Antigravityでもカメラ画像を含む自律観測を実行できるようにし、AI呼び出し失敗を成功扱いにしないよう修正しました。
+  Enabled camera-image observations for Codex and Antigravity, and stopped treating failed AI invocations as successful loop turns.
 
 ### Removed / 削除
 

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import subprocess
@@ -1071,36 +1072,141 @@ class InvokeAgentTests(unittest.TestCase):
                     self.assertIn(expected_web, args)
                     self.assertNotIn("--allowed-builtins", args)
 
-    def test_codex_rejects_content_json_including_at_path_form(self):
-        # content_json_set(2026-07-16の@<path>対応)がinline/@path両方の指定を
-        # 正しく検出し、codexへ回さずに拒否できることを確認する。
+    def test_codex_translates_content_json_to_ordered_prompt_and_images(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
+            record = tmpdir / "codex.json"
             fake = tmpdir / "codex"
             write_executable(
                 fake,
-                """
-                #!/usr/bin/env bash
-                echo "codex must not be called" >&2
-                exit 99
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                images = [args[i + 1] for i, arg in enumerate(args) if arg == "--image"]
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{
+                        "args": args,
+                        "prompt": args[-1],
+                        "images": images,
+                        "images_exist": [Path(path).is_file() for path in images],
+                    }}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                out_path = args[args.index("-o") + 1]
+                Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
                 """,
             )
             content_path = tmpdir / "content.json"
-            content_path.write_text("[]", encoding="utf-8")
-
-            inline = self.run_wrapper(
-                ["--content-json", "[]", "hello"],
-                {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_BIN": fake.as_posix()},
+            content_path.write_text(
+                json.dumps(
+                    [
+                        {"type": "text", "text": "台所:"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": base64.b64encode(b"\xff\xd8\xff\xe0fixture").decode(),
+                            },
+                        },
+                        {"type": "text", "text": "状況を説明してください"},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
             )
-            at_path = self.run_wrapper(
+            temp_root = tmpdir / "content-tmp"
+            temp_root.mkdir()
+
+            result = self.run_wrapper(
                 ["--content-json", f"@{content_path}", "hello"],
-                {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_BIN": fake.as_posix()},
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                    "EHA_TMP_DIR": temp_root.as_posix(),
+                },
             )
 
-            self.assertNotEqual(inline.returncode, 0)
-            self.assertIn("--content-json is not supported for codex", inline.stderr)
-            self.assertNotEqual(at_path.returncode, 0)
-            self.assertIn("--content-json is not supported for codex", at_path.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(payload["images_exist"], [True])
+            self.assertLess(payload["prompt"].index("台所:"), payload["prompt"].index("【画像1】"))
+            self.assertLess(
+                payload["prompt"].index("【画像1】"),
+                payload["prompt"].index("状況を説明してください"),
+            )
+            self.assertFalse(Path(payload["images"][0]).exists())
+            self.assertEqual(list(temp_root.glob("eha-content-*")), [])
+
+    def test_agy_translates_content_json_to_ordered_at_path_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import re
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                prompt = args[args.index("-p") + 1]
+                images = re.findall(r"@([^\\s]+image-\\d+\\.[a-z]+)", prompt)
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{
+                        "prompt": prompt,
+                        "images": images,
+                        "images_exist": [Path(path).is_file() for path in images],
+                    }}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print('{{"ok":true}}')
+                """,
+            )
+            content = json.dumps(
+                [
+                    {"type": "text", "text": "玄関:"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode(),
+                        },
+                    },
+                    {"type": "text", "text": "確認してください"},
+                ],
+                ensure_ascii=False,
+            )
+            temp_root = tmpdir / "content-tmp"
+            temp_root.mkdir()
+
+            result = self.run_wrapper(
+                ["--content-json", content, "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_TMP_DIR": temp_root.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            self.assertEqual(payload["images_exist"], [True])
+            self.assertLess(payload["prompt"].index("玄関:"), payload["prompt"].index("【画像1】"))
+            self.assertLess(
+                payload["prompt"].index("【画像1】"),
+                payload["prompt"].index("確認してください"),
+            )
+            self.assertFalse(Path(payload["images"][0]).exists())
+            self.assertEqual(list(temp_root.glob("eha-content-*")), [])
 
     def test_agy_first_use_writes_site_config_and_registers_project(self):
         with tempfile.TemporaryDirectory() as tmp:

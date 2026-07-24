@@ -289,17 +289,17 @@ class LoopPyInvocationTests(unittest.TestCase):
         stderr_capture = io.StringIO()
         with tempfile.TemporaryDirectory() as tmpdir, \
              mock.patch("sys.stderr", stderr_capture):
-            response = loop.invoke_loop_claude(
-                user_prompt="user",
-                system_prompt="system",
-                mode="observe",
-                allowed_tools="mcp__sensors__get_sensors",
-                mcp_servers=["sensors"],
-                environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
-                run=fake_run,
-            )
+            with self.assertRaises(loop.InvokeAgentError):
+                loop.invoke_loop_claude(
+                    user_prompt="user",
+                    system_prompt="system",
+                    mode="observe",
+                    allowed_tools="mcp__sensors__get_sensors",
+                    mcp_servers=["sensors"],
+                    environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
+                    run=fake_run,
+                )
 
-        self.assertEqual(response, "")
         logged = stderr_capture.getvalue()
         self.assertIn("returncode=1", logged)
         self.assertIn("something went wrong", logged)
@@ -319,17 +319,17 @@ class LoopPyInvocationTests(unittest.TestCase):
         stderr_capture = io.StringIO()
         with tempfile.TemporaryDirectory() as tmpdir, \
              mock.patch("sys.stderr", stderr_capture):
-            response = loop.invoke_loop_claude(
-                user_prompt="user",
-                system_prompt="system",
-                mode="observe",
-                allowed_tools="mcp__sensors__get_sensors",
-                mcp_servers=["sensors"],
-                environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
-                run=fake_run,
-            )
+            with self.assertRaises(loop.InvokeAgentError):
+                loop.invoke_loop_claude(
+                    user_prompt="user",
+                    system_prompt="system",
+                    mode="observe",
+                    allowed_tools="mcp__sensors__get_sensors",
+                    mcp_servers=["sensors"],
+                    environ={"SCRIPT_DIR": str(ROOT / "embodied_ha"), "EHA_DATA_DIR": tmpdir},
+                    run=fake_run,
+                )
 
-        self.assertEqual(response, "   ")
         logged = stderr_capture.getvalue()
         self.assertIn("returncode=0", logged)
         self.assertIn("empty result event", logged)
@@ -456,6 +456,47 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertNotIn("--allowed-mcp-tools", invoke_cmd)
         self.assertNotIn("--json-schema", invoke_cmd)
         self.assertNotIn("EHA_ACTOR", invoke_kwargs["env"])
+
+    def test_watch_summary_failure_continues_with_sensor_prompt(self):
+        class Result:
+            def __init__(self, stdout="", stderr="", returncode=0):
+                self.stdout = stdout
+                self.stderr = stderr
+                self.returncode = returncode
+
+        def fake_run(cmd, **kwargs):
+            return Result(stderr="image request failed", returncode=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            prefs = tmp / "preferences.json"
+            prefs.write_text(
+                json.dumps({"cameras": [{"ha_entity": "camera.fixture", "label": "Fixture"}]}),
+                encoding="utf-8",
+            )
+            context = {
+                "cfg": {
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_DATA_DIR": tmpdir,
+                },
+                "projected_camera_source": "",
+                "user_prompt": "sensor-only observe prompt",
+            }
+            paths = loop.LoopPaths(
+                log_dir=str(tmp),
+                observation_log=str(tmp / "observations.jsonl"),
+                explore_log=str(tmp / "explore.jsonl"),
+                chat_log=str(tmp / "chat_log.jsonl"),
+                memory_file=str(tmp / "memory.md"),
+                pending_file=str(tmp / "pending_proposal.json"),
+                daybook_marker=str(tmp / ".last_daybook"),
+                tmp_dir=str(tmp / "tmp"),
+            )
+            with mock.patch.object(loop, "fetch_frame", return_value=b"JPEGFIXTURE" * 20):
+                blocks = loop.build_observe_content_blocks(context, paths, run=fake_run)
+
+        self.assertEqual(blocks, [{"type": "text", "text": "sensor-only observe prompt"}])
 
 
 class LoopPyPostprocessTests(unittest.TestCase):
@@ -715,6 +756,23 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 self.assertEqual(rows[0]["private"], "静かに確認している")
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
+
+    def test_run_propagates_final_invoke_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            calls = []
+            normal_run = self.fake_run_factory(calls)
+
+            def failing_invoke(cmd, **kwargs):
+                if len(cmd) >= 2 and cmd[0] == "bash" and cmd[1].endswith("invoke-agent.sh"):
+                    return self.Result(stderr="final invoke failed", returncode=1)
+                return normal_run(cmd, **kwargs)
+
+            with self.assertRaises(loop.InvokeAgentError):
+                loop.run(
+                    self.make_env(tmp, "reflect"),
+                    run_subprocess=failing_invoke,
+                )
 
     def test_eha_session_bin_agy_no_longer_blocks_run(self):
         # #14増分6: EHA_SESSION_BIN=agyでも(既にレガシー変数として無視されるだけで)

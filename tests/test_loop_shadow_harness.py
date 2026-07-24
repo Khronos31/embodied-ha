@@ -366,17 +366,14 @@ class LoopPyCutoverRegressionTests(unittest.TestCase):
             return self.Result()
         if cmd and cmd[0] == "curl":
             return self.Result()
-        if cmd and cmd[0] == "/bin/claude":
+        if len(cmd) >= 2 and cmd[0] == "bash" and cmd[1].endswith("invoke-agent.sh"):
             payload = {
-                "type": "result",
-                "structured_output": {
-                    "topic": "fixture",
-                    "private": "fresh anomaly",
-                    "emotion": "calm",
-                    "speak": None,
-                    "proposal": None,
-                    "feature_presented": None,
-                },
+                "topic": "fixture",
+                "private": "fresh anomaly",
+                "emotion": "calm",
+                "speak": None,
+                "proposal": None,
+                "feature_presented": None,
             }
             return self.Result(json.dumps(payload, ensure_ascii=False))
         return self.Result()

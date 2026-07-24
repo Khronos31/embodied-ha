@@ -44,10 +44,16 @@ die() {
 }
 
 TEMP_FILES=()
+TEMP_DIRS=()
 cleanup_temp_files() {
   local path
   for path in "${TEMP_FILES[@]}"; do
     [[ -n "$path" ]] && rm -f "$path"
+  done
+  for path in "${TEMP_DIRS[@]}"; do
+    if [[ -n "$path" && "$(basename "$path")" == eha-content-* ]]; then
+      rm -rf -- "$path"
+    fi
   done
 }
 trap cleanup_temp_files EXIT
@@ -445,6 +451,30 @@ print(json.dumps({"type": "user", "message": {"role": "user", "content": content
 '
 }
 
+prepare_nonclaude_content() {
+  local root="${EHA_TMP_DIR:-${TMPDIR:-/tmp}}"
+  local helper
+  helper="$(dirname "${BASH_SOURCE[0]}")/content_blocks.py"
+  mkdir -p "$root"
+  python3 "$helper" --cleanup-stale "$root"
+  content_work_dir="$(mktemp -d "$root/eha-content-XXXXXX")"
+  TEMP_DIRS+=("$content_work_dir")
+  if [[ -n "$content_json_file" ]]; then
+    python3 "$helper" "$content_json_file" "$content_work_dir"
+  else
+    printf '%s' "$content_json" | python3 "$helper" - "$content_work_dir"
+  fi
+  mapfile -t content_image_paths < <(
+    find "$content_work_dir" -maxdepth 1 -type f -name 'image-*' -print | sort
+  )
+}
+
+validate_nonclaude_prompt_size() {
+  local size
+  size="$(printf '%s' "$1" | wc -c)"
+  ((size <= 98304)) || die "expanded non-Claude prompt exceeds 96 KiB"
+}
+
 run_claude() {
   # 同梱廃止(増分5a): claudeバイナリを実在確認しながら解決する。優先順位は
   # resolve_claude_bin()(ready判定・login・game-mcpと同じ)と一致させる:
@@ -506,8 +536,6 @@ run_codex() {
   # --allowed-builtins は全ハーネス共通の能力意図(Read/WebSearch)。codex では Read は files MCP が
   # 担うため no-op、WebSearch は下で codex native の web_search を制御する(die しない)。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for codex in invoke-agent.sh; use --mcp-servers"
-  [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for codex in invoke-agent.sh yet"
-
   local bin="${EHA_CODEX_BIN:-${CODEX_BIN:-}}"
   if [[ -z "$bin" ]]; then
     if [[ -x /data/codex-cli/bin/codex ]]; then
@@ -518,13 +546,23 @@ run_codex() {
   fi
   local cwd="${EHA_AGENT_CWD:-${EHA_CODEX_CWD:-$PWD}}"
   local full_prompt="$prompt"
+  local content_work_dir=""
+  local content_image_paths=()
   local profile_name=""
+  if [[ "$content_json_set" == "true" ]]; then
+    prepare_nonclaude_content
+    full_prompt="$(cat "$content_work_dir/codex-prompt.txt")"
+  fi
   if [[ -n "$system_prompt" ]]; then
     full_prompt="${system_prompt}"$'\n\n'"${full_prompt}"
   fi
 
   local cmd=("$bin" "exec" "--skip-git-repo-check" "-C" "$cwd"
              "--model" "$model" "--config" "model_reasoning_effort=$effort")
+  local image_path
+  for image_path in "${content_image_paths[@]}"; do
+    cmd+=("--image" "$image_path")
+  done
   # F11-B1(2026-07-23・Codex red-team [[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]]):
   # codex 既定は built-in 実行系(exec_command/apply_patch/write_stdin)と ChatGPT apps(codex_apps・
   # ユーザーの CODEX_HOME 認証由来)を露出する。住み込み個体には不要かつ危険なので明示 hardening する。
@@ -586,6 +624,7 @@ run_codex() {
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi
+  validate_nonclaude_prompt_size "$full_prompt"
   # -o >(cat) の process substitution は wrapper が隠す契約(Bash ファイルから検証済み)。
   "${cmd[@]}" -o >(cat) "$full_prompt" 1>&2
 }
@@ -595,8 +634,6 @@ run_agy() {
   # (config.json globalPermissionGrants の read_file(*) grant で headless でも通る・実機確認2026-07-23)。
   # WebSearch(agy native)の headless 許可形式は未確定(§8)で 2.1.0。ここでは die せず受理する。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
-  [[ "$content_json_set" != "true" ]] || die "--content-json is not supported for agy in invoke-agent.sh yet"
-
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
   local site_dir=""
@@ -650,6 +687,12 @@ run_agy() {
     ensure_agy_permission_grants "$agy_home" "$grants"
   fi
   local full_prompt="$prompt"
+  local content_work_dir=""
+  local content_image_paths=()
+  if [[ "$content_json_set" == "true" ]]; then
+    prepare_nonclaude_content
+    full_prompt="$(cat "$content_work_dir/agy-prompt.txt")"
+  fi
   local stdout
   if [[ -n "$system_prompt_replace" ]]; then
     full_prompt="[System Instruction]"$'\n'"${system_prompt_replace}"$'\n\n'"[User Prompt]"$'\n'"${full_prompt}"
@@ -660,6 +703,7 @@ run_agy() {
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi
+  validate_nonclaude_prompt_size "$full_prompt"
   if [[ -n "$mcp_servers" ]]; then
     local project_id_file="$site_dir/.eha_project_id"
     local project_id=""
