@@ -38,6 +38,37 @@
 
 ---
 
+### `tts_options`
+
+VOICEVOX通常発話の個体別設定です。`tts_entity`またはTCP/local経路の
+`tts_provider`が`tts.voicevox_tts`（`voicevox_tts`も可）の場合だけ使用されます。
+空オブジェクトまたは未設定なら、Home Assistant統合の既定値を使います。
+
+| キー | 型 | 範囲 |
+|---|---|---|
+| `speaker` | integer | 0以上 |
+| `volume` | number | 0.5〜2.0 |
+| `pitch` | number | -0.15〜0.15 |
+| `speed` | number | 0.5〜3.0 |
+
+空オブジェクト以外では`speaker`が必須です。`volume`、`pitch`、`speed`だけを
+部分指定することはできません。
+
+```json
+{
+  "tts_options": {
+    "speaker": 56,
+    "volume": 1.0,
+    "pitch": 0.0,
+    "speed": 1.0
+  }
+}
+```
+
+VOICEVOX Song用の`sing_speaker`とは独立した設定です。
+
+---
+
 ### `stt_provider`
 
 | 型 | デフォルト |
@@ -177,10 +208,15 @@ STT の言語コードです。
 | `media_player` | string | — | `tts` の再生先エンティティ名の別名 |
 | `host` | string | — | `tcp` スピーカーの送信先ホスト |
 | `port` | number | — | `tcp` スピーカーの待受ポート |
-| `tts_provider` | string | — | `tcp` の音声生成に使うプロバイダー上書き |
+| `tts_provider` | string | — | `tcp` / `local` の音声生成に使うTTSエンティティ上書き |
 | `tts_language` | string | — | `tcp` の音声生成に使う言語上書き |
 
 `type: "tts"` はグローバル `tts_entity` をフォールバックに使います。`type: "tcp"` は raw PCM を TCP ソケットへ送ります。
+
+`tts_provider`を明示する場合は、現行Home Assistantの`tts_get_url`契約に合わせて
+`tts.voicevox_tts`のようなTTSエンティティIDを指定してください。未指定ならグローバルの
+`tts_entity`から自動取得します。旧platform名だけでは、統合が生成した実際のentity IDを
+一意に復元できない場合があります。
 
 ---
 
@@ -332,4 +368,3 @@ STT の言語コードです。
 - `speakers_update` はありません
 - `presence_update` はありません
 - `sensors_groups_update` はありません
-

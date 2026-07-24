@@ -4,6 +4,8 @@
   "wake_words": ["ねえクロード", "クロード"],
 
   "tts_entity": "tts.home_assistant_cloud",
+  "_tts_options_doc": "VOICEVOX通常発話の個体別設定。tts_entityがtts.voicevox_ttsのときだけ使用する。空でなければspeaker（0以上の整数）が必須。volumeは0.5〜2.0、pitchは-0.15〜0.15、speedは0.5〜3.0。空ならHA統合の既定値を使う。",
+  "tts_options": {},
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",

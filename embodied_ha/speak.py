@@ -11,6 +11,11 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from tts_options import is_voicevox_provider, normalize_tts_options  # noqa: E402
+
 
 def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
@@ -66,49 +71,13 @@ def _rewrite_tts_url(tts_url: str, ha_url: str) -> str:
 
 
 def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
-                            tts_provider: str, tts_language: str) -> bytes:
+                            tts_provider: str, tts_language: str,
+                            tts_options: dict | None = None) -> bytes:
     """HA TTS から raw mono s16le 16kHz PCM バイト列を取得する。"""
-    payload = json.dumps({
-        "platform": tts_provider,
-        "message": message,
-        "language": tts_language,
-    }, ensure_ascii=False).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"{ha_url}/tts_get_url",
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {ha_token}",
-            "Content-Type": "application/json",
-        },
+    tts_url = _request_tts_url(
+        message, ha_url, ha_token, tts_provider, tts_language, tts_options
     )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"tts_get_url HTTP {exc.code}: {body}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"tts_get_url failed: {exc}") from exc
-
-    tts_url = (result.get("url") or "").strip()
-    if not tts_url:
-        raise RuntimeError("tts_get_url returned no url")
-
-    audio_url = _rewrite_tts_url(tts_url, ha_url)
-    fetch_req = urllib.request.Request(
-        audio_url,
-        headers={"Authorization": f"Bearer {ha_token}"},
-    )
-    try:
-        with urllib.request.urlopen(fetch_req, timeout=15) as resp:
-            audio_bytes = resp.read()
-    except Exception as exc:
-        raise RuntimeError(f"tts audio fetch failed ({audio_url}): {exc}") from exc
-
-    if not audio_bytes:
-        raise RuntimeError("tts audio fetch returned empty content")
+    audio_bytes = _fetch_tts_audio(tts_url, ha_url, ha_token)
 
     proc = subprocess.Popen(
         [
@@ -134,6 +103,80 @@ def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
     if not pcm_bytes:
         raise RuntimeError("ffmpeg produced empty PCM output")
     return pcm_bytes
+
+
+def _fetch_tts_audio(tts_url: str, ha_url: str, ha_token: str) -> bytes:
+    """Fetch generated audio, triggering synthesis for lazy HA TTS streams."""
+    audio_url = _rewrite_tts_url(tts_url, ha_url)
+    fetch_req = urllib.request.Request(
+        audio_url,
+        headers={"Authorization": f"Bearer {ha_token}"},
+    )
+    try:
+        with urllib.request.urlopen(fetch_req, timeout=15) as resp:
+            audio_bytes = resp.read()
+    except Exception as exc:
+        raise RuntimeError(f"tts audio fetch failed ({audio_url}): {exc}") from exc
+    if not audio_bytes:
+        raise RuntimeError("tts audio fetch returned empty content")
+    return audio_bytes
+
+
+def _request_tts_url(message: str, ha_url: str, ha_token: str,
+                     tts_provider: str, tts_language: str,
+                     tts_options: dict | None = None) -> str:
+    """Request a generated TTS URL without playing or downloading the audio."""
+    engine_id = tts_provider if tts_provider.startswith("tts.") else f"tts.{tts_provider}"
+    payload_data = {
+        "engine_id": engine_id,
+        "message": message,
+        "language": tts_language,
+    }
+    if tts_options:
+        payload_data["options"] = tts_options
+    payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{ha_url}/tts_get_url",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {ha_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"tts_get_url HTTP {exc.code}: {body}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"tts_get_url failed: {exc}") from exc
+
+    tts_url = (result.get("url") or "").strip()
+    if not tts_url:
+        raise RuntimeError("tts_get_url returned no url")
+    return tts_url
+
+
+def _fetch_pcm_with_fallback(message: str, ha_url: str, ha_token: str,
+                             tts_provider: str, tts_language: str,
+                             tts_options: dict) -> bytes:
+    """Retry with the integration defaults if VOICEVOX rejects custom options."""
+    if not tts_options:
+        return _fetch_pcm_for_message(
+            message, ha_url, ha_token, tts_provider, tts_language
+        )
+    try:
+        return _fetch_pcm_for_message(
+            message, ha_url, ha_token, tts_provider, tts_language, tts_options
+        )
+    except Exception:
+        print("[speak] VOICEVOX options付きTTSに失敗。既定音声で再試行。", file=sys.stderr)
+        return _fetch_pcm_for_message(
+            message, ha_url, ha_token, tts_provider, tts_language
+        )
 
 
 def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
@@ -299,11 +342,29 @@ def speak(room, message, host=""):
         if not media_player:
             print(f"[speak] tts speaker '{room}': media_player が未設定", file=sys.stderr)
             return False
-        payload = json.dumps({
+        payload_data = {
             "entity_id": tts_entity,
             "message": message,
             "media_player_entity_id": media_player
-        }, ensure_ascii=False)
+        }
+        tts_options = normalize_tts_options(prefs.get("tts_options"))
+        if tts_options and is_voicevox_provider(tts_entity):
+            tts_language = (prefs.get("tts_language") or prefs.get("stt_language") or "ja-JP").strip()
+            try:
+                tts_url = _request_tts_url(
+                    message, ha_url, ha_token, tts_entity, tts_language, tts_options
+                )
+                # HAのTTS streamはURL取得時に遅延合成されるため、取得まで完走して
+                # speaker/optionsを検証する。同じ要求はHAのTTSキャッシュで再利用される。
+                _fetch_tts_audio(tts_url, ha_url, ha_token)
+                payload_data["language"] = tts_language
+                payload_data["options"] = tts_options
+            except Exception as exc:
+                print(
+                    f"[speak] VOICEVOX optionsの事前検証に失敗。既定音声を使用: {exc}",
+                    file=sys.stderr,
+                )
+        payload = json.dumps(payload_data, ensure_ascii=False)
         ok = curl_post(f"{ha_url}/services/tts/speak", payload, ha_token)
         print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
         return ok
@@ -337,9 +398,13 @@ def speak(room, message, host=""):
             print(f"[speak] tcp speaker '{room}': tts_provider が未設定", file=sys.stderr)
             return False
 
+        tts_options = (
+            normalize_tts_options(prefs.get("tts_options"))
+            if is_voicevox_provider(tts_provider) else {}
+        )
         try:
-            pcm_bytes = _fetch_pcm_for_message(
-                message, ha_url, ha_token, tts_provider, tts_language
+            pcm_bytes = _fetch_pcm_with_fallback(
+                message, ha_url, ha_token, tts_provider, tts_language, tts_options
             )
         except Exception as exc:
             print(f"[speak] tcp:{room} TTS 取得失敗: {exc}", file=sys.stderr)
@@ -375,9 +440,13 @@ def speak(room, message, host=""):
             print(f"[speak] local speaker '{room}': tts_provider が未設定", file=sys.stderr)
             return False
 
+        tts_options = (
+            normalize_tts_options(prefs.get("tts_options"))
+            if is_voicevox_provider(tts_provider) else {}
+        )
         try:
-            pcm_bytes = _fetch_pcm_for_message(
-                message, ha_url, ha_token, tts_provider, tts_language
+            pcm_bytes = _fetch_pcm_with_fallback(
+                message, ha_url, ha_token, tts_provider, tts_language, tts_options
             )
         except Exception as exc:
             print(f"[speak] local:{room} TTS 取得失敗: {exc}", file=sys.stderr)
