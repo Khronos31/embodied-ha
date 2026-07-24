@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""loop.sh から呼ばれる structured daybook 生成ヘルパー。
+"""loop.py から呼ばれる structured daybook 生成ヘルパー。
 
 環境変数で入力を受け取り、前日の観察ログを episode/daybook に圧縮して保存する。
 """

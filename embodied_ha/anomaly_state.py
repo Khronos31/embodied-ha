@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stateful anomaly helpers for embodied-ha.
 
-This module keeps a small persistent anomaly state so loop.sh can record
+This module keeps a small persistent anomaly state so loop.py can record
 sensor spikes / unresolved loops and the daemon can
 turn them into explore urgency.
 """
@@ -739,4 +739,3 @@ def format_log_line(label: str, state: Mapping[str, Any] | None, **fields: Any) 
 
 def load_state_or_default(path: str | None = None) -> dict[str, Any]:
     return load_state(path or _default_state_path())
-

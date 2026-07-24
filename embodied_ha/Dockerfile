@@ -21,7 +21,7 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad=
 COPY . /app/
 
 # 実行権限付与 + コマンド名でそのまま呼べるようシンボリックリンク
-RUN chmod +x /app/run.sh /app/loop.sh /app/chat.sh \
+RUN chmod +x /app/run.sh \
              /app/recall.sh /app/loops.sh \
     && ln -s /app/loops.sh   /usr/local/bin/loops \
     && ln -s /app/recall.sh  /usr/local/bin/recall

@@ -1382,6 +1382,12 @@ async function fetchSettings() {
                 ],
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
+                tts_options: {
+                    speaker: 56,
+                    volume: 1.0,
+                    pitch: 0.0,
+                    speed: 1.0
+                },
                 speakers: {
                     study: { type: "tts", entity: "media_player.example_speaker" }
                 },
@@ -1593,6 +1599,107 @@ async function loadTtsProviders(currentProvider) {
     } finally {
         sel.disabled = false;
     }
+}
+
+let voicevoxTtsSpeakers = [];
+let currentTtsSpeakerId = null;
+
+async function loadVoicevoxTtsSpeakers(targetSpeakerId) {
+    const sel = document.getElementById('setting-tts-speaker');
+    const loading = document.getElementById('tts-speaker-loading');
+    const errorBnr = document.getElementById('tts-speaker-error');
+    if (!sel) return;
+
+    if (targetSpeakerId !== undefined && targetSpeakerId !== null && targetSpeakerId !== '') {
+        const parsed = typeof targetSpeakerId === 'number' ? targetSpeakerId : parseInt(targetSpeakerId, 10);
+        currentTtsSpeakerId = (!isNaN(parsed) && parsed >= 0) ? parsed : null;
+    } else {
+        currentTtsSpeakerId = null;
+    }
+
+    sel.classList.add('tts-loading');
+    sel.disabled = true;
+    if (loading) loading.classList.add('visible');
+    if (errorBnr) errorBnr.classList.remove('visible');
+
+    try {
+        let speakers = [];
+        if (isStandaloneMode) {
+            speakers = [
+                { name: "白上虎太郎", style_name: "ふつう", speaker: 12 },
+                { name: "猫使アル", style_name: "おちつき", speaker: 56 },
+                { name: "満別花丸", style_name: "ボーイ", speaker: 73 }
+            ];
+        } else {
+            const res = await fetch(`${base}/api/tts/voicevox/speakers`);
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            speakers = data.speakers || [];
+        }
+
+        voicevoxTtsSpeakers = speakers;
+
+        sel.textContent = '';
+
+        const unselectedOpt = document.createElement('option');
+        unselectedOpt.value = '';
+        unselectedOpt.textContent = '(未選択)';
+        sel.appendChild(unselectedOpt);
+
+        let foundCurrent = false;
+
+        speakers.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = String(s.speaker);
+            opt.textContent = `${s.name || ''} (${s.style_name || ''})`;
+            if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '' && Number(currentTtsSpeakerId) === Number(s.speaker)) {
+                opt.selected = true;
+                foundCurrent = true;
+            }
+            sel.appendChild(opt);
+        });
+
+        if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '' && !foundCurrent) {
+            const fallbackOpt = document.createElement('option');
+            fallbackOpt.value = String(currentTtsSpeakerId);
+            fallbackOpt.textContent = `話者 ID: ${currentTtsSpeakerId}`;
+            fallbackOpt.selected = true;
+            sel.insertBefore(fallbackOpt, sel.children[1]);
+        }
+
+    } catch (e) {
+        console.error("Failed to load VOICEVOX TTS speakers:", e);
+        sel.textContent = '';
+
+        const unselectedOpt = document.createElement('option');
+        unselectedOpt.value = '';
+        unselectedOpt.textContent = '(未選択)';
+        sel.appendChild(unselectedOpt);
+
+        if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '') {
+            const fallbackOpt = document.createElement('option');
+            fallbackOpt.value = String(currentTtsSpeakerId);
+            fallbackOpt.textContent = `話者 ID: ${currentTtsSpeakerId} (取得失敗)`;
+            fallbackOpt.selected = true;
+            sel.appendChild(fallbackOpt);
+        }
+        if (errorBnr) errorBnr.classList.add('visible');
+    } finally {
+        sel.disabled = false;
+        sel.classList.remove('tts-loading');
+        if (loading) loading.classList.remove('visible');
+    }
+}
+
+async function retryLoadVoicevoxTtsSpeakers() {
+    const sel = document.getElementById('setting-tts-speaker');
+    const selectedVal = sel?.value;
+    const speakerIdToLoad = (selectedVal !== null && selectedVal !== undefined && selectedVal !== '')
+        ? parseInt(selectedVal, 10)
+        : currentTtsSpeakerId;
+    await loadVoicevoxTtsSpeakers(speakerIdToLoad);
 }
 
 function setAntigravityLog(lines) {
@@ -2050,6 +2157,14 @@ async function renderSettingsForm() {
     // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
     await loadTtsProviders(prefsData.tts_provider || '');
+    const ttsOpts = prefsData.tts_options || {};
+    const ttsVolEl = document.getElementById('setting-tts-volume');
+    if (ttsVolEl) ttsVolEl.value = ttsOpts.volume ?? 1.0;
+    const ttsPitchEl = document.getElementById('setting-tts-pitch');
+    if (ttsPitchEl) ttsPitchEl.value = ttsOpts.pitch ?? 0.0;
+    const ttsSpeedEl = document.getElementById('setting-tts-speed');
+    if (ttsSpeedEl) ttsSpeedEl.value = ttsOpts.speed ?? 1.0;
+    await loadVoicevoxTtsSpeakers(ttsOpts.speaker);
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
         sttLangSel.value = prefsData.stt_language || 'ja-JP';
@@ -2496,6 +2611,31 @@ function serializeFormToPrefs() {
         }
     }
 
+    const ttsSpeakerEl = document.getElementById('setting-tts-speaker');
+    const ttsVolEl = document.getElementById('setting-tts-volume');
+    const ttsPitchEl = document.getElementById('setting-tts-pitch');
+    const ttsSpeedEl = document.getElementById('setting-tts-speed');
+
+    let tts_options = {};
+    const ttsSpeakerVal = ttsSpeakerEl?.value;
+    if (ttsSpeakerVal !== undefined && ttsSpeakerVal !== '') {
+        const spkId = parseInt(ttsSpeakerVal, 10);
+        if (!isNaN(spkId) && spkId >= 0) {
+            const vol = parseFloat(ttsVolEl?.value);
+            const pitch = parseFloat(ttsPitchEl?.value);
+            const speed = parseFloat(ttsSpeedEl?.value);
+
+            tts_options = {
+                speaker: spkId,
+                volume: !isNaN(vol) ? vol : 1.0,
+                pitch: !isNaN(pitch) ? pitch : 0.0,
+                speed: !isNaN(speed) ? speed : 1.0
+            };
+        }
+    } else if (ttsSpeakerEl === null && prefsData?.tts_options) {
+        tts_options = { ...prefsData.tts_options };
+    }
+
     const { audio_sources: _audioSources, sing_speaker: _singSpeaker, ...prefsBase } = prefsData || {};
 
     const returnObj = {
@@ -2510,6 +2650,7 @@ function serializeFormToPrefs() {
         stt_language,
         tts_provider,
         wake_words,
+        tts_options,
         speakers,
         entities,
         presence,
@@ -3068,12 +3209,12 @@ function toggleAccordion(header) {
     const content = section.querySelector('.accordion-content');
     const icon = section.querySelector('.accordion-icon');
     
-    if (content.style.display === 'none') {
-        content.style.display = 'block';
-        icon.textContent = '▼';
-    } else {
+    if (content.style.display === 'block') {
         content.style.display = 'none';
         icon.textContent = '▶';
+    } else {
+        content.style.display = 'block';
+        icon.textContent = '▼';
     }
 }
 

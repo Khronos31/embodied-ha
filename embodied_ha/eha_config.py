@@ -1,10 +1,11 @@
 """chat.py/loop.py共通の環境変数デフォルト解決。
 
-config.sh（bashスクリプト。chat.sh/loop.shの両方が起動時にsourceする）の
+旧config.sh（削除済みchat.sh/loop.shが起動時にsourceしていた）の
 ロジックをPythonへ移植したもの（[[embodied-ha-pythonize-chat-loop-design-2026-07-09]]
 増分7）。bashの`${VAR:-default}`は「未設定または空文字列」のとき既定値を
 使うため、Python側もdict.setdefault（キーの有無のみ判定）ではなく、
 同じ「空文字列も未設定扱い」の判定を行う_env_defaultを使っている。
+現行ランタイムの正本はこのモジュール。config.sh は移植検証用の履歴資料。
 """
 import json
 import os

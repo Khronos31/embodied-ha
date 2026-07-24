@@ -1,23 +1,9 @@
-"""chat_prefs_update.py（chat.py移植 増分6）の単体テスト＋ゴールデン比較。
-
-ゴールデン比較テストは、chat.sh自身のpreferences.json更新コード
-（696-854行目）を実際に読み取り、環境変数とハードコードされた
-parsed-fileパスの読み取りを制御した状態でexec()実行し、その結果
-書き込まれるpreferences.jsonの内容とchat_prefs_update.update_preferences
-の出力を直接比較する。
-
-chat.sh側は`/tmp/embodied-ha/chat_parsed.json`という本番と同一の
-ハードコードパスを読むため、builtins.openをラップしてこのパスへの
-読み取りだけ隔離したテスト用ファイルへ差し替え、本番/dev共有の
-/tmp/embodied-haには一切触れないようにしてある。
-"""
-import builtins
+"""chat_prefs_update.py の契約テスト。"""
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 EMBODIED_HA_DIR = ROOT / "embodied_ha"
@@ -25,146 +11,49 @@ sys.path.insert(0, str(EMBODIED_HA_DIR))
 
 import chat_prefs_update  # type: ignore  # noqa: E402
 
-CHAT_SH = EMBODIED_HA_DIR / "chat.sh"
-_PREFS_SOURCE_START_LINE = 696  # import json, os
-_PREFS_SOURCE_END_LINE = 854    # print(f"[chat][prefs] 更新: {changed}")
-_HARDCODED_PARSED_PATH = "/tmp/embodied-ha/chat_parsed.json"
-
-
-def _extract_chat_sh_prefs_source():
-    lines = CHAT_SH.read_text(encoding="utf-8").splitlines()
-    snippet = lines[_PREFS_SOURCE_START_LINE - 1:_PREFS_SOURCE_END_LINE]
-    return "\n".join(snippet)
-
-
-_CHAT_SH_PREFS_SOURCE = _extract_chat_sh_prefs_source()
-
-_real_open = builtins.open
-
-
-def _run_chat_sh_prefs_update(parsed, prefs_file):
-    """chat.shの実preferences更新コードを、指定parsed/prefs_fileの下でexec実行する。
-
-    ハードコードされた/tmp/embodied-ha/chat_parsed.jsonへの読み取りだけ、
-    実ファイルに一切触れず`parsed`の内容を直接返すようすり替える。
-    """
-    def fake_open(path, *args, **kwargs):
-        if str(path) == _HARDCODED_PARSED_PATH:
-            import io
-            return io.StringIO(json.dumps(parsed, ensure_ascii=False))
-        return _real_open(path, *args, **kwargs)
-
-    with patch.dict("os.environ", {"EHA_PREFS_FILE": prefs_file}, clear=False):
-        with patch("builtins.open", side_effect=fake_open):
-            namespace = {}
-            try:
-                exec(_CHAT_SH_PREFS_SOURCE, namespace)  # noqa: S102
-            except SystemExit:
-                pass
-
-
-class PrefsUpdateGoldenComparisonTests(unittest.TestCase):
-    """chat.sh実物のpreferences更新コードとupdate_preferencesの結果一致を検証。"""
-
-    def _assert_golden_match(self, parsed, initial_prefs):
-        with tempfile.TemporaryDirectory() as tmp:
-            expected_file = Path(tmp) / "expected_preferences.json"
-            actual_file = Path(tmp) / "actual_preferences.json"
-            with open(expected_file, "w", encoding="utf-8") as fh:
-                json.dump(initial_prefs, fh, ensure_ascii=False)
-            with open(actual_file, "w", encoding="utf-8") as fh:
-                json.dump(initial_prefs, fh, ensure_ascii=False)
-
-            _run_chat_sh_prefs_update(parsed, str(expected_file))
-            chat_prefs_update.update_preferences(parsed, str(actual_file))
-
-            with open(expected_file, encoding="utf-8") as fh:
-                expected = json.load(fh)
-            with open(actual_file, encoding="utf-8") as fh:
-                actual = json.load(fh)
-            self.assertEqual(actual, expected)
-
-    def test_no_preferences_update_leaves_file_untouched(self):
-        self._assert_golden_match({}, {"cameras": [], "speakers": [], "presence": {}, "policies": []})
-
-    def test_cameras_add_and_remove(self):
-        self._assert_golden_match(
-            {"preferences_update": {
-                "cameras_add": [{"source": "capture_tv", "label": "テレビ"}],
-                "cameras_remove": ["old_cam"],
-            }},
-            {"cameras": [{"source": "old_cam"}], "speakers": [], "presence": {}, "policies": []},
-        )
-
-    def test_speakers_set_list_shape_merge(self):
-        self._assert_golden_match(
-            {"preferences_update": {"speakers_set": {"study": {"type": "tts", "tts_entity": "tts.x"}}}},
-            {"cameras": [], "speakers": [{"room": "study", "type": "notify"}], "presence": {}, "policies": []},
-        )
-
-    def test_speakers_set_dict_shape_and_new_entry(self):
-        self._assert_golden_match(
-            {"preferences_update": {"speakers_set": {"kitchen": {"type": "tcp", "host": "1.2.3.4"}}}},
-            {"cameras": [], "speakers": {"living": {"type": "tts"}}, "presence": {}, "policies": []},
-        )
-
-    def test_presence_set(self):
-        self._assert_golden_match(
-            {"preferences_update": {"presence_set": {"entity": "input_boolean.home"}}},
-            {"cameras": [], "speakers": [], "presence": {}, "policies": []},
-        )
-
-    def test_policies_add_dedup(self):
-        self._assert_golden_match(
-            {"preferences_update": {"policies_add": ["静かに", "静かに", "新しいルール"]}},
-            {"cameras": [], "speakers": [], "presence": {}, "policies": ["静かに"]},
-        )
-
-    def test_sensors_add_new_group_and_merge_existing(self):
-        self._assert_golden_match(
-            {"preferences_update": {"sensors_add": [
-                {"group": "人感センサー", "label": "物置", "entity": "binary_sensor.warehouse"},
-            ]}},
-            {"cameras": [], "speakers": [], "presence": {}, "policies": [],
-             "sensors": {"groups": [{"title": "人感センサー", "contexts": ["loop"], "items": [
-                 {"label": "玄関", "entity": "binary_sensor.entrance"}]}]}},
-        )
-
-    def test_sensors_remove_drops_empty_group(self):
-        self._assert_golden_match(
-            {"preferences_update": {"sensors_remove": ["binary_sensor.entrance"]}},
-            {"cameras": [], "speakers": [], "presence": {}, "policies": [],
-             "sensors": {"groups": [{"title": "人感センサー", "contexts": ["loop"], "items": [
-                 {"label": "玄関", "entity": "binary_sensor.entrance"}]}]}},
-        )
-
-    def test_entities_add_and_remove(self):
-        self._assert_golden_match(
-            {"preferences_update": {
-                "entities_add": [{"name": "リビングのライト", "entity_id": "light.living", "note": "備考"}],
-                "entities_remove": ["light.old"],
-            }},
-            {"cameras": [], "speakers": [], "presence": {}, "policies": [],
-             "entities": [{"name": "古いの", "entity_id": "light.old"}]},
-        )
-
-    def test_missing_prefs_file_content_falls_back_to_skeleton(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            expected_file = Path(tmp) / "expected.json"
-            actual_file = Path(tmp) / "actual.json"
-            # 意図的に不正なJSONを書いておき、フォールバック経路を通す
-            expected_file.write_text("not json", encoding="utf-8")
-            actual_file.write_text("not json", encoding="utf-8")
-            parsed = {"preferences_update": {"policies_add": ["新規ポリシー"]}}
-            _run_chat_sh_prefs_update(parsed, str(expected_file))
-            chat_prefs_update.update_preferences(parsed, str(actual_file))
-            self.assertEqual(
-                json.loads(expected_file.read_text(encoding="utf-8")),
-                json.loads(actual_file.read_text(encoding="utf-8")),
-            )
-
-
 class UpdatePreferencesBehaviorTests(unittest.TestCase):
+    def test_all_update_operations_are_wired_through_public_entrypoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_file = Path(tmp) / "preferences.json"
+            prefs_file.write_text(json.dumps({
+                "cameras": [{"source": "old_cam"}],
+                "speakers": [{"room": "study", "type": "notify"}],
+                "presence": {},
+                "policies": [],
+                "sensors": {"groups": [{"title": "old", "items": [{"label": "old", "entity": "sensor.old"}]}]},
+                "entities": [{"name": "old", "entity_id": "light.old"}],
+            }), encoding="utf-8")
+            chat_prefs_update.update_preferences({"preferences_update": {
+                "cameras_add": [{"source": "new_cam"}],
+                "cameras_remove": ["old_cam"],
+                "speakers_set": {"study": {"type": "tcp", "host": "speaker"}},
+                "presence_set": {"entity": "person.yuno"},
+                "policies_add": ["静かに"],
+                "sensors_add": [{"group": "new", "label": "温度", "entity": "sensor.temp"}],
+                "sensors_remove": ["sensor.old"],
+                "entities_add": [{"name": "new", "entity_id": "light.new"}],
+                "entities_remove": ["light.old"],
+            }}, str(prefs_file))
+            prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+            self.assertEqual(prefs["cameras"], [{"source": "new_cam"}])
+            self.assertEqual(prefs["speakers"][0]["type"], "tcp")
+            self.assertEqual(prefs["presence"], {"entity": "person.yuno"})
+            self.assertEqual(prefs["policies"], ["静かに"])
+            self.assertEqual(prefs["sensors"]["groups"][0]["title"], "new")
+            self.assertEqual(prefs["entities"], [{"name": "new", "entity_id": "light.new"}])
+
+    def test_invalid_json_recovers_to_default_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_file = Path(tmp) / "preferences.json"
+            prefs_file.write_text("not json", encoding="utf-8")
+            chat_prefs_update.update_preferences(
+                {"preferences_update": {"policies_add": ["新規ポリシー"]}},
+                str(prefs_file),
+            )
+            prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+            self.assertEqual(prefs["policies"], ["新規ポリシー"])
+            self.assertEqual(prefs["cameras"], [])
+
     def test_empty_prefs_file_string_is_noop(self):
         # 例外を投げないことの確認
         chat_prefs_update.update_preferences({"preferences_update": {"policies_add": ["x"]}}, "")

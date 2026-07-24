@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """render-sensors.py — preferences.json の sensors マニフェストを
-HA Template API で SENSORS テキストブロックに描画する。loop.sh / chat.sh 共用。
+HA Template API で SENSORS テキストブロックに描画する。loop.py / chat.py 共用。
 
 マニフェストの宣言（groups → items）から Jinja テンプレートを組み立て、
 /api/template を1回叩いて整形済みテキストを得る。

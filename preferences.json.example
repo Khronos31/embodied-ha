@@ -1,9 +1,11 @@
 {
-  "_doc": "会話で育てる設定ファイル。chat.sh の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
+  "_doc": "会話で育てる設定ファイル。chat.py の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
   "character_name": "Claude",
   "wake_words": ["ねえクロード", "クロード"],
 
   "tts_entity": "tts.home_assistant_cloud",
+  "_tts_options_doc": "VOICEVOX通常発話の個体別設定。tts_entityがtts.voicevox_ttsのときだけ使用する。空でなければspeaker（0以上の整数）が必須。volumeは0.5〜2.0、pitchは-0.15〜0.15、speedは0.5〜3.0。空ならHA統合の既定値を使う。",
+  "tts_options": {},
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
@@ -120,7 +122,7 @@
   "policies": [
     "深夜1〜6時は発話しない（loop/explore に組み込み済み）"
   ],
-  "_loop_schedule_doc": "自律ループ(loop.sh)の定期実行間隔と、時間帯ごとの発火確率。loop_interval は秒。0-7時=night、22-24時=late、それ以外=day。Web UIの「高度な設定」タブから編集可能。",
+  "_loop_schedule_doc": "自律ループ(loop.py)の定期実行間隔と、時間帯ごとの発火確率。loop_interval は秒。0-7時=night、22-24時=late、それ以外=day。Web UIの「高度な設定」タブから編集可能。",
   "loop_schedule": {
     "loop_interval": 1800,
     "day_probability": 100,

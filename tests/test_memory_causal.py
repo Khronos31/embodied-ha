@@ -263,8 +263,8 @@ class MemoryCausalTests(unittest.TestCase):
         self.assertLess(out.index("[観察]"), out.index("[記憶]"))
 
     def test_chat_and_explore_expose_memory_tools(self):
-        chat_text = (ROOT / "embodied_ha" / "chat.sh").read_text(encoding="utf-8")
-        explore_text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
+        chat_text = (ROOT / "embodied_ha" / "chat_invoke.py").read_text(encoding="utf-8")
+        explore_text = (ROOT / "embodied_ha" / "loop.py").read_text(encoding="utf-8")
         for text in (chat_text, explore_text):
             self.assertIn("mcp__memory__record_episode", text)
             self.assertIn("mcp__memory__record_causal_chain", text)

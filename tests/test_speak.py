@@ -301,6 +301,179 @@ class SpeakGeneralTests(unittest.TestCase):
             ok = self.speak.speak("study", "hello")
         self.assertFalse(ok)
 
+    def test_voicevox_tts_passes_options(self):
+        prefs = {
+            "tts_entity": "tts.voicevox_tts",
+            "tts_options": {"speaker": 56, "volume": 1.1, "pitch": 0.02, "speed": 1.2},
+            "speakers": [{"room": "study", "type": "tts", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(self.speak, "_request_tts_url", return_value="/api/tts_proxy/test"), \
+                 mock.patch.object(self.speak, "_fetch_tts_audio", return_value=b"audio"), \
+                 mock.patch.object(
+                     self.speak, "curl_post",
+                     side_effect=lambda _url, payload, _token: payloads.append(json.loads(payload)) or True,
+                 ):
+                ok = self.speak.speak("study", "hello")
+        finally:
+            os.unlink(prefs_path)
+        self.assertTrue(ok)
+        self.assertEqual(payloads[0]["options"], prefs["tts_options"])
+        self.assertEqual(payloads[0]["language"], "ja-JP")
+
+    def test_non_voicevox_tts_does_not_pass_options(self):
+        prefs = {
+            "tts_entity": "tts.home_assistant_cloud",
+            "tts_options": {"speaker": 56},
+            "speakers": [{"room": "study", "type": "tts", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(
+                     self.speak, "curl_post",
+                     side_effect=lambda _url, payload, _token: payloads.append(json.loads(payload)) or True,
+                 ):
+                ok = self.speak.speak("study", "hello")
+        finally:
+            os.unlink(prefs_path)
+        self.assertTrue(ok)
+        self.assertNotIn("options", payloads[0])
+
+    def test_voicevox_tts_preflight_failure_uses_defaults_once(self):
+        prefs = {
+            "tts_entity": "tts.voicevox_tts",
+            "tts_options": {"speaker": 999999},
+            "speakers": [{"room": "study", "type": "tts", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(
+                     self.speak, "_request_tts_url",
+                     side_effect=RuntimeError("stale speaker"),
+                 ), \
+                 mock.patch.object(
+                     self.speak, "curl_post",
+                     side_effect=lambda _url, payload, _token: payloads.append(json.loads(payload)) or True,
+                 ):
+                ok = self.speak.speak("study", "hello")
+        finally:
+            os.unlink(prefs_path)
+        self.assertTrue(ok)
+        self.assertEqual(len(payloads), 1)
+        self.assertNotIn("options", payloads[0])
+
+    def test_voicevox_delayed_synthesis_failure_uses_defaults_once(self):
+        prefs = {
+            "tts_entity": "tts.voicevox_tts",
+            "tts_options": {"speaker": 999999},
+            "speakers": [{"room": "study", "type": "tts", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(self.speak, "_request_tts_url", return_value="/api/tts_proxy/test"), \
+                 mock.patch.object(
+                     self.speak, "_fetch_tts_audio",
+                     side_effect=RuntimeError("VOICEVOX synthesis failed"),
+                 ), \
+                 mock.patch.object(
+                     self.speak, "curl_post",
+                     side_effect=lambda _url, payload, _token: payloads.append(json.loads(payload)) or True,
+                 ):
+                ok = self.speak.speak("study", "hello")
+        finally:
+            os.unlink(prefs_path)
+        self.assertTrue(ok)
+        self.assertEqual(len(payloads), 1)
+        self.assertNotIn("options", payloads[0])
+
+    def test_invalid_runtime_options_are_ignored(self):
+        prefs = {
+            "tts_entity": "tts.voicevox_tts",
+            "tts_options": {"speaker": -1},
+            "speakers": [{"room": "study", "type": "tts", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), \
+                 mock.patch.object(
+                     self.speak, "curl_post",
+                     side_effect=lambda _url, payload, _token: payloads.append(json.loads(payload)) or True,
+                 ):
+                ok = self.speak.speak("study", "hello")
+        finally:
+            os.unlink(prefs_path)
+        self.assertTrue(ok)
+        self.assertNotIn("options", payloads[0])
+
+
+class VoicevoxPcmTests(unittest.TestCase):
+    def setUp(self):
+        self.speak = _load_speak()
+
+    def test_pcm_fetch_retries_without_options(self):
+        options = {"speaker": 12, "volume": 1.0}
+        calls = []
+
+        def fake_fetch(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError("stale speaker")
+            return b"pcm"
+
+        with mock.patch.object(self.speak, "_fetch_pcm_for_message", side_effect=fake_fetch):
+            result = self.speak._fetch_pcm_with_fallback(
+                "hello", "http://ha", "token", "voicevox_tts", "ja-JP", options
+            )
+        self.assertEqual(result, b"pcm")
+        self.assertEqual(calls[0][-1], options)
+        self.assertEqual(len(calls[1]), 5)
+
+    def test_fetch_uses_current_ha_engine_id_contract(self):
+        tts_response = mock.MagicMock()
+        tts_response.__enter__.return_value = tts_response
+        tts_response.read.return_value = json.dumps({
+            "url": "http://homeassistant.local:8123/api/tts_proxy/test.wav"
+        }).encode()
+        audio_response = mock.MagicMock()
+        audio_response.__enter__.return_value = audio_response
+        audio_response.read.return_value = b"wav"
+        proc = mock.Mock()
+        proc.communicate.return_value = (b"pcm", b"")
+        proc.returncode = 0
+        requests = []
+
+        def fake_urlopen(request, timeout=15):
+            requests.append(request)
+            return tts_response if len(requests) == 1 else audio_response
+
+        with mock.patch.object(self.speak.urllib.request, "urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(self.speak.subprocess, "Popen", return_value=proc):
+            result = self.speak._fetch_pcm_for_message(
+                "hello", "http://supervisor/core/api", "token",
+                "voicevox_tts", "ja-JP", {"speaker": 56},
+            )
+
+        payload = json.loads(requests[0].data)
+        self.assertEqual(payload["engine_id"], "tts.voicevox_tts")
+        self.assertNotIn("platform", payload)
+        self.assertEqual(payload["options"], {"speaker": 56})
+        self.assertEqual(result, b"pcm")
+
 
 class PlayPcmFileTests(unittest.TestCase):
     def setUp(self):
@@ -362,6 +535,39 @@ class PlayPcmFileTests(unittest.TestCase):
         self.assertEqual(cmd[:4], ["ffmpeg", "-loglevel", "error", "-i"])
         self.assertEqual(cmd[4], wav.name)
         self.assertIn("s16le", cmd)
+
+
+class LocalPlaybackGainTests(unittest.TestCase):
+    def setUp(self):
+        self.speak = _load_speak()
+
+    def test_local_playback_uses_fixed_gain_and_limiter_before_paplay(self):
+        boosted = b"\x03\x04" * 80
+        ffmpeg = mock.Mock()
+        ffmpeg.communicate.return_value = (boosted, b"")
+        ffmpeg.returncode = 0
+        paplay = mock.Mock()
+        paplay.communicate.return_value = (b"", b"")
+        paplay.returncode = 0
+
+        with mock.patch.object(
+            self.speak.subprocess, "Popen", side_effect=[ffmpeg, paplay]
+        ) as popen:
+            self.speak._play_pcm_local(
+                b"\x01\x02" * 80,
+                sink="alsa_output.test",
+                sample_rate=16000,
+                channels=1,
+            )
+
+        ffmpeg_cmd = popen.call_args_list[0].args[0]
+        self.assertIn(
+            "volume=1.5,alimiter=limit=0.95:level=false", ffmpeg_cmd
+        )
+        paplay_cmd = popen.call_args_list[1].args[0]
+        self.assertEqual(paplay_cmd[0], "paplay")
+        self.assertIn("--device=alsa_output.test", paplay_cmd)
+        paplay.communicate.assert_called_once_with(input=boosted, timeout=30)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ chat.sh側はこのブロック全体を外側のbash `2>/dev/null || true`
 観測可能な挙動としては「絶対にクラッシュしない」。update_preferences
 はその契約を再現するため、増分5のpublish_private_to_mqttと同様に
 関数全体を囲むtry/exceptを持たせている（唯一の意図的な追加）。
+chat.sh の行番号は、削除直前の git commit 537331b を参照する。
 """
 import json
 import os

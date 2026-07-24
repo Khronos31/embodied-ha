@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """loop.sh のPython移植。
 
-このファイルは daemon.py からはまだ起動しない。まず postprocess/persistence
-境界を移植し、loop.sh と同じ保存契約をテストで固定する。
+daemon.py から自律ループの実装として起動される。postprocess/persistence
+境界は旧loop.shから移植し、同じ保存契約をテストで固定している。
+旧実装の記述は、削除直前の git commit 537331b を参照する。
 """
 from __future__ import annotations
 
@@ -62,6 +63,10 @@ class LoopPaths:
     pending_file: str
     daybook_marker: str
     tmp_dir: str
+
+
+class InvokeAgentError(RuntimeError):
+    """invoke-agent.shが有効な応答を返せなかった。"""
 
 
 def parse_loop_response(text: str) -> dict[str, Any]:
@@ -285,6 +290,10 @@ def invoke_loop_claude(
             print(f"[loop][invoke-agent] 呼び出し失敗 returncode={result.returncode}", file=sys.stderr)
             if result.stderr.strip():
                 print(f"[loop][invoke-agent][stderr] {result.stderr.strip()[-400:]}", file=sys.stderr)
+            raise InvokeAgentError(
+                f"invoke-agent failed: returncode={result.returncode}, "
+                f"stdout_empty={not bool(result.stdout.strip())}"
+            )
         if facts_file:
             write_facts_file(facts_file, extract_facts_from_stream_text(result.stderr))
         return result.stdout
@@ -768,18 +777,22 @@ def build_observe_content_blocks(context: dict[str, Any], paths: LoopPaths, *, r
         blocks = [{"type": "text", "text": "各画像の直前にカメラ名とentity/sourceを示します。出力は各カメラ1行だけにしてください。取得失敗行はそのまま含めてください。"}, *captured_blocks]
         if failure_lines:
             blocks.append({"type": "text", "text": "取得失敗カメラ:\n" + "\n".join(failure_lines)})
-        summary = invoke_loop_claude(
-            user_prompt="見守りカメラの現在状況を要約してください。",
-            system_prompt=WATCH_REPORT_SYSTEM,
-            mode="observe",
-            allowed_tools="",
-            mcp_servers=[],
-            environ=cfg,
-            model="haiku",
-            response_schema=None,
-            content_blocks=blocks,
-            run=run,
-        ).strip()
+        try:
+            summary = invoke_loop_claude(
+                user_prompt="見守りカメラの現在状況を要約してください。",
+                system_prompt=WATCH_REPORT_SYSTEM,
+                mode="observe",
+                allowed_tools="",
+                mcp_servers=[],
+                environ=cfg,
+                model="haiku",
+                response_schema=None,
+                content_blocks=blocks,
+                run=run,
+            ).strip()
+        except InvokeAgentError as exc:
+            print(f"[loop][observe] camera summary failed; continuing without it: {exc}", file=sys.stderr)
+            summary = ""
         if summary:
             content.append({"type": "text", "text": WATCH_REPORT_HEADING + "\n" + summary})
     elif failure_lines:

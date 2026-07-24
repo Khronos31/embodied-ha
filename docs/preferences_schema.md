@@ -1,8 +1,8 @@
 # preferences.json スキーマリファレンス
 
-実装参照: `embodied_ha/preferences.json.example`, `embodied_ha/discover.py`, `embodied_ha/chat.sh`, `embodied_ha/speak.py`, `embodied_ha/render-sensors.py`, `embodied_ha/sensory_origin.py`
+実装参照: `embodied_ha/preferences.json.example`, `embodied_ha/discover.py`, `embodied_ha/chat.py`, `embodied_ha/speak.py`, `embodied_ha/render-sensors.py`, `embodied_ha/sensory_origin.py`
 
-`preferences.json` は会話で育てる主要設定ファイルです。実体は `EHA_PREFS_FILE`（通常 `/config/embodied-ha/preferences.json`）にあり、`chat.sh` の `preferences_update` から自動更新されます。
+`preferences.json` は会話で育てる主要設定ファイルです。実体は `EHA_PREFS_FILE`（通常 `/config/embodied-ha/preferences.json`）にあり、`chat.py` の `preferences_update` から自動更新されます。
 
 知覚系の設定は、身体的知覚とメディア受信で分けて扱います。`cameras` と `mics` は実際にその機器へ侵入して使う身体的知覚で、部屋や減衰、在室推定に影響します。一方 `video_media` と `audio_media` は侵入不要のメディア受信で、部屋は文脈としてのみ使われ、減衰や在室判定には影響しません。
 
@@ -35,6 +35,37 @@
 | string | `"tts.home_assistant_cloud"` 例 |
 
 グローバルの TTS エンティティです。`speakers` の `type: "tts"` で個別指定が無い場合のフォールバックになります。
+
+---
+
+### `tts_options`
+
+VOICEVOX通常発話の個体別設定です。`tts_entity`またはTCP/local経路の
+`tts_provider`が`tts.voicevox_tts`（`voicevox_tts`も可）の場合だけ使用されます。
+空オブジェクトまたは未設定なら、Home Assistant統合の既定値を使います。
+
+| キー | 型 | 範囲 |
+|---|---|---|
+| `speaker` | integer | 0以上 |
+| `volume` | number | 0.5〜2.0 |
+| `pitch` | number | -0.15〜0.15 |
+| `speed` | number | 0.5〜3.0 |
+
+空オブジェクト以外では`speaker`が必須です。`volume`、`pitch`、`speed`だけを
+部分指定することはできません。
+
+```json
+{
+  "tts_options": {
+    "speaker": 56,
+    "volume": 1.0,
+    "pitch": 0.0,
+    "speed": 1.0
+  }
+}
+```
+
+VOICEVOX Song用の`sing_speaker`とは独立した設定です。
 
 ---
 
@@ -177,10 +208,15 @@ STT の言語コードです。
 | `media_player` | string | — | `tts` の再生先エンティティ名の別名 |
 | `host` | string | — | `tcp` スピーカーの送信先ホスト |
 | `port` | number | — | `tcp` スピーカーの待受ポート |
-| `tts_provider` | string | — | `tcp` の音声生成に使うプロバイダー上書き |
+| `tts_provider` | string | — | `tcp` / `local` の音声生成に使うTTSエンティティ上書き |
 | `tts_language` | string | — | `tcp` の音声生成に使う言語上書き |
 
 `type: "tts"` はグローバル `tts_entity` をフォールバックに使います。`type: "tcp"` は raw PCM を TCP ソケットへ送ります。
+
+`tts_provider`を明示する場合は、現行Home Assistantの`tts_get_url`契約に合わせて
+`tts.voicevox_tts`のようなTTSエンティティIDを指定してください。未指定ならグローバルの
+`tts_entity`から自動取得します。旧platform名だけでは、統合が生成した実際のentity IDを
+一意に復元できない場合があります。
 
 ---
 
@@ -190,7 +226,7 @@ STT の言語コードです。
 |---|---|
 | array of object | `[]` |
 
-操作できる家電の対応表です。`chat.sh` が `entities_add` / `entities_remove` を使って更新します。
+操作できる家電の対応表です。`chat.py` が `entities_add` / `entities_remove` を使って更新します。
 
 各要素のフィールド:
 
@@ -236,7 +272,7 @@ STT の言語コードです。
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `loop_interval` | number | `loop.sh` の実行間隔（秒） |
+| `loop_interval` | number | `loop.py` の実行間隔（秒） |
 | `day_probability` | number | 日中の基準確率 |
 | `late_probability` | number | 22-24時の基準確率 |
 | `night_probability` | number | 0-6時の基準確率 |
@@ -307,7 +343,7 @@ STT の言語コードです。
 }
 ```
 
-## `chat.sh` による自動更新オペレーション
+## `chat.py` による自動更新オペレーション
 
 `preferences_update` で実際に受け付けるキーは次の通りです。
 
@@ -332,4 +368,3 @@ STT の言語コードです。
 - `speakers_update` はありません
 - `presence_update` はありません
 - `sensors_groups_update` はありません
-

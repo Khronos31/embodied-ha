@@ -1,5 +1,7 @@
 """chat.py用の応答後処理関数群。
 
+chat.sh の行番号は、削除直前の git commit 537331b を参照する。
+
 chat.shの後処理小ブロック（feature-flags記録/pending_proposal消化/
 chat_log追記/MQTT publish）を、importできる関数として切り出したもの
 （[[embodied-ha-pythonize-chat-loop-design-2026-07-09]] 増分5）。

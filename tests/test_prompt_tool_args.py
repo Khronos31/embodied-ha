@@ -5,14 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROMPT_PATHS = (
-    ROOT / "embodied_ha" / "chat.sh",
-    ROOT / "embodied_ha" / "loop.sh",
+    ROOT / "embodied_ha" / "chat_invoke.py",
+    ROOT / "embodied_ha" / "loop.py",
 )
 
 
 class PromptToolArgumentTests(unittest.TestCase):
     def test_remember_prompt_uses_text_argument(self):
-        chat_text = (ROOT / "embodied_ha" / "chat.sh").read_text(encoding="utf-8")
+        chat_text = (ROOT / "embodied_ha" / "chat_invoke.py").read_text(encoding="utf-8")
         self.assertIn("remember ツールに text を渡して記録する", chat_text)
         self.assertNotIn("remember ツールに note", chat_text)
 

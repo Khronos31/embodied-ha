@@ -6,6 +6,25 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.1] - 2026-07-25
+
+### Added / 追加
+
+- 個体ごとにVOICEVOXの話者・音量・音高・話速を設定できるようになりました。
+  Added per-instance VOICEVOX speaker, volume, pitch, and speed settings.
+
+### Changed / 変更
+
+- ホスト本体のlocalスピーカー出力だけを1.5倍に増幅し、リミッターで音割れを抑えるようにしました。
+  Increased local host-speaker playback gain by 1.5x with limiting; TCP and Home Assistant media-player outputs are unchanged.
+- Codex・Antigravityでもカメラ画像を含む自律観測を実行できるようにし、AI呼び出し失敗を成功扱いにしないよう修正しました。
+  Enabled camera-image observations for Codex and Antigravity, and stopped treating failed AI invocations as successful loop turns.
+
+### Removed / 削除
+
+- Python実装への移行後も残っていた旧`chat.sh`・`loop.sh`を削除しました。
+  Removed the obsolete `chat.sh` and `loop.sh` wrappers left after the Python migration.
+
 ## [2.0.0] - 2026-07-24
 
 複数のハーネス（この個体を動かす AI）に対応しました。初回セットアップで **Claude Code / Codex / Antigravity** から選べます。

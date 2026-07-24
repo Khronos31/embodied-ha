@@ -21,15 +21,12 @@ class HomePolicyPromptTest(unittest.TestCase):
         self.assertIn('cp "$SCRIPT_DIR/home_policy.md" "$EHA_HOME_POLICY_FILE"', text)
         self.assertIn("home_policy.md を同梱デフォルトから初期化", text)
 
-    def test_loop_sh_injects_policy_only_for_observe_and_explore(self):
-        text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
-        self.assertIn('HOME_POLICY=""', text)
-        self.assertIn('POLICY_NOTE=""', text)
-        self.assertIn('case "$MODE" in', text)
-        self.assertIn('observe|explore)', text)
-        self.assertIn('${POLICY_NOTE}', text)
+    def test_loop_injects_policy_only_for_observe_and_explore(self):
+        text = (ROOT / "embodied_ha" / "loop.py").read_text(encoding="utf-8")
+        self.assertIn('if selected_mode in ("observe", "explore") and home_policy:', text)
+        self.assertIn('home_policy = _read_text(cfg.get("EHA_HOME_POLICY_FILE")', text)
+        self.assertIn("policy_note", text)
         self.assertIn('ホームポリシーとの明らかなズレは', text)
-        self.assertIn('proposal で提案し、権限があれば是正して事後報告する', text)
         self.assertIn('ただし、人がいる部屋を勝手に変えない。深夜の音出し操作はしない。', text)
 
 

@@ -229,7 +229,7 @@ class InstanceIdentityTests(unittest.TestCase):
         source = SERVER_PATH.read_text(encoding="utf-8")
         self.assertIn('spec_from_file_location("embodied_ha_lounge_mcp", path)', source)
 
-    def test_chat_shell_uses_the_exported_prefix(self):
-        source = (EHA_DIR / "chat.sh").read_text(encoding="utf-8")
-        self.assertIn('EHA_MQTT_PREFIX="$EHA_MQTT_PREFIX"', source)
-        self.assertIn('f"{prefix}/observation/state"', source)
+    def test_chat_postprocess_uses_instance_prefix(self):
+        source = (EHA_DIR / "chat_postprocess.py").read_text(encoding="utf-8")
+        self.assertIn('from instance_identity import MQTT_PREFIX', source)
+        self.assertIn('f"{MQTT_PREFIX}/observation/state"', source)

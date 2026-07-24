@@ -1347,6 +1347,55 @@ select.stt-loading {
     flex-shrink: 0;
 }
 
+/* --- TTS Select & Error Banner Styles --- */
+.tts-select-wrapper select {
+    width: 100%;
+    max-width: 100%;
+}
+
+.tts-loading-indicator {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--claude-text-sub);
+}
+
+.tts-loading-indicator.visible {
+    display: flex;
+}
+
+select.tts-loading {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+.tts-error-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background-color: #fdf2f0;
+    border: 1px solid #f0cec8;
+    color: #9b3c28;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.tts-error-banner.visible {
+    display: flex;
+}
+
+.tts-error-message-content {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 /* --- Auditory Log (Heard Sounds) Style --- */
 .audio-view {
     flex: 1;
@@ -2182,6 +2231,7 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 }
 
 .accordion-content {
+    display: none;
     padding: 20px;
     border-top: 1px solid var(--claude-border);
     background-color: var(--claude-card-bg);

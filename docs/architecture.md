@@ -1,6 +1,6 @@
 # システムアーキテクチャ
 
-実装ファイル: `embodied_ha/run.sh`, `embodied_ha/daemon.py`, `embodied_ha/loop.sh`, `embodied_ha/chat.sh`
+実装ファイル: `embodied_ha/run.sh`, `embodied_ha/daemon.py`, `embodied_ha/loop.py`, `embodied_ha/chat.py`
 
 ## 起動フロー
 
@@ -30,8 +30,8 @@ embodied_ha/daemon.py   ← 常駐プロセス
 
 `daemon.py` は 1 プロセスで複数のスレッドを管理します。
 
-- `embodied_ha/chat/set` を受けると `chat.sh` を起動する
-- `embodied_ha/loop/trigger` を受けると `loop.sh` を `MODE=observe` で起動する
+- `embodied_ha/chat/set` を受けると `chat.py` を起動する
+- `embodied_ha/loop/trigger` を受けると `loop.py` を `MODE=observe` で起動する
 - 30分ごとに `loop_scheduler` が走り、`body_state.advance_tick()` と `desire_state.decay_tick()` を通して `compute_run_chance()` を評価する
 - `mics` に `stt_enabled: true` があれば `audio_daemon.py` を監視起動する
 - `web/server.py` は別スレッドで常駐再起動する
@@ -55,13 +55,13 @@ embodied_ha/daemon.py   ← 常駐プロセス
 MQTT / HA / sensors
     ↓
 daemon.py
-    ├── chat.sh  → Claude CLI → reply / preferences_update / speak
-    └── loop.sh  → Claude CLI → observe / explore / reflect / web / social
+    ├── chat.py  → selected agent harness → reply / preferences_update / speak
+    └── loop.py  → selected agent harness → observe / explore / reflect / web / social
                    ↓
              MCP servers via mcp-config.py
 ```
 
-`loop.sh` の `observe` はカメラ観察、`explore` は自由探索、`reflect` は内省、`web` は WebSearch、`social` は AI Lounge を担当します。`loop.sh` の末尾では前日の観察ログを `daybook_rollup.py` に渡し、daybook 生成と `memory.md` の統合を行います。
+`loop.py` の `observe` はカメラ観察、`explore` は自由探索、`reflect` は内省、`web` は WebSearch、`social` は AI Lounge を担当します。`loop.py` の末尾では前日の観察ログを `daybook_rollup.py` に渡し、daybook 生成と `memory.md` の統合を行います。
 
 ## 永続データ
 
@@ -79,4 +79,3 @@ daemon.py
 | `log/actions.jsonl` | 家電操作ログ |
 | `log/body_location_log.jsonl` | 位置移動ログ |
 | `log/audio_log.jsonl` | 常時 STT ログ |
-

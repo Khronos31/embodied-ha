@@ -14,10 +14,10 @@ embodied_ha/
   daemon.py           # Main process: loop_scheduler thread (autonomous loop timing/probability),
                        #   MQTT listener threads (chat/loop triggers), audio_daemon watchdog thread,
                        #   body/desire/anomaly state ticking. Single-instance guarded via flock.
-  chat.sh             # Direct conversation loop (voice or text) — replies + home appliance control
-  loop.sh             # Autonomous loop dispatcher — MODE selects: observe / explore / reflect / web / social
+  chat.py             # Direct conversation loop (voice or text) — replies + home appliance control
+  loop.py             # Autonomous loop dispatcher — MODE selects: observe / explore / reflect / web / social
   run.sh              # Container entrypoint: env setup, auth check, daemon start
-  config.sh           # Dev environment path defaults (overridden by run.sh in the add-on)
+  config.sh           # Historical migration snapshot; eha_config.py is authoritative
 
   # --- MCP servers (stdio JSON-RPC via mcp_lib.py; wired per-loop by mcp-config.py) ---
   audio-mcp.py        # listen / speak / use_device_microphone / use_device_speaker / concentrate_hearing

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
-# config.sh — 環境固有設定（IP・URL・パス）。各スクリプトが source する。
-# アドオンでは options から環境変数で注入し、ここのデフォルトを上書きする。
-# 個人環境では下記デフォルトでそのまま動く（${VAR:-default} 形式で env 優先）。
+# config.sh — 旧シェル実装の環境設定スナップショット。
+# chat.sh / loop.sh 削除後は実行時に読み込まれない。現行の正本は eha_config.py。
+# Python移植時の契約確認用として、削除直前の commit 537331b 相当を残している。
 
 # --- 居住者名（キャラクター定義・プロンプト内で使う）---
 export RESIDENT="${RESIDENT:-ユーザー}"

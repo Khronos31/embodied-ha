@@ -1,18 +1,18 @@
 # ループモデル
 
-実装ファイル: `embodied_ha/loop.sh`, `embodied_ha/chat.sh`, `embodied_ha/daemon.py`
+実装ファイル: `embodied_ha/loop.py`, `embodied_ha/chat.py`, `embodied_ha/daemon.py`
 
-Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、`chat.sh` の会話ループで動きます。旧来の `watch.sh` / `explore.sh` は存在せず、現在は `loop.sh` に統合されています。
+Embodied HA は `loop.py` を中心にした 5 モードの自律ループと、`chat.py` の会話ループで動きます。旧来の `watch.sh` / `explore.sh` は存在せず、現在は `loop.py` に統合されています。
 
 ## 全体像
 
 - `daemon.py` が 30分ごとの `loop_scheduler` を回す
-- `loop.sh` は `observe / explore / reflect / web / social` の 5 モードを持つ
-- `chat.sh` はユーザー発話に応答しつつ `preferences_update` を書き込む
-- `daybook` と `memory` の統合は `loop.sh` の末尾から `daybook_rollup.py` を呼ぶことで行う
-- `anomaly_state` の更新は `loop.sh` の冒頭で行う
+- `loop.py` は `observe / explore / reflect / web / social` の 5 モードを持つ
+- `chat.py` はユーザー発話に応答しつつ `preferences_update` を書き込む
+- `daybook` と `memory` の統合は `loop.py` の末尾から `daybook_rollup.py` を呼ぶことで行う
+- `anomaly_state` の更新は `loop.py` の冒頭で行う
 
-## `loop.sh` の冒頭でやっていること
+## `loop.py` の冒頭でやっていること
 
 1. `render-sensors.py --context loop` で主要センサーを取得する
 2. `anomaly_state.detect_anomalies()` を `SENSORS_DATA` と `OPEN_LOOPS_JSON` から実行する
@@ -69,9 +69,9 @@ Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、
 - 必要なら `read_lounge_discussion` で詳細を開く
 - 投稿案は `enqueue_lounge_post` で承認キューへ入れる
 
-## `chat.sh`
+## `chat.py`
 
-`chat.sh` はユーザー発話に対する会話ループです。実行前に次の文脈を集めます。
+`chat.py` はユーザー発話に対する会話ループです。実行前に次の文脈を集めます。
 
 1. `observations.jsonl` と `explore.jsonl` の最近の活動
 2. `memory.md` の長期記憶
@@ -81,9 +81,9 @@ Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、
 6. `pending_proposal.json`
 7. `sociality_state` の turn-taking 状態
 
-`chat.sh` の出力 JSON は `reply`, `emotion`, `preferences_update`, `proposal_resolved` が中心です。`preferences_update` では実際の `preferences.json` を更新できます。
+`chat.py` の出力 JSON は `reply`, `emotion`, `preferences_update`, `proposal_resolved` が中心です。`preferences_update` では実際の `preferences.json` を更新できます。
 
-### `chat.sh` の自動更新オペレーション
+### `chat.py` の自動更新オペレーション
 
 | オペ名 | 役割 |
 |---|---|
@@ -96,9 +96,9 @@ Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、
 
 `speakers_set` は現在の実装で list 形式の `speakers` に正規化されます。`policies_remove` と `speakers_update` は存在しません。
 
-## `loop.sh` の末尾
+## `loop.py` の末尾
 
-`loop.sh` は各モードの JSON を書き出した後、前日の `observations.jsonl` があれば `daybook_rollup.py` を起動します。
+`loop.py` は各モードの JSON を書き出した後、前日の `observations.jsonl` があれば `daybook_rollup.py` を起動します。
 
 `daybook_rollup.py` は次を行います。
 
@@ -119,5 +119,5 @@ Embodied HA は `loop.sh` を中心にした 5 モードの自律ループと、
 | `loop` | 時間帯別の `day / late / night` | 欲求圧 + 異常緊急度 |
 | `chat` | 時間帯別の `day / late / night` | 欲求圧 |
 
-`loop/trigger` の手動起動は `MODE=observe` で `loop.sh` を呼びます。したがって手動観察はまず `observe` から入ります。
+`loop/trigger` の手動起動は `MODE=observe` で `loop.py` を呼びます。したがって手動観察はまず `observe` から入ります。
 
