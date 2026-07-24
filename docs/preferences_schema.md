@@ -1,8 +1,8 @@
 # preferences.json スキーマリファレンス
 
-実装参照: `embodied_ha/preferences.json.example`, `embodied_ha/discover.py`, `embodied_ha/chat.sh`, `embodied_ha/speak.py`, `embodied_ha/render-sensors.py`, `embodied_ha/sensory_origin.py`
+実装参照: `embodied_ha/preferences.json.example`, `embodied_ha/discover.py`, `embodied_ha/chat.py`, `embodied_ha/speak.py`, `embodied_ha/render-sensors.py`, `embodied_ha/sensory_origin.py`
 
-`preferences.json` は会話で育てる主要設定ファイルです。実体は `EHA_PREFS_FILE`（通常 `/config/embodied-ha/preferences.json`）にあり、`chat.sh` の `preferences_update` から自動更新されます。
+`preferences.json` は会話で育てる主要設定ファイルです。実体は `EHA_PREFS_FILE`（通常 `/config/embodied-ha/preferences.json`）にあり、`chat.py` の `preferences_update` から自動更新されます。
 
 知覚系の設定は、身体的知覚とメディア受信で分けて扱います。`cameras` と `mics` は実際にその機器へ侵入して使う身体的知覚で、部屋や減衰、在室推定に影響します。一方 `video_media` と `audio_media` は侵入不要のメディア受信で、部屋は文脈としてのみ使われ、減衰や在室判定には影響しません。
 
@@ -190,7 +190,7 @@ STT の言語コードです。
 |---|---|
 | array of object | `[]` |
 
-操作できる家電の対応表です。`chat.sh` が `entities_add` / `entities_remove` を使って更新します。
+操作できる家電の対応表です。`chat.py` が `entities_add` / `entities_remove` を使って更新します。
 
 各要素のフィールド:
 
@@ -236,7 +236,7 @@ STT の言語コードです。
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `loop_interval` | number | `loop.sh` の実行間隔（秒） |
+| `loop_interval` | number | `loop.py` の実行間隔（秒） |
 | `day_probability` | number | 日中の基準確率 |
 | `late_probability` | number | 22-24時の基準確率 |
 | `night_probability` | number | 0-6時の基準確率 |
@@ -307,7 +307,7 @@ STT の言語コードです。
 }
 ```
 
-## `chat.sh` による自動更新オペレーション
+## `chat.py` による自動更新オペレーション
 
 `preferences_update` で実際に受け付けるキーは次の通りです。
 

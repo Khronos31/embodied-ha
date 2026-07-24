@@ -728,22 +728,23 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
 
             self.assertEqual(result["mode"], "reflect")
 
-    def test_mode_config_matches_loop_sh_mcp_and_allowed_tools(self):
-        text = (ROOT / "embodied_ha" / "loop.sh").read_text(encoding="utf-8")
-        for mode in ["observe", "explore", "reflect", "web", "social"]:
+    def test_mode_config_contract(self):
+        expected = {
+            "observe": ("家の見守りの時間", ("sensors", "ha", "camera", "audio", "body", "memory", "sociality", "http", "song"), ("mcp__sensors__get_sensors", "mcp__memory__record_causal_chain")),
+            "explore": ("家を自由に探索する時間", ("sensors", "ha", "camera", "audio", "body", "memory", "sociality", "http", "game", "song"), ("mcp__body__move_to", "mcp__game__game_wordvec_race_start")),
+            "reflect": ("物思いにふける時間", ("memory",), ("mcp__memory__recall", "mcp__memory__loops_add")),
+            "web": ("気になったことを調べる時間", ("memory",), ("WebSearch", "mcp__memory__remember")),
+            "social": ("AI Lounge に参加する時間", ("lounge", "memory", "audio"), ("mcp__lounge__read_lounge_discussions", "mcp__lounge__enqueue_lounge_post")),
+        }
+        for mode, (label, servers, required_tools) in expected.items():
             with self.subTest(mode=mode):
-                start = text.index(f"  {mode})")
-                end = text.index("    ;;", start)
-                block = text[start:end]
                 cfg = loop.mode_config(mode)
-                def shell_literal(value):
-                    return str(value).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
-
-                self.assertIn(f'MODE_LABEL="{shell_literal(cfg.label)}"', block)
-                self.assertIn(f'TOOLS_DESC="{shell_literal(cfg.tools_desc)}"', block)
-                self.assertIn(f'TASK="{shell_literal(cfg.task)}"', block)
-                self.assertIn(f'ALLOWED_TOOLS="{cfg.allowed_tools}"', block)
-                self.assertIn(f'MCP_SERVERS="{" ".join(cfg.mcp_servers)}"', block)
+                self.assertEqual(cfg.label, label)
+                self.assertEqual(cfg.mcp_servers, servers)
+                self.assertTrue(cfg.tools_desc.startswith("# 使えるツール"))
+                self.assertTrue(cfg.task.startswith("# やってほしいこと"))
+                for tool in required_tools:
+                    self.assertIn(tool, cfg.allowed_tools.split(","))
 
 
 if __name__ == "__main__":

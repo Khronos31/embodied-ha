@@ -20,8 +20,8 @@ import counterfactual_state as cs
 
 QUIET_HOURS = range(1, 7)
 # 自律家電操作(intent=action)を許可するループモード。
-# loop.sh 側で hacontrol サーバーを接続するモードと必ず一致させること（現在は explore のみ）。
-# ここと loop.sh の「MODE == explore」ゲートが唯一の対応点。将来モードを増やす場合は両方直す。
+# loop.py 側で hacontrol サーバーを接続するモードと必ず一致させること（現在は explore のみ）。
+# ここと loop.py の「MODE == explore」ゲートが唯一の対応点。将来モードを増やす場合は両方直す。
 ACTION_MODES = {"explore"}
 
 

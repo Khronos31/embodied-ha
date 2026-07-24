@@ -1,13 +1,4 @@
-"""chat_invoke.py（chat.py移植 増分4）の単体テスト＋ゴールデン比較。
-
-ゴールデン比較テストは、chat.sh自身のプロンプト構築コード（234-510行目、
-prompt = f\"\"\"...\"\"\" の代入まで）を実際に読み取り、環境変数を制御した
-状態で exec() 実行し、その結果の `prompt` 変数と
-chat_invoke.build_chat_prompt() の出力を直接比較する。副作用（subprocess
-呼び出し・ファイル書き込み）はこの行範囲に一切無いため、モック無しで
-安全に実行できる（body_state.py/json_schemas.py の import と、
-try/exceptで包まれたlocation_belief.json/preferences.jsonの読み取りのみ）。
-"""
+"""chat_invoke.py の契約テスト。"""
 import io
 import json
 import os
@@ -23,152 +14,89 @@ sys.path.insert(0, str(EMBODIED_HA_DIR))
 
 import chat_invoke  # type: ignore  # noqa: E402
 
-CHAT_SH = EMBODIED_HA_DIR / "chat.sh"
-_PROMPT_SOURCE_START_LINE = 234  # import json, os, subprocess, sys
-_PROMPT_SOURCE_END_LINE = 510    # {json_format_block}"""  (prompt f-string の終端)
 
+class BuildChatPromptContractTests(unittest.TestCase):
+    def test_prompt_contains_identity_context_memory_tools_and_user_message(self):
+        prompt = chat_invoke.build_chat_prompt(
+            character="私はテスト人格。",
+            resident="ゆの",
+            projected_camera_source="",
+            recent_activity="照明が点いた",
+            current_mood="calm",
+            inner_voice="静かに考えたい",
+            body_narrative="リビングにいる",
+            body_location_context="現在地: リビング",
+            turn_taking_state="{}",
+            sensors="室温 24度",
+            long_memory="猫が好き",
+            open_loops="フィルター掃除",
+            recent_chat_context="",
+            chat_hist="ゆの: こんにちは",
+            entity_table="",
+            pending="なし",
+            features_md="",
+            features_presented="",
+            extra_context="",
+            policies_raw="",
+            chat_source="chat",
+            user_room="",
+            user_room_speaker="",
+            recent_auditory_input="",
+            user_msg="今日どう？",
+        )
+        for expected in (
+            "私はテスト人格。",
+            "# あなたの長期記憶",
+            "猫が好き",
+            "remember ツールに text を渡して記録する",
+            "record_causal_chain で結ぶ",
+            "ゆのさんからの発言:\n「今日どう？」",
+        ):
+            self.assertIn(expected, prompt)
 
-def _extract_chat_sh_prompt_source():
-    lines = CHAT_SH.read_text(encoding="utf-8").splitlines()
-    # 行番号は1始まり・両端含む
-    snippet = lines[_PROMPT_SOURCE_START_LINE - 1:_PROMPT_SOURCE_END_LINE]
-    return "\n".join(snippet)
-
-
-_CHAT_SH_PROMPT_SOURCE = _extract_chat_sh_prompt_source()
-
-
-def _run_chat_sh_prompt(env):
-    """chat.shの実プロンプト構築コードを、指定env varsの下でexec実行し`prompt`を返す。"""
-    full_env = {"SCRIPT_DIR": str(EMBODIED_HA_DIR), **env}
-    with patch.dict("os.environ", full_env, clear=True):
-        namespace = {}
-        exec(_CHAT_SH_PROMPT_SOURCE, namespace)  # noqa: S102
-    return namespace["prompt"]
-
-
-def _default_env(**overrides):
-    env = {
-        "USER_MSG": "こんにちは",
-        "CHAT_SOURCE_VALUE": "chat",
-        "RECENT_ACTIVITY": "なし",
-        "CURRENT_MOOD": "おだやか",
-        "LONG_MEMORY": "なし",
-        "CHAT_HISTORY": "なし",
-        "RECENT_CHAT_CONTEXT": "",
-        "SENSORS": "",
-        "BODY_LOCATION_CONTEXT": "",
-        "PROJECTED_CAMERA_SOURCE": "",
-        "ENTITY_TABLE": "",
-        "POLICIES": "",
-        "EXTRA_CONTEXT": "",
-        "FEATURES_MD": "",
-        "FEATURES_PRESENTED": "",
-        "PENDING_PROPOSAL": "なし",
-        "OPEN_LOOPS": "なし",
-        "TURN_TAKING_STATE": "{}",
-        "CHARACTER": "私はあかね。",
-        "RECENT_AUDITORY_INPUT": "",
-        "ACTIVE_DESIRES": "",
-        "RESIDENT": "ゆの",
-        "EHA_BODY_STATE": "{}",
-        "EHA_DATA_DIR": "/no/such/data_dir",
-        "EHA_PREFS_FILE": "/no/such/preferences.json",
-    }
-    env.update(overrides)
-    return env
-
-
-def _build_prompt_via_chat_invoke(env):
-    """envと同じ入力値からchat_invoke.build_chat_promptを呼ぶ（golden比較の対抗馬）。"""
-    chat_source = env["CHAT_SOURCE_VALUE"]
-    user_room, user_room_speaker = chat_invoke.resolve_voice_user_room(
-        chat_source, env["EHA_DATA_DIR"], env["EHA_PREFS_FILE"]
-    )
-    inner_voice = chat_invoke.build_inner_voice(env["ACTIVE_DESIRES"])
-    body_narrative = chat_invoke.build_body_narrative(env["EHA_BODY_STATE"])
-    return chat_invoke.build_chat_prompt(
-        character=env["CHARACTER"],
-        resident=env["RESIDENT"],
-        projected_camera_source=env["PROJECTED_CAMERA_SOURCE"],
-        recent_activity=env["RECENT_ACTIVITY"],
-        current_mood=env["CURRENT_MOOD"],
-        inner_voice=inner_voice,
-        body_narrative=body_narrative,
-        body_location_context=env["BODY_LOCATION_CONTEXT"],
-        turn_taking_state=env["TURN_TAKING_STATE"],
-        sensors=env["SENSORS"],
-        long_memory=env["LONG_MEMORY"],
-        open_loops=env["OPEN_LOOPS"],
-        recent_chat_context=env["RECENT_CHAT_CONTEXT"],
-        chat_hist=env["CHAT_HISTORY"],
-        entity_table=env["ENTITY_TABLE"],
-        pending=env["PENDING_PROPOSAL"],
-        features_md=env["FEATURES_MD"],
-        features_presented=env["FEATURES_PRESENTED"],
-        extra_context=env["EXTRA_CONTEXT"],
-        policies_raw=env["POLICIES"],
-        chat_source=chat_source,
-        user_room=user_room,
-        user_room_speaker=user_room_speaker,
-        recent_auditory_input=env["RECENT_AUDITORY_INPUT"],
-        user_msg=env["USER_MSG"],
-    )
-
-
-class PromptGoldenComparisonTests(unittest.TestCase):
-    """chat.sh実物のプロンプト構築コードとchat_invoke.build_chat_promptの出力一致を検証。"""
-
-    def _assert_golden_match(self, env):
-        expected = _run_chat_sh_prompt(env)
-        actual = _build_prompt_via_chat_invoke(env)
-        self.assertEqual(actual, expected)
-
-    def test_plain_chat_minimal(self):
-        self._assert_golden_match(_default_env())
-
-    def test_chat_with_entity_table_and_features(self):
-        self._assert_golden_match(_default_env(
-            ENTITY_TABLE="| 名前 | entity_id | 備考 |\n|------|-----------|------|\n| リビングのライト | light.living | |",
-            FEATURES_MD="## 視聴予約 [viewing_reservation]\n番組を予約できます。",
-            FEATURES_PRESENTED="viewing_reservation",
-        ))
-
-    def test_chat_with_pending_proposal_and_policies(self):
-        self._assert_golden_match(_default_env(
-            PENDING_PROPOSAL=json.dumps({"提案文": "電気消しますか？", "action": "light_off"}, ensure_ascii=False),
-            POLICIES="- 集中してるときは静かに\n- 21時以降は控えめに",
-            EXTRA_CONTEXT="今日は祝日です。",
-        ))
-
-    def test_chat_with_recent_chat_context_and_active_desires(self):
-        self._assert_golden_match(_default_env(
-            RECENT_CHAT_CONTEXT="ゆのさん: 昨日の話の続きだけど\nClaude: はい、覚えてます",
-            ACTIVE_DESIRES=json.dumps(["ゆのさんの様子が気になる", "最近のコミットを見たい"], ensure_ascii=False),
-            PROJECTED_CAMERA_SOURCE="camera.living",
-        ))
-
-    def test_voice_with_known_room_and_tcp_speaker(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            data_dir = Path(tmp)
-            prefs_file = data_dir / "preferences.json"
-            with open(data_dir / "location_belief.json", "w", encoding="utf-8") as fh:
-                json.dump({"room": "スタディ"}, fh)
-            with open(prefs_file, "w", encoding="utf-8") as fh:
-                json.dump({"speakers": [{"room": "スタディ", "type": "tcp", "host": "192.168.1.139", "port": 3334}]}, fh)
-            self._assert_golden_match(_default_env(
-                CHAT_SOURCE_VALUE="voice",
-                EHA_DATA_DIR=str(data_dir),
-                EHA_PREFS_FILE=str(prefs_file),
-            ))
-
-    def test_voice_with_unknown_room(self):
-        self._assert_golden_match(_default_env(CHAT_SOURCE_VALUE="voice"))
-
-    def test_chat_with_auditory_input_block(self):
-        self._assert_golden_match(_default_env(
-            RECENT_AUDITORY_INPUT="# 最近聞こえた音\n玄関でチャイムが鳴りました。",
-        ))
+    def test_optional_prompt_blocks_are_independently_wired(self):
+        prompt = chat_invoke.build_chat_prompt(
+            character="人格",
+            resident="ゆの",
+            projected_camera_source="camera.study",
+            recent_activity="活動",
+            current_mood="calm",
+            inner_voice="衝動",
+            body_narrative="身体",
+            body_location_context="位置",
+            turn_taking_state="{}",
+            sensors="センサー",
+            long_memory="記憶",
+            open_loops="なし",
+            recent_chat_context="前日の文脈",
+            chat_hist="直近会話",
+            entity_table="| ライト | light.study |",
+            pending='{"proposal":"消灯"}',
+            features_md="## 視聴機能 [watch]",
+            features_presented="watch",
+            extra_context="今日は祝日",
+            policies_raw="- 深夜は静かに",
+            chat_source="voice",
+            user_room="書斎",
+            user_room_speaker="tcp://speaker:3334",
+            recent_auditory_input="# 最近聞こえた音\nチャイム",
+            user_msg="聞こえた？",
+        )
+        for expected in (
+            "# 現在の視界（電脳体: camera.study）",
+            "# 操作できる家電（エンティティ対応表）",
+            "| ライト | light.study |",
+            "# 行動ポリシー（ゆのさんが設定した行動ルール。必ず踏まえて行動する）",
+            "- 深夜は静かに",
+            "既に伝えた機能: watch",
+            "## 視聴機能 [watch]",
+            "# 最近聞こえた音\nチャイム",
+            "呼ばれた場所: **書斎**",
+            "tcp://speaker:3334",
+            "今日は祝日",
+            '{"proposal":"消灯"}',
+        ):
+            self.assertIn(expected, prompt)
 
 
 class ResolveVoiceUserRoomTests(unittest.TestCase):

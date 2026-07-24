@@ -12,7 +12,7 @@ set -euo pipefail
 # source: chat / loop / explore のいずれか（どこで生まれたやりかけ・約束か）
 
 # symlink(/config/.tools/bin/loops 等)経由でも実体ディレクトリ基準で log を引く。
-# 実行時は run.sh / config.sh が EHA_LOG_DIR を設定するのでそちらが優先される。
+# 実行時は run.sh が EHA_LOG_DIR を設定するのでそちらが優先される。
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 LOG="${EHA_LOG_DIR:-$SCRIPT_DIR/log}/open_loops.jsonl"
 mkdir -p "$(dirname "$LOG")"

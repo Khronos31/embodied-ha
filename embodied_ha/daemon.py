@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Embodied HA デーモン
-自律ループ(loop.py)と会話(chat.sh)をHAエンティティ経由でトリガーする常駐プロセス。
+自律ループ(loop.py)と会話(chat.py)をHAエンティティ経由でトリガーする常駐プロセス。
 起動はアドオン(addon/run.sh)から exec で呼ばれる。直接起動する場合:
 
 トリガー方法（MQTT。config.yaml の services: mqtt:need で MQTT は必須）:
-  - embodied_ha/chat/set        … 会話(chat.sh)を起動。ペイロードがユーザーの発言
+  - embodied_ha/chat/set        … 会話(chat.py)を起動。ペイロードがユーザーの発言
   - embodied_ha/loop/trigger … 自律ループ(loop.py)を手動起動
 """
 import os
@@ -28,7 +28,6 @@ from instance_identity import MQTT_PREFIX
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
-CHAT_SH = os.path.join(_SCRIPT_DIR, "chat.sh")  # 巻き戻し用に残置。増分9でCHAT_PYへ切替
 CHAT_PY = os.path.join(_SCRIPT_DIR, "chat.py")
 LOOP_PY = os.path.join(_SCRIPT_DIR, "loop.py")
 AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")

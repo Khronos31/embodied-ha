@@ -1039,7 +1039,7 @@ def get_soliloquy_messages(limit: int = 300) -> list:
 
 # --- メッセージ送信 ---
 def send_chat(message: str, source: str = "chat"):
-    """MQTT 優先、なければ input_text REST 経由で chat.sh を起動する。"""
+    """MQTT 優先、なければ input_text REST 経由で chat.py を起動する。"""
     import subprocess
     if MQTT_HOST:
         subprocess.run(

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """loop.sh のPython移植。
 
-このファイルは daemon.py からはまだ起動しない。まず postprocess/persistence
-境界を移植し、loop.sh と同じ保存契約をテストで固定する。
+daemon.py から自律ループの実装として起動される。postprocess/persistence
+境界は旧loop.shから移植し、同じ保存契約をテストで固定している。
+旧実装の記述は、削除直前の git commit 537331b を参照する。
 """
 from __future__ import annotations
 

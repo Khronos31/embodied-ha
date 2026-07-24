@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """chat.sh のPython移植（[[embodied-ha-pythonize-chat-loop-design-2026-07-09]]）。
 
+以下の chat.sh 行番号は、削除直前の git commit 537331b を参照する。
+
 daemon.pyから起動される、ユーザー発言への応答生成スクリプト。
 環境変数 CHAT_MESSAGE にユーザーの発言、CHAT_SOURCE に発信源
 （既定 "chat"、他に "voice"）が入る。
