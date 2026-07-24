@@ -337,22 +337,29 @@ def _supervisor_json(path: str, timeout: float = 5) -> object:
 
 
 def _voicevox_addon_hostname() -> str:
-    data = _supervisor_json("/addons")
-    addons = data.get("addons", []) if isinstance(data, dict) else []
-    for addon in addons:
-        if not isinstance(addon, dict):
-            continue
-        text = " ".join(str(addon.get(key, "")) for key in ("slug", "name")).lower()
-        if "voicevox" not in text or "engine" not in text:
-            continue
-        slug = addon.get("slug")
-        if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9_]+", slug):
-            continue
-        info = _supervisor_json(f"/addons/{slug}/info")
-        hostname = info.get("hostname", "") if isinstance(info, dict) else ""
-        if isinstance(hostname, str) and re.fullmatch(r"[a-z0-9-]+", hostname):
-            return hostname
-    raise RuntimeError("VOICEVOX Engineアドオンが見つかりません")
+    try:
+        data = _supervisor_json("/addons")
+        addons = data.get("addons", []) if isinstance(data, dict) else []
+        for addon in addons:
+            if not isinstance(addon, dict):
+                continue
+            text = " ".join(str(addon.get(key, "")) for key in ("slug", "name")).lower()
+            if "voicevox" not in text or "engine" not in text:
+                continue
+            slug = addon.get("slug")
+            if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9_]+", slug):
+                continue
+            info = _supervisor_json(f"/addons/{slug}/info")
+            hostname = info.get("hostname", "") if isinstance(info, dict) else ""
+            if isinstance(hostname, str) and re.fullmatch(r"[a-z0-9-]+", hostname):
+                return hostname
+    except urllib.error.HTTPError as error:
+        if error.code not in (401, 403):
+            raise
+
+    # Default-role add-ons cannot enumerate other add-ons through Supervisor.
+    # This is the stable internal hostname of the supported VOICEVOX add-on.
+    return "974e6a09-voicevox-engine-addon"
 
 
 def get_voicevox_speakers() -> list[dict]:

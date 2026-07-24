@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -110,6 +111,16 @@ class VoicevoxSpeakersTests(unittest.TestCase):
             return {"hostname": "974e6a09-voicevox-engine-addon"}
 
         with mock.patch.object(server, "_supervisor_json", side_effect=fake_supervisor):
+            self.assertEqual(
+                server._voicevox_addon_hostname(),
+                "974e6a09-voicevox-engine-addon",
+            )
+
+    def test_addon_hostname_falls_back_when_supervisor_forbids_listing(self):
+        forbidden = urllib.error.HTTPError(
+            "http://supervisor/addons", 403, "Forbidden", {}, None,
+        )
+        with mock.patch.object(server, "_supervisor_json", side_effect=forbidden):
             self.assertEqual(
                 server._voicevox_addon_hostname(),
                 "974e6a09-voicevox-engine-addon",
