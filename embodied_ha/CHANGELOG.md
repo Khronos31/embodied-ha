@@ -13,6 +13,11 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 - 個体ごとにVOICEVOXの話者・音量・音高・話速を設定できるようになりました。
   Added per-instance VOICEVOX speaker, volume, pitch, and speed settings.
 
+### Changed / 変更
+
+- ホスト本体のlocalスピーカー出力だけを1.5倍に増幅し、リミッターで音割れを抑えるようにしました。
+  Increased local host-speaker playback gain by 1.5x with limiting; TCP and Home Assistant media-player outputs are unchanged.
+
 ### Removed / 削除
 
 - Python実装への移行後も残っていた旧`chat.sh`・`loop.sh`を削除しました。

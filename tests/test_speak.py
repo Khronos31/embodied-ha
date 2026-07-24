@@ -537,5 +537,38 @@ class PlayPcmFileTests(unittest.TestCase):
         self.assertIn("s16le", cmd)
 
 
+class LocalPlaybackGainTests(unittest.TestCase):
+    def setUp(self):
+        self.speak = _load_speak()
+
+    def test_local_playback_uses_fixed_gain_and_limiter_before_paplay(self):
+        boosted = b"\x03\x04" * 80
+        ffmpeg = mock.Mock()
+        ffmpeg.communicate.return_value = (boosted, b"")
+        ffmpeg.returncode = 0
+        paplay = mock.Mock()
+        paplay.communicate.return_value = (b"", b"")
+        paplay.returncode = 0
+
+        with mock.patch.object(
+            self.speak.subprocess, "Popen", side_effect=[ffmpeg, paplay]
+        ) as popen:
+            self.speak._play_pcm_local(
+                b"\x01\x02" * 80,
+                sink="alsa_output.test",
+                sample_rate=16000,
+                channels=1,
+            )
+
+        ffmpeg_cmd = popen.call_args_list[0].args[0]
+        self.assertIn(
+            "volume=1.5,alimiter=limit=0.95:level=false", ffmpeg_cmd
+        )
+        paplay_cmd = popen.call_args_list[1].args[0]
+        self.assertEqual(paplay_cmd[0], "paplay")
+        self.assertIn("--device=alsa_output.test", paplay_cmd)
+        paplay.communicate.assert_called_once_with(input=boosted, timeout=30)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -228,6 +228,36 @@ def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5)
         sock.sendall(pcm_bytes)
 
 
+def _boost_pcm_for_local_playback(pcm_bytes: bytes, sample_rate: int,
+                                  channels: int, timeout: float) -> bytes:
+    """Local出力だけを1.5倍に増幅し、クリッピングをリミッターで抑える。"""
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-loglevel", "error",
+            "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels),
+            "-i", "pipe:0",
+            "-af", "volume=1.5,alimiter=limit=0.95:level=false",
+            "-f", "s16le", "pipe:1",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        boosted, ffmpeg_err = proc.communicate(input=pcm_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError("local playback gain timed out")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "local playback gain failed: "
+            f"{ffmpeg_err.decode('utf-8', errors='replace').strip()}"
+        )
+    if not boosted:
+        raise RuntimeError("local playback gain produced empty PCM output")
+    return boosted
+
+
 def _play_pcm_local(pcm_bytes: bytes, sink: str = "", sample_rate: int = 16000,
                     channels: int = 1, timeout: float = 30) -> None:
     """コンテナ内の PulseAudio へ raw s16le PCM を再生する（ホスト内蔵スピーカー等）。
@@ -235,6 +265,9 @@ def _play_pcm_local(pcm_bytes: bytes, sink: str = "", sample_rate: int = 16000,
     sink（例: alsa_output.pci-0000_00_1f.3.analog-stereo）へそのまま出せる。
     sink 未指定なら PulseAudio の既定 sink。
     """
+    pcm_bytes = _boost_pcm_for_local_playback(
+        pcm_bytes, sample_rate, channels, timeout
+    )
     cmd = ["paplay", "--raw", f"--rate={sample_rate}",
            f"--channels={channels}", "--format=s16le"]
     if sink:
