@@ -46,7 +46,7 @@ def _has_config_substance(path: str) -> bool:
     mis-grandfather a new instance."""
     try:
         return len(os.listdir(path)) > 0
-    except OSError:
+    except FileNotFoundError:
         return False
 
 
