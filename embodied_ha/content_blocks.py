@@ -16,7 +16,7 @@ from pathlib import Path
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024
-MAX_TEXT_BYTES = 32 * 1024
+MAX_TEXT_BYTES = 96 * 1024
 MAX_INPUT_JSON_BYTES = 48 * 1024 * 1024
 STALE_SECONDS = 60 * 60
 
@@ -79,7 +79,7 @@ def expand_content_blocks(content: object, output_dir: Path) -> list[Path]:
                     raise ValueError(f"text block {block_index}: text must be a string")
                 text_bytes += len(text.encode("utf-8"))
                 if text_bytes > MAX_TEXT_BYTES:
-                    raise ValueError("content text exceeds 32 KiB")
+                    raise ValueError("content text exceeds 96 KiB")
                 codex_parts.append(text)
                 agy_parts.append(text)
                 continue
