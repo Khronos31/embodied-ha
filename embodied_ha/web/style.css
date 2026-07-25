@@ -349,16 +349,6 @@ body {
     color: var(--badge-chat-text);
 }
 
-.badge-loop {
-    background-color: var(--badge-loop-bg);
-    color: var(--badge-loop-text);
-}
-
-.badge-explore {
-    background-color: var(--badge-explore-bg);
-    color: var(--badge-explore-text);
-}
-
 .badge-private {
     background-color: var(--badge-private-bg);
     color: var(--badge-private-text);

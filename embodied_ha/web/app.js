@@ -311,19 +311,23 @@ function renderMessages() {
     let displayList = [];
     if (activeRoom === 'chat') {
         // User messages, chat responses, loop/explore statements (where text is present)
-        displayList = chatMessages.filter(m => m.text).map(m => ({
-            timestamp: m.timestamp,
-            // 送信者名はバックエンドに保存されない。ユーザー以外はキャラクター設定から
-            // 描画時に導出する（独り言ルームと同じ方式）。これで名前変更が即反映される。
-            sender: m.sender === 'あなた' ? 'あなた' : characterName,
-            text: m.text,
-            type: m.type, // 'chat', 'loop', 'explore', 'user'
-            source: m.source || 'chat',
-            isUser: m.sender === 'あなた',
-            isRead: m.isRead !== false,
-            badgeText: getBadgeText(m.type),
-            badgeClass: getBadgeClass(m.type)
-        }));
+        displayList = chatMessages.filter(m => m.text).map(m => {
+            const isUser = m.sender === 'あなた';
+            const isAgentDirectResponse = !isUser && (m.type === 'chat' || m.source === 'chat' || m.source === 'voice');
+            return {
+                timestamp: m.timestamp,
+                // 送信者名はバックエンドに保存されない。ユーザー以外はキャラクター設定から
+                // 描画時に導出する（独り言ルームと同じ方式）。これで名前変更が即反映される。
+                sender: isUser ? 'あなた' : characterName,
+                text: m.text,
+                type: m.type, // 'chat', 'loop', 'explore', 'user'
+                source: m.source || 'chat',
+                isUser: isUser,
+                isRead: m.isRead !== false,
+                badgeText: isAgentDirectResponse ? '会話' : '',
+                badgeClass: isAgentDirectResponse ? 'badge-chat' : ''
+            };
+        });
     } else {
         // Only private thoughts (Soliloquy)
         displayList = chatMessages.filter(m => m.private).map(m => ({
@@ -434,10 +438,13 @@ function renderMessages() {
             sender.textContent = isPrivateTyping ? characterName + ' (内省)' : characterName;
             infoBar.appendChild(sender);
 
-            const badge = document.createElement('span');
-            badge.className = `message-type-badge ${getBadgeClass(typingType)}`;
-            badge.textContent = isPrivateTyping ? '考え中' : getBadgeText(typingType) + '中';
-            infoBar.appendChild(badge);
+            const badgeText = isPrivateTyping ? '考え中' : (getBadgeText(typingType) ? getBadgeText(typingType) + '中' : '');
+            if (badgeText) {
+                const badge = document.createElement('span');
+                badge.className = `message-type-badge ${getBadgeClass(typingType)}`;
+                badge.textContent = badgeText;
+                infoBar.appendChild(badge);
+            }
 
             const bubble = document.createElement('div');
             bubble.className = 'typing-indicator';
@@ -462,19 +469,21 @@ function renderMessages() {
 // --- Helpers to resolve badges ---
 function getBadgeText(type) {
     switch (type) {
-        case 'chat': return '会話';
-        case 'loop': return 'ループ';
-        case 'explore': return '探索';
-        default: return '';
+        case 'chat':
+        case 'voice':
+            return '会話';
+        default:
+            return '';
     }
 }
 
 function getBadgeClass(type) {
     switch (type) {
-        case 'chat': return 'badge-chat';
-        case 'loop': return 'badge-loop';
-        case 'explore': return 'badge-explore';
-        default: return '';
+        case 'chat':
+        case 'voice':
+            return 'badge-chat';
+        default:
+            return '';
     }
 }
 
