@@ -220,6 +220,40 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertNotIn("--session-id", flags)
         self.assertNotIn("--resume", flags)
 
+    def test_cpu_no_output_is_concession_and_player_win(self):
+        game = self.start_cpu_game()
+        session_id = game["cpu_session_id"]
+        state_path = Path(self.module._cpu_session_path(session_id))
+
+        with mock.patch.object(
+            self.module,
+            "_ask_cpu_word",
+            return_value=(None, "synthetic CPU failure"),
+        ):
+            response = self.cpu_move(session_id, "基準", "相手一")
+
+        self.assertTrue(response["game_over"])
+        self.assertEqual(response["winner"], "player")
+        self.assertIn("投了", response["reason"])
+        self.assertEqual(response["your_move"], {"word": "相手一", "sim": 0.8})
+        self.assertFalse(state_path.exists())
+
+    def test_cpu_vocab_retry_no_output_is_concession_and_player_win(self):
+        game = self.start_cpu_game()
+        session_id = game["cpu_session_id"]
+
+        with mock.patch.object(
+            self.module,
+            "_ask_cpu_word",
+            side_effect=[("語彙外", ""), (None, "synthetic CPU failure")],
+        ):
+            response = self.cpu_move(session_id, "基準", "相手一")
+
+        self.assertTrue(response["game_over"])
+        self.assertEqual(response["winner"], "player")
+        self.assertIn("投了", response["reason"])
+        self.assertIn("あなたの勝ち", response["message"])
+
     def test_unsupported_harness_returns_polite_error(self):
         with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "unsupported-harness"}):
             result = result_json(self.module.game_wordvec_race_start({"base": "基準", "mode": "cpu"}))
