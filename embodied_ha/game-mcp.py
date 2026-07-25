@@ -502,6 +502,18 @@ def _ask_cpu_word(message: str) -> tuple[str | None, str]:
     return word or None, ""
 
 
+def _cpu_concedes(start_key: str, answer_key: str, sim_answer: float, *, reason: str) -> list[dict[str, Any]]:
+    result = {
+        "your_move": {"word": answer_key, "sim": round(sim_answer, 4)},
+        "start": start_key,
+        "game_over": True,
+        "winner": "player",
+        "reason": reason,
+        "message": "CPUは有効な手を出せなかったため投了しました。あなたの勝ちです。結果を会話ルームに報告してください。",
+    }
+    return [text(json.dumps(result, ensure_ascii=False, indent=2))]
+
+
 def game_wordvec_race_start(args: dict[str, Any]):
     if not _PLUGINS.get("wordvec_race"):
         return _plugin_disabled_error("WordVecレース")
@@ -594,25 +606,24 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
         cpu_word, _ = _ask_cpu_word(cpu_msg)
         if not cpu_word:
             _delete_cpu_state(cpu_session_id)
-            result = {
-                "game_over": True,
-                "winner": "aborted",
-                "reason": "CPU応答に失敗",
-                "message": "CPU応答に失敗したので対局を中断します。結果を会話ルームに報告してください。",
-            }
-            return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+            return _cpu_concedes(
+                start_key,
+                answer_key,
+                sim_answer,
+                reason="CPUは打つ手なし（応答失敗により投了）",
+            ), False
         cpu_key = _lookup(kv, cpu_word)
         if cpu_key is None:
             retry_msg = f"{cpu_msg}\n「{cpu_word}」は辞書に無い。実在する別の日本語の単語を1つだけ。"
             cpu_word, _ = _ask_cpu_word(retry_msg)
             if not cpu_word:
                 _delete_cpu_state(cpu_session_id)
-                result = {
-                    "game_over": True,
-                    "winner": "aborted",
-                    "reason": "CPU応答に失敗",
-                }
-                return [text(json.dumps(result, ensure_ascii=False, indent=2))], False
+                return _cpu_concedes(
+                    start_key,
+                    answer_key,
+                    sim_answer,
+                    reason="CPUは語彙内の手を出せず投了",
+                ), False
             cpu_key = _lookup(kv, cpu_word)
             if cpu_key is None:
                 _delete_cpu_state(cpu_session_id)
