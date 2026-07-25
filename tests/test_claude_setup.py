@@ -66,6 +66,11 @@ class ClaudeSetupTests(unittest.TestCase):
                 claude_setup.NEW_DEFAULT_CONFIG_DIR,
             )
 
+    def test_resolve_config_dir_propagates_legacy_read_errors(self):
+        with mock.patch.object(os, "listdir", side_effect=PermissionError("denied")):
+            with self.assertRaisesRegex(PermissionError, "denied"):
+                claude_setup.resolve_config_dir("/config/embodied-ha")
+
     def test_paths_auth_state_and_clear_auth_are_idempotent(self):
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as root, mock.patch.dict(
             os.environ,
