@@ -6,6 +6,18 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.3] - 2026-07-25
+
+### Changed / 変更
+
+- 会話ログのエージェント発言キーと表示を`Claude`からハーネス非依存の`Agent`へ一般化しました。既存ログは読み取り時に変換されます。
+  Generalized chat-log agent messages and labels from `Claude` to harness-neutral `Agent`; existing logs are normalized when read.
+
+### Security / セキュリティ
+
+- Claude Code経路で組み込み`Bash`ツールを明示的に禁止しました。
+  Explicitly disabled Claude Code's built-in `Bash` tool.
+
 ## [2.0.2] - 2026-07-25
 
 ### Added / 追加

@@ -1055,8 +1055,12 @@ def get_lounge_log(limit: int = 20) -> list:
 
 
 def get_chat_messages(limit: int = 300) -> list:
-    """chat_log.jsonl を返す（{timestamp, source, claude, user}）。"""
-    return read_jsonl(CHAT_LOG, limit)
+    """chat_log.jsonlを返す。旧claudeキーはagentへ読み替える。"""
+    messages = read_jsonl(CHAT_LOG, limit)
+    for message in messages:
+        if "agent" not in message and "claude" in message:
+            message["agent"] = message["claude"]
+    return messages
 
 
 def get_soliloquy_messages(limit: int = 300) -> list:

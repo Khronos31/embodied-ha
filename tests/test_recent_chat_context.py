@@ -38,7 +38,7 @@ class RecentChatContextTests(unittest.TestCase):
                     {
                         "timestamp": f"{today}T08:{index:02d}:00+09:00",
                         "user": f"発言{index}",
-                        "claude": f"返答{index}",
+                        "agent": f"返答{index}",
                     }
                 )
             log_path = self._write_log(tmpdir, rows)

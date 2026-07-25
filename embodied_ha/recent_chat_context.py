@@ -73,12 +73,12 @@ def format_earlier_today_chat(
             hhmm = timestamp[11:16] if isinstance(timestamp, str) and len(timestamp) >= 16 else "--:--"
 
             user = _truncate(_clean_text(row.get("user")), max_chars)
-            claude = _truncate(_clean_text(row.get("claude")), max_chars)
+            agent = _truncate(_clean_text(row.get("agent") or row.get("claude")), max_chars)
 
             if user:
                 lines.append(f'{hhmm} {resident}さん: 「{user}」')
-            if claude:
-                lines.append(f"{hhmm} {character_name}: {claude}")
+            if agent:
+                lines.append(f"{hhmm} {character_name}: {agent}")
 
         return "\n".join(lines) if len(lines) > 1 else ""
     except Exception:

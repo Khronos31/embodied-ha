@@ -488,11 +488,11 @@ def append_loop_chat_log(
     *,
     timestamp: str,
     source: str,
-    claude: str,
+    agent: str,
 ) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    row = {"timestamp": timestamp, "source": source, "claude": claude, "user": None}
+    row = {"timestamp": timestamp, "source": source, "agent": agent, "user": None}
     with out.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -600,7 +600,7 @@ def count_unread_autonomous_chat(
             row = json.loads(line)
         except (TypeError, ValueError):
             continue
-        if not isinstance(row, dict) or row.get("user") or not row.get("claude"):
+        if not isinstance(row, dict) or row.get("user") or not (row.get("agent") or row.get("claude")):
             continue
         source = str(row.get("source") or "chat")
         if source in {"chat", "speak"}:
@@ -955,10 +955,10 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
             run(["python3", os.path.join(SCRIPT_DIR, "speak.py"), room, plan["tts"]], check=False)
         except Exception:
             pass
-        append_loop_chat_log(paths.chat_log, timestamp=timestamp, source="loop", claude=plan["tts"])
+        append_loop_chat_log(paths.chat_log, timestamp=timestamp, source="loop", agent=plan["tts"])
     if plan["say"]:
         print(f"[SAY:{mode}] {plan['say']}")
-        append_loop_chat_log(paths.chat_log, timestamp=timestamp, source=mode, claude=plan["say"])
+        append_loop_chat_log(paths.chat_log, timestamp=timestamp, source=mode, agent=plan["say"])
     maybe_run_daybook(paths, context["cfg"], timestamp[:10], run=run)
 
 

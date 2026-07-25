@@ -830,7 +830,7 @@ def _speak_with_entry(entry: dict, message: str = "", *, file_path: str = "", mo
         try:
             ts = now().isoformat(timespec="seconds")
             log_entry = json.dumps(
-                {"timestamp": ts, "source": "speak", "claude": message, "user": None},
+                {"timestamp": ts, "source": "speak", "agent": message, "user": None},
                 ensure_ascii=False,
             )
             with open(os.path.join(log_dir, "chat_log.jsonl"), "a", encoding="utf-8") as f:

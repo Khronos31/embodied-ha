@@ -153,9 +153,16 @@ class ChatHistoryTests(unittest.TestCase):
     def test_formats_dialogue_pairs(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "chat_log.jsonl"
-            _write_lines(log, [{"user": "こんにちは", "claude": "こんにちは！"}])
+            _write_lines(log, [
+                {"user": "旧形式", "claude": "旧形式も読めます"},
+                {"user": "こんにちは", "agent": "こんにちは！"},
+            ])
             result = chat_context.build_chat_history(str(log), "ゆの")
-            self.assertEqual(result, "ゆのさん: こんにちは\nClaude: こんにちは！")
+            self.assertEqual(
+                result,
+                "ゆのさん: 旧形式\nAgent: 旧形式も読めます\n"
+                "ゆのさん: こんにちは\nAgent: こんにちは！",
+            )
 
     def test_missing_file_returns_nashi(self):
         self.assertEqual(chat_context.build_chat_history("/no/such/chat_log.jsonl", "ゆの"), "なし")

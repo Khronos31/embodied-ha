@@ -70,7 +70,7 @@ def append_chat_log(parsed, reply, user_msg, chat_source, timestamp, chat_log_fi
     """
     reply = parsed.get("reply", "") or reply
     private = parsed.get("private", "") or ""
-    rec = {"timestamp": timestamp, "source": chat_source, "user": user_msg, "claude": reply}
+    rec = {"timestamp": timestamp, "source": chat_source, "user": user_msg, "agent": reply}
     if private:
         rec["private"] = private
     with open(chat_log_file, "a", encoding="utf-8") as f:

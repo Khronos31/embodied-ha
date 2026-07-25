@@ -507,7 +507,8 @@ run_claude() {
     "${gen_cmd[@]}"
   fi
   local cmd=("$bin" "-p" "--model" "$model" "--effort" "$effort"
-             "--input-format" "stream-json" "--output-format" "stream-json" "--verbose")
+             "--input-format" "stream-json" "--output-format" "stream-json" "--verbose"
+             "--disallowedTools" "Bash")
   if [[ -n "$system_prompt_replace" ]]; then
     cmd+=("--system-prompt" "$system_prompt_replace")
   fi

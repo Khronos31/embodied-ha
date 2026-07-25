@@ -36,7 +36,7 @@ class LoopPyUnreadChatTests(unittest.TestCase):
                     {"timestamp": "2026-07-25T09:59:00+09:00", "source": "explore", "user": None, "claude": "既読"},
                     {"timestamp": "2026-07-25T10:01:00+09:00", "source": "chat", "user": "質問", "claude": "会話応答"},
                     {"timestamp": "2026-07-25T10:02:00+09:00", "source": "speak", "user": None, "claude": "音声記録"},
-                    {"timestamp": "2026-07-25T10:03:00+09:00", "source": "observe", "user": None, "claude": "一件目"},
+                    {"timestamp": "2026-07-25T10:03:00+09:00", "source": "observe", "user": None, "agent": "一件目"},
                     {"timestamp": "2026-07-25T10:04:00+09:00", "source": "reflect", "user": None, "claude": "二件目"},
                     {"timestamp": "2026-07-25T10:05:00+09:00", "source": "web", "user": None, "claude": "三件目"},
                     {"timestamp": "2026-07-25T10:06:00+09:00", "source": "explore", "user": None, "claude": ""},
@@ -638,10 +638,10 @@ class LoopPyPostprocessTests(unittest.TestCase):
     def test_append_loop_chat_log_uses_loop_jsonl_shape(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "chat_log.jsonl"
-            loop.append_loop_chat_log(path, timestamp="t", source="reflect", claude="考えています")
+            loop.append_loop_chat_log(path, timestamp="t", source="reflect", agent="考えています")
             rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
-        self.assertEqual(rows, [{"timestamp": "t", "source": "reflect", "claude": "考えています", "user": None}])
+        self.assertEqual(rows, [{"timestamp": "t", "source": "reflect", "agent": "考えています", "user": None}])
 
 
 class LoopPyPersistenceTests(unittest.TestCase):

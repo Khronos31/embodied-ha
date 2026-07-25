@@ -723,12 +723,12 @@ async function fetchMessages(room) {
                         isRead: true // Already processed on backend
                     });
                 }
-                if (m.claude && m.source !== 'speak') {
+                if (m.agent && m.source !== 'speak') {
                     mapped.push({
                         timestamp: ts,
                         type: normalizeMessageType(m.source || 'chat'),
                         sender: characterName,
-                        text: m.claude,
+                        text: m.agent,
                         source: m.source || 'chat'
                     });
                 }
@@ -5489,4 +5489,3 @@ function updateSingSpeakerUI() {
         accordion.style.display = 'none';
     }
 }
-
