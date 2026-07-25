@@ -6,6 +6,18 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.4] - 2026-07-25
+
+### Changed / 変更
+
+- 会話欄の投稿種別ラベルを整理し、直接会話だけを「会話」と表示して、自律投稿はラベルなしに統一しました。
+  Simplified conversation-room labels so only direct chat is marked as “Conversation,” while autonomous posts have no label.
+
+### Fixed / 修正
+
+- 既存のClaude Code設定ディレクトリが権限・I/Oエラーで読めない場合に、空の設定と誤認して新しい保存先へ切り替えないようにしました。
+  Prevented unreadable legacy Claude Code configuration directories from being mistaken for empty configurations and silently switched to a new location.
+
 ## [2.0.3] - 2026-07-25
 
 ### Changed / 変更
