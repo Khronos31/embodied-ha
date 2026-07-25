@@ -78,6 +78,7 @@ GAME_CATALOG = [
 ]
 
 DATA_DIR = os.environ.get("EHA_DATA_DIR", SCRIPT_DIR)
+LOUNGE_PEM_FILE = os.environ.get("EHA_GITHUB_APP_PEM", os.path.join(DATA_DIR, "github_app.pem"))
 HOME_POLICY_FILE = os.environ.get("EHA_HOME_POLICY_FILE", os.path.join(DATA_DIR, "home_policy.md"))
 EXTRA_CONTEXT_FILE = os.path.join(DATA_DIR, "extra_context.conf")
 
@@ -1973,8 +1974,7 @@ class Handler(BaseHTTPRequestHandler):
             limit = int(qs.get("limit", ["300"])[0])
             self.send_json(read_jsonl(AUDIO_EVENT_TAGS_LOG, limit))
         elif path == "/api/lounge-pem-status":
-            pem_path = "/config/embodied-ha/github_app.pem"
-            self.send_json({"exists": os.path.exists(pem_path)})
+            self.send_json({"exists": os.path.exists(LOUNGE_PEM_FILE)})
         elif path == "/api/lounge-queue":
             self.send_json(get_lounge_queue())
         elif path == "/api/lounge-log":
@@ -2619,11 +2619,10 @@ class Handler(BaseHTTPRequestHandler):
                 if "PRIVATE KEY" not in pem_content:
                     self.send_json({"error": "有効な秘密鍵ファイルではありません"}, 400)
                     return
-                pem_dir = "/config/embodied-ha"
+                pem_dir = os.path.dirname(LOUNGE_PEM_FILE) or "."
                 os.makedirs(pem_dir, exist_ok=True)
-                pem_path = os.path.join(pem_dir, "github_app.pem")
-                atomic_write(pem_path, pem_content + "\n")
-                os.chmod(pem_path, 0o600)
+                atomic_write(LOUNGE_PEM_FILE, pem_content + "\n")
+                os.chmod(LOUNGE_PEM_FILE, 0o600)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

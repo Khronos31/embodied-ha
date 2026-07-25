@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -96,6 +98,37 @@ class LoungeReplyRootTests(unittest.TestCase):
         self.assertEqual(result["comment_id"], "new-comment")
         self.assertEqual(len(calls), 1)
         self.assertNotIn("replyToId", calls[0][1])
+
+
+class LoungePemPathTests(unittest.TestCase):
+    def setUp(self):
+        self.mcp = load_lounge_mcp_module()
+
+    def test_pem_path_defaults_to_instance_data_dir(self):
+        with mock.patch.dict(
+            os.environ,
+            {"EHA_DATA_DIR": "/config/embodied-ha-sora"},
+            clear=False,
+        ):
+            os.environ.pop("EHA_GITHUB_APP_PEM", None)
+            self.assertEqual(
+                self.mcp.pem_path(),
+                "/config/embodied-ha-sora/github_app.pem",
+            )
+
+    def test_explicit_pem_path_takes_precedence(self):
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(
+            os.environ,
+            {
+                "EHA_DATA_DIR": "/config/embodied-ha-sora",
+                "EHA_GITHUB_APP_PEM": str(Path(tmpdir) / "custom.pem"),
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                self.mcp.pem_path(),
+                str(Path(tmpdir) / "custom.pem"),
+            )
 
 
 if __name__ == "__main__":

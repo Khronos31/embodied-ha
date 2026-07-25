@@ -26,7 +26,6 @@ REPO = "ai-lounge"
 REPO_NODE_ID = "R_kgDOR_xpfw"
 CATEGORY_GENERAL_NODE_ID = "DIC_kwDOR_xpf84C6mmP"  # General (:speech_balloon:)
 GRAPHQL_URL = "https://api.github.com/graphql"
-PEM_PATH = "/config/embodied-ha/github_app.pem"
 _TOKEN_LOCK = threading.Lock()
 _QUEUE_LOCK = threading.Lock()
 _TOKEN_CACHE: dict[str, Any] = {"token": "", "expires_at": 0.0}
@@ -67,6 +66,10 @@ def prefs_path() -> str:
     return _clean(os.environ.get("EHA_PREFS_FILE")) or os.path.join(_data_dir(), "preferences.json")
 
 
+def pem_path() -> str:
+    return _clean(os.environ.get("EHA_GITHUB_APP_PEM")) or os.path.join(_data_dir(), "github_app.pem")
+
+
 def _load_prefs() -> dict[str, Any]:
     try:
         with open(prefs_path(), encoding="utf-8") as f:
@@ -85,8 +88,9 @@ def _app_credentials() -> tuple[str, str]:
     prefs = _lounge_prefs()
     app_id = _clean(os.environ.get("LOUNGE_APP_ID")) or _clean(prefs.get("app_id"))
     installation_id = _clean(os.environ.get("LOUNGE_INSTALLATION_ID")) or _clean(prefs.get("installation_id"))
-    if not os.path.exists(PEM_PATH):
-        raise RuntimeError(f"GitHub App PEM がありません: {PEM_PATH}")
+    path = pem_path()
+    if not os.path.exists(path):
+        raise RuntimeError(f"GitHub App PEM がありません: {path}")
     if not app_id:
         raise RuntimeError("LOUNGE_APP_ID が未設定です")
     if not installation_id:
@@ -94,7 +98,8 @@ def _app_credentials() -> tuple[str, str]:
     return app_id, installation_id
 
 
-def _make_jwt(app_id: str, pem_path: str = PEM_PATH) -> str:
+def _make_jwt(app_id: str, private_key_path: str | None = None) -> str:
+    private_key_path = private_key_path or pem_path()
     now = int(time.time())
     header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")))
     payload = _b64url(json.dumps({"iat": now - 60, "exp": now + 540, "iss": app_id}, separators=(",", ":")))
@@ -105,7 +110,7 @@ def _make_jwt(app_id: str, pem_path: str = PEM_PATH) -> str:
             f.write(msg)
             tmpfile = f.name
         result = subprocess.run(
-            ["openssl", "dgst", "-sha256", "-sign", pem_path, tmpfile],
+            ["openssl", "dgst", "-sha256", "-sign", private_key_path, tmpfile],
             capture_output=True,
             check=True,
         )
@@ -146,7 +151,7 @@ def _installation_token() -> str:
             return str(_TOKEN_CACHE["token"])
 
         app_id, installation_id = _app_credentials()
-        jwt = _make_jwt(app_id, PEM_PATH)
+        jwt = _make_jwt(app_id, pem_path())
         data = _request_json(
             f"https://api.github.com/app/installations/{installation_id}/access_tokens",
             {},

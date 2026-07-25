@@ -21,6 +21,7 @@ import memory_state as ms  # noqa: E402
 import counterfactual_state as cs  # noqa: E402
 from introspection_facts import format_facts_summary  # noqa: E402
 from json_schemas import daybook_schema  # noqa: E402
+from path_env import build_tools_path  # noqa: E402
 from state_utils import file_lock  # noqa: E402
 
 
@@ -259,9 +260,7 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
     env = {
         **os.environ,
         "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
-        "PATH": os.environ.get("EHA_TOOLS_PATH", "/config/.tools/npm-global/bin:/config/.tools/node/bin")
-        + ":"
-        + os.environ.get("PATH", "/usr/bin:/bin"),
+        "PATH": build_tools_path(),
     }
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})
     proc = subprocess.run(

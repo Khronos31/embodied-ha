@@ -25,6 +25,7 @@ import codex_setup
 import harness_state
 import harness_status
 from instance_identity import MQTT_PREFIX
+from path_env import build_tools_path
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
@@ -53,7 +54,7 @@ ANOMALY_NIGHT_URGENCY_THRESHOLD = 30
 ANOMALY_NIGHT_URGENCY_FACTOR = 0.0
 QUIET_ANOMALY_PERIODS = {"late", "night", "deep_night"}
 
-ENV_PATH = os.environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin")
+ENV_PATH = build_tools_path()
 _chat_lock = threading.Lock()
 _loop_lock = threading.Lock()
 _desires_lock = threading.Lock()

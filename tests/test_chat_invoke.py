@@ -142,7 +142,7 @@ class BuildClaudeEnvTests(unittest.TestCase):
     def test_overrides_claude_config_dir_and_prepends_path(self):
         env = chat_invoke.build_claude_env({"PATH": "/usr/bin"})
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "/config/.tools/claude-home")
-        self.assertTrue(env["PATH"].startswith("/config/.tools/bin"))
+        self.assertTrue(env["PATH"].startswith("/usr/local/bin"))
         self.assertIn("/usr/bin", env["PATH"])
 
 

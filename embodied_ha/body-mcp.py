@@ -83,12 +83,14 @@ def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str
     if not entity:
         return "", None
 
-    for item in prefs.get("mics", []):
-        if not isinstance(item, dict):
-            continue
-        if clean(item.get("source")) == entity:
-            normalized = clean(item.get("entity")) or entity
-            return normalized, clean(item.get("room")) or None
+    # audio_sources is the pre-2.0 name retained for settings not yet migrated.
+    for bucket in ("mics", "audio_sources"):
+        for item in prefs.get(bucket, []):
+            if not isinstance(item, dict):
+                continue
+            if clean(item.get("source")) == entity:
+                normalized = clean(item.get("entity")) or entity
+                return normalized, clean(item.get("room")) or None
 
     speakers = prefs.get("speakers", [])
     if isinstance(speakers, dict):
