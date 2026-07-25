@@ -510,14 +510,19 @@ def _turn_taking_blocks(turn: Mapping[str, Any], *, hour: int, focus_match: bool
     elapsed = None
     if last_turn is not None:
         try:
-            elapsed = max(0, int((_now() - last_turn).total_seconds()))
+            candidate = int((_now() - last_turn).total_seconds())
+            if candidate >= 0:
+                elapsed = candidate
         except Exception:
             elapsed = None
 
     if state in {"closed", "blocked", "held", "waiting"}:
         return True
     if awaiting:
-        return True
+        # awaiting_reply is transient. Missing, malformed, or future timestamps
+        # cannot prove that a live turn is still pending, so fail open instead
+        # of suppressing autonomous behavior indefinitely.
+        return cooldown_seconds > 0 and elapsed is not None and elapsed < cooldown_seconds
     if cooldown_seconds > 0 and elapsed is not None and elapsed < cooldown_seconds:
         return True
     return False
@@ -754,4 +759,3 @@ def get_turn_taking_state(log_dir: str | None, person: str) -> dict[str, Any]:
         "shared_focus": current["shared_focus"],
         "updated_at": current.get("updated_at", ""),
     }
-

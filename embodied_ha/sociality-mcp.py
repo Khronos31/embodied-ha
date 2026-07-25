@@ -25,10 +25,12 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import uuid
 from typing import Any
 
 from mcp_lib import log, serve, text
 import sociality_state as ss
+from state_utils import file_lock
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_DIR, "log"))
@@ -37,6 +39,9 @@ _RELATIONSHIPS_FILE = "relationships.json"
 _NARRATIVE_FILE = "self_narrative.md"
 _SOCIAL_STATE_FILE = "social_state.json"
 _SHARED_FOCUS_FILE = "shared_focus.json"
+_AUDIT_FILE = "sociality_tool_errors.jsonl"
+_AUDIT_MAX_ENTRIES = 200
+_AUDIT_KNOWN_KEYS = frozenset({"event", "note", "person", "state", "text"})
 
 
 def _path(name: str) -> str:
@@ -51,23 +56,59 @@ def _clean(text_value: Any) -> str:
     return " ".join(str(text_value or "").split()).strip()
 
 
-def _args_preview(args: dict[str, Any], *, max_value_len: int = 80) -> dict[str, Any]:
-    preview: dict[str, Any] = {}
-    for key in sorted(args):
-        value = args.get(key)
-        if isinstance(value, (dict, list)):
-            value_text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-        else:
-            value_text = str(value)
-        if len(value_text) > max_value_len:
-            value_text = value_text[:max_value_len] + "..."
-        preview[key] = value_text
-    return preview
+def _audit_value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "other"
+
+
+def _append_bounded_audit(row: dict[str, Any]) -> None:
+    path = _path(_AUDIT_FILE)
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with file_lock(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = [line for line in f if line.strip()]
+        except (OSError, UnicodeError):
+            lines = []
+        lines = lines[-(_AUDIT_MAX_ENTRIES - 1):]
+        lines.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+        tmp = f"{path}.{uuid.uuid4().hex}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        os.replace(tmp, path)
 
 
 def _log_invalid_args(tool_name: str, args: dict[str, Any], reason: str) -> None:
-    keys = sorted(str(key) for key in args)
-    log(f"[sociality-mcp] {tool_name} invalid args: reason={reason} keys={keys} preview={_args_preview(args)}")
+    known_keys = sorted(key for key in args if isinstance(key, str) and key in _AUDIT_KNOWN_KEYS)
+    row = {
+        "timestamp": _now_ts(),
+        "tool": tool_name,
+        "reason": reason,
+        "arg_keys": known_keys,
+        "arg_types": {key: _audit_value_type(args[key]) for key in known_keys},
+        "unknown_arg_count": len(args) - len(known_keys),
+    }
+    try:
+        _append_bounded_audit(row)
+    except Exception as exc:
+        log(f"[sociality-mcp] audit write failed: {type(exc).__name__}")
+    log(
+        f"[sociality-mcp] {tool_name} invalid args: "
+        f"reason={reason} keys={known_keys} unknown_arg_count={row['unknown_arg_count']}"
+    )
 
 
 def _load_json(path: str, default: Any) -> Any:

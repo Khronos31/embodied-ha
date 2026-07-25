@@ -50,9 +50,13 @@ class SocialityTests(unittest.TestCase):
         self.assertEqual(payload["interaction_count"], 1)
         self.assertTrue(payload["last_seen"])
 
-    def test_update_relationship_logs_invalid_args_preview(self):
+    def test_update_relationship_audit_contains_metadata_without_values(self):
         with mock.patch.object(self.sociality, "log") as log_mock:
-            result, is_error = self.sociality.update_relationship({"person": "alice", "text": "古い引数名"})
+            result, is_error = self.sociality.update_relationship({
+                "person": "alice",
+                "text": "古い引数名",
+                "secret-value-as-key": "token-value",
+            })
 
         self.assertTrue(is_error)
         self.assertEqual(result[0]["text"], "note が空です")
@@ -61,7 +65,21 @@ class SocialityTests(unittest.TestCase):
         self.assertIn("missing_note", log_line)
         self.assertIn("person", log_line)
         self.assertIn("text", log_line)
-        self.assertIn("古い引数名", log_line)
+        self.assertNotIn("alice", log_line)
+        self.assertNotIn("古い引数名", log_line)
+        self.assertNotIn("secret-value-as-key", log_line)
+        audit_path = Path(self.tmpdir.name) / "sociality_tool_errors.jsonl"
+        audit = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(audit["tool"], "update_relationship")
+        self.assertEqual(audit["reason"], "missing_note")
+        self.assertEqual(audit["arg_keys"], ["person", "text"])
+        self.assertEqual(audit["arg_types"], {"person": "string", "text": "string"})
+        self.assertEqual(audit["unknown_arg_count"], 1)
+        persisted = audit_path.read_text(encoding="utf-8")
+        self.assertNotIn("alice", persisted)
+        self.assertNotIn("古い引数名", persisted)
+        self.assertNotIn("secret-value-as-key", persisted)
+        self.assertNotIn("token-value", persisted)
 
     def test_get_narrative_returns_empty_string_when_missing(self):
         self.assertEqual(self._text(self.sociality.get_narrative({})), "")
@@ -80,9 +98,10 @@ class SocialityTests(unittest.TestCase):
         self.assertEqual(payload["last_interaction_ts"], "")
         self.assertIsNone(payload["elapsed_since_last_interaction_seconds"])
 
-    def test_update_social_state_logs_invalid_args_preview(self):
+    def test_update_social_state_audit_is_bounded(self):
         with mock.patch.object(self.sociality, "log") as log_mock:
-            result, is_error = self.sociality.update_social_state({"text": "古い引数名"})
+            for index in range(self.sociality._AUDIT_MAX_ENTRIES + 5):
+                result, is_error = self.sociality.update_social_state({"text": f"古い引数名{index}"})
 
         self.assertTrue(is_error)
         self.assertEqual(result[0]["text"], "event が空です")
@@ -90,7 +109,30 @@ class SocialityTests(unittest.TestCase):
         self.assertIn("update_social_state invalid args", log_line)
         self.assertIn("missing_event", log_line)
         self.assertIn("text", log_line)
-        self.assertIn("古い引数名", log_line)
+        self.assertNotIn("古い引数名", log_line)
+        audit_path = Path(self.tmpdir.name) / "sociality_tool_errors.jsonl"
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), self.sociality._AUDIT_MAX_ENTRIES)
+        self.assertNotIn("古い引数名", audit_path.read_text(encoding="utf-8"))
+
+    def test_valid_updates_do_not_create_audit_log(self):
+        self.sociality.update_relationship({"person": "alice", "note": "猫が好き"})
+        self.sociality.update_social_state({"event": "会話を開始"})
+        self.assertFalse((Path(self.tmpdir.name) / "sociality_tool_errors.jsonl").exists())
+
+    def test_corrupt_audit_file_does_not_replace_validation_error(self):
+        audit_path = Path(self.tmpdir.name) / "sociality_tool_errors.jsonl"
+        audit_path.write_bytes(b"\xff\xfe\x00broken")
+        with mock.patch.object(self.sociality, "log") as log_mock:
+            result, is_error = self.sociality.update_relationship({"person": "alice"})
+
+        self.assertTrue(is_error)
+        self.assertEqual(result[0]["text"], "note が空です")
+        row = json.loads(audit_path.read_text(encoding="utf-8"))
+        self.assertEqual(row["tool"], "update_relationship")
+        self.assertEqual(row["reason"], "missing_note")
+        self.assertNotIn("alice", audit_path.read_text(encoding="utf-8"))
+        self.assertNotIn("alice", log_mock.call_args.args[0])
 
     def test_set_shared_focus_is_read_back_by_get_shared_focus(self):
         self.sociality.set_shared_focus({
