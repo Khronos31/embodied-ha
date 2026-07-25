@@ -80,7 +80,22 @@ class ContentBlockExpansionTests(unittest.TestCase):
                     [image_block(JPEG, "image/jpeg") for _ in range(9)], output
                 )
 
-    def test_rejects_text_over_limit(self):
+    def test_accepts_text_over_legacy_32_kib_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "eha-content-text-over-32-kib"
+            text = "x" * (32 * 1024 + 1)
+
+            content_blocks.expand_content_blocks(
+                [{"type": "text", "text": text}],
+                output,
+            )
+
+            self.assertEqual(
+                (output / "codex-prompt.txt").read_text(encoding="utf-8"),
+                text,
+            )
+
+    def test_rejects_text_over_96_kib_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "eha-content-text-limit"
             with self.assertRaisesRegex(ValueError, "content text exceeds"):
