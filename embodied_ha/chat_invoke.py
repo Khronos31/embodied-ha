@@ -19,6 +19,7 @@ from json_schemas import chat_schema
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import body_state as _bs_mod  # noqa: E402
+from path_env import build_tools_path  # noqa: E402
 
 
 def build_claude_env(environ=None):
@@ -27,8 +28,7 @@ def build_claude_env(environ=None):
     return {
         **environ,
         "CLAUDE_CONFIG_DIR": environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
-        "PATH": environ.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin")
-        + ":" + environ.get("PATH", "/usr/bin:/bin"),
+        "PATH": build_tools_path(environ),
     }
 
 

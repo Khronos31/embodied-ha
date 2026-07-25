@@ -130,6 +130,57 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(rows[0]["projection_mode"], "enter_remote")
         self.assertEqual(rows[0]["action_cost"], 0.35)
 
+    def test_enter_cyberspace_resolves_tcp_room_from_legacy_audio_source(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            prefs_path = Path(tmpdir) / "preferences.json"
+            prefs_path.write_text(json.dumps({
+                "audio_sources": [{
+                    "source": "tcp://voice-node.local:3333",
+                    "room": "study",
+                }],
+            }), encoding="utf-8")
+            state_path = Path(tmpdir) / "body_location.json"
+            log_path = Path(tmpdir) / "body_location_log.jsonl"
+            state_path.write_text(json.dumps({"current_room": "study"}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_PREFS_FILE": str(prefs_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
+            }, clear=False):
+                payload = self._json(self.body_mcp.enter_cyberspace({
+                    "entity": "tcp://voice-node.local:3333",
+                    "reason": "声を聞く",
+                }))
+        self.assertEqual(payload["state"]["projected_room"], "study")
+        self.assertEqual(payload["state"]["current_entity"], "tcp://voice-node.local:3333")
+
+    def test_enter_cyberspace_resolves_tcp_room_from_speaker_host(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            prefs_path = Path(tmpdir) / "preferences.json"
+            prefs_path.write_text(json.dumps({
+                "speakers": [{
+                    "host": "voice-node.local",
+                    "port": 3334,
+                    "room": "study",
+                }],
+            }), encoding="utf-8")
+            state_path = Path(tmpdir) / "body_location.json"
+            log_path = Path(tmpdir) / "body_location_log.jsonl"
+            state_path.write_text(json.dumps({"current_room": "study"}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_PREFS_FILE": str(prefs_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
+            }, clear=False):
+                payload = self._json(self.body_mcp.enter_cyberspace({
+                    "entity": "tcp://voice-node.local:3333",
+                }))
+        self.assertEqual(payload["state"]["projected_room"], "study")
+
     def test_move_cyber_keeps_projection_when_room_unresolved(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)

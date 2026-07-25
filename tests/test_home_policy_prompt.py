@@ -17,6 +17,7 @@ class HomePolicyPromptTest(unittest.TestCase):
 
     def test_run_sh_seeds_home_policy_file(self):
         text = (ROOT / "embodied_ha" / "run.sh").read_text(encoding="utf-8")
+        self.assertIn('export EHA_GITHUB_APP_PEM="${EHA_GITHUB_APP_PEM:-$EHA_DATA_DIR/github_app.pem}"', text)
         self.assertIn('export EHA_HOME_POLICY_FILE="${EHA_HOME_POLICY_FILE:-$EHA_DATA_DIR/home_policy.md}"', text)
         self.assertIn('cp "$SCRIPT_DIR/home_policy.md" "$EHA_HOME_POLICY_FILE"', text)
         self.assertIn("home_policy.md を同梱デフォルトから初期化", text)

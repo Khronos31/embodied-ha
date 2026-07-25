@@ -326,6 +326,7 @@ class ServerSpecsTests(unittest.TestCase):
             "SUPERVISOR_TOKEN": "test-token",
             "EHA_PREFS_FILE": str(prefs_file),
             "EHA_DATA_DIR": str(Path(tmp) / "data"),
+            "EHA_GITHUB_APP_PEM": str(Path(tmp) / "data" / "github_app.pem"),
             "EHA_LOG_DIR": str(Path(tmp) / "log"),
         }
         Path(env["EHA_DATA_DIR"]).mkdir()
@@ -335,6 +336,17 @@ class ServerSpecsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=False):
             spec.loader.exec_module(module)
         return module, env
+
+    def test_lounge_server_receives_instance_pem_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, env = self.load_module(tmp)
+            with mock.patch.dict(os.environ, env, clear=False):
+                server = module.SERVER_SPECS["lounge"].build()
+
+            self.assertEqual(
+                server["env"]["EHA_GITHUB_APP_PEM"],
+                env["EHA_GITHUB_APP_PEM"],
+            )
 
     def list_runtime_tools(self, server, env):
         proc = subprocess.Popen(

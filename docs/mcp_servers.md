@@ -20,7 +20,11 @@ Embodied HA は `mcp-config.py` で各ループに必要な MCP サーバーだ�
 - `sociality`
 - `game`
 
-`lounge` は `preferences.json` の `ai_lounge.app_id` / `installation_id` から GitHub App 情報を受け取り、`http` は `EHA_HTTP_ALLOW_POST` が無ければ `http_get` しか公開しません。
+`lounge` は `preferences.json` の `ai_lounge.app_id` / `installation_id` と、
+個体データディレクトリの `github_app.pem`（既定:
+`$EHA_DATA_DIR/github_app.pem`、`EHA_GITHUB_APP_PEM`で上書き可能）から
+GitHub App情報を受け取ります。`http` は `EHA_HTTP_ALLOW_POST` が無ければ
+`http_get` しか公開しません。
 
 ## ループ別の接続
 
@@ -261,4 +265,3 @@ Embodied HA は `mcp-config.py` で各ループに必要な MCP サーバーだ�
 - `game_wordvec_race_hint`
 
 `wiki6` が無効なら Wiki6 系ツールは `plugin_disabled` を返します。`wordvec_race` も同様です。
-

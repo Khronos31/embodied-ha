@@ -6,6 +6,22 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.2] - 2026-07-25
+
+### Added / 追加
+
+- 自律チャットの未読が3件以上ある場合、緊急でない新規投稿が制限されることをエージェントへ通知するようにしました。
+  Added a runtime delivery notice that discourages non-urgent autonomous chat posts when three or more remain unread.
+- AI LoungeのGitHub App秘密鍵を個体ごとのデータディレクトリに保存できるようにしました。
+  Added per-instance storage for the AI Lounge GitHub App private key.
+
+### Changed / 変更
+
+- エージェント子プロセスのPATH構築を共通化し、重複を除去して汎用的な既定値を使うようにしました。
+  Unified agent subprocess PATH construction, removed duplicate entries, and replaced development-specific defaults.
+- `enter_cyberspace`がTCP音源の部屋を新旧の音源設定またはスピーカー設定から解決できるようにしました。
+  Enabled `enter_cyberspace` to resolve TCP device rooms from current and legacy audio-source settings or speaker settings.
+
 ## [2.0.1] - 2026-07-25
 
 ### Added / 追加

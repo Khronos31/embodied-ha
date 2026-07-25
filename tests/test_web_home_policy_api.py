@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -14,14 +15,14 @@ SERVER_PATH = ROOT / "embodied_ha" / "web" / "server.py"
 DEFAULT_HOME_POLICY = ROOT / "embodied_ha" / "home_policy.md"
 
 
-def load_server_module(home_policy_file: str):
+def load_server_module(home_policy_file: str, data_dir: str | None = None):
     module_name = "web_server_home_policy_test"
     sys.modules.pop(module_name, None)
     env = {
         "HA_URL": "http://127.0.0.1:8123",
         "SUPERVISOR_TOKEN": "test-token",
         "EHA_HOME_POLICY_FILE": home_policy_file,
-        "EHA_DATA_DIR": str(ROOT / "embodied_ha"),
+        "EHA_DATA_DIR": data_dir or str(ROOT / "embodied_ha"),
         "EHA_LOG_DIR": tempfile.gettempdir(),
     }
     original = os.environ.copy()
@@ -95,6 +96,35 @@ class HomePolicyApiTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/home-policy") as res:
                     self.assertEqual(res.read().decode("utf-8"), "")
                 self.assertEqual(Path(home_policy_path).read_text(encoding="utf-8"), "")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_lounge_pem_api_uses_instance_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            module = load_server_module(
+                os.path.join(tmpdir, "home_policy.md"),
+                data_dir=tmpdir,
+            )
+            expected_path = Path(tmpdir) / "github_app.pem"
+            self.assertEqual(Path(module.LOUNGE_PEM_FILE), expected_path)
+            server = self._start_server(module)
+            try:
+                port = server.server_address[1]
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/lounge-pem-status") as res:
+                    self.assertEqual(json.loads(res.read()), {"exists": False})
+
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/api/lounge-pem",
+                    data=json.dumps({"pem": "-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----"}).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(request) as res:
+                    self.assertEqual(json.loads(res.read()), {"ok": True})
+
+                self.assertTrue(expected_path.exists())
+                self.assertEqual(expected_path.stat().st_mode & 0o777, 0o600)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -22,6 +22,7 @@ class LoadConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(resolved["HA_URL"], "http://supervisor/core/api")
         self.assertEqual(resolved["CLAUDE_BIN"], "claude")
         self.assertEqual(resolved["CLAUDE_CONFIG_DIR"], "/config/.tools/claude-home")
+        self.assertEqual(resolved["EHA_TOOLS_PATH"], "/usr/local/bin")
         self.assertEqual(resolved["EHA_PREFS_FILE"], "/some/script_dir/preferences.json")
         self.assertEqual(resolved["EHA_CHARACTER_FILE"], "/some/script_dir/character.md")
 

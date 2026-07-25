@@ -29,6 +29,7 @@ BASE_MODE_WEIGHTS = {
     "web": 15,
     "social": 10,
 }
+UNREAD_AUTONOMOUS_CHAT_THRESHOLD = 3
 
 import anomaly_state  # noqa: E402
 import chat_context  # noqa: E402
@@ -41,6 +42,7 @@ from introspection_facts import extract_facts_from_stream_text, write_facts_file
 from json_schemas import loop_schema  # noqa: E402
 from media_capture import fetch_frame  # noqa: E402
 from observe_context import build_projected_camera_blocks  # noqa: E402
+from path_env import build_tools_path  # noqa: E402
 from response_parse import loop_extract  # noqa: E402
 
 
@@ -127,7 +129,10 @@ def choose_mode(environ: dict[str, str] | None = None, *, choices=random.choices
         return str(env["MODE"])
     body_state = _json_dict(env.get("EHA_BODY_STATE"))
     anomaly_urgency = _num({"ANOMALY_URGENCY": env.get("ANOMALY_URGENCY")}, "ANOMALY_URGENCY", 0.0)
-    github_app_path = env.get("EHA_GITHUB_APP_PEM") or "/config/embodied-ha/github_app.pem"
+    github_app_path = env.get("EHA_GITHUB_APP_PEM") or os.path.join(
+        env.get("EHA_DATA_DIR") or "/config/embodied-ha",
+        "github_app.pem",
+    )
     weights = compute_mode_weights(
         body_state,
         anomaly_urgency=anomaly_urgency,
@@ -146,8 +151,7 @@ def build_loop_claude_env(environ: dict[str, str] | None = None, *, actor: str |
     result = {
         **env,
         "CLAUDE_CONFIG_DIR": env.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
-        "PATH": env.get("EHA_TOOLS_PATH", "/config/.tools/bin:/config/.tools/npm-global/bin:/config/.tools/node/bin")
-        + ":" + env.get("PATH", "/usr/bin:/bin"),
+        "PATH": build_tools_path(env),
     }
     if actor is not None:
         result["EHA_ACTOR"] = actor
@@ -562,6 +566,67 @@ def _read_json(path: str | os.PathLike[str]) -> Any:
         return {}
 
 
+def _timestamp_epoch(value: Any) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
+def count_unread_autonomous_chat(
+    chat_log_file: str | os.PathLike[str],
+    last_read_file: str | os.PathLike[str],
+) -> int:
+    """Count autonomous messages visible in chat since its last read receipt."""
+    read_state = _read_json(last_read_file)
+    read_epoch = _timestamp_epoch(read_state.get("chat")) if isinstance(read_state, dict) else None
+    if read_epoch is None:
+        return 0
+
+    path = Path(chat_log_file)
+    if not path.exists():
+        return 0
+
+    count = 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(row, dict) or row.get("user") or not row.get("claude"):
+            continue
+        source = str(row.get("source") or "chat")
+        if source in {"chat", "speak"}:
+            continue
+        message_epoch = _timestamp_epoch(row.get("timestamp"))
+        if message_epoch is not None and message_epoch > read_epoch:
+            count += 1
+    return count
+
+
+def build_unread_chat_constraint(
+    chat_log_file: str | os.PathLike[str],
+    last_read_file: str | os.PathLike[str],
+    *,
+    threshold: int = UNREAD_AUTONOMOUS_CHAT_THRESHOLD,
+) -> tuple[int, str]:
+    count = count_unread_autonomous_chat(chat_log_file, last_read_file)
+    if count < threshold:
+        return count, ""
+    return count, (
+        "# チャット投稿の配送状態\n"
+        f"未読の自律メッセージが{count}件溜まっているため、緊急でないチャットへの"
+        "新規投稿は制限されます。内省・観察は続けて構いません。"
+    )
+
+
 def _run_text(cmd: list[str], *, env: dict[str, str] | None = None, fallback: str = "", run=subprocess.run) -> str:
     try:
         result = run(cmd, env=env, capture_output=True, text=True)
@@ -725,13 +790,17 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     presented_note = f"既に伝えた機能: {features_presented}（繰り返し紹介しなくてよい）\n" if features_presented else ""
     features_note = f"\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n{presented_note}{features_md}\n" if features_md else ""
     behavior_policy_note = f"\n# 行動ポリシー（{resident}さんが設定した行動ルール。必ず踏まえて行動する）\n{cfg.get('POLICIES', '')}" if cfg.get("POLICIES") else ""
+    unread_chat_count, unread_chat_note = build_unread_chat_constraint(
+        paths.chat_log,
+        os.path.join(paths.log_dir, "last_read.json"),
+    )
     policy_note = ""
     if selected_mode in ("observe", "explore") and home_policy:
         policy_note = f"\n# ホームポリシー\n{home_policy}\n\n# ポリシー照合の方針\n現在の家の状態（get_sensors / ha_get で確認できるもの）をこのポリシーと照らし合わせ、明らかにズレていて直した方がよいものだけ気にかける。細かい好みや、その場の事情が読めないもの、人がいる部屋を勝手に変える類、深夜の音出し操作は触らない。\nズレがあっても自律操作の権限がなければ proposal で提案し、権限があれば是正して事後報告する。"
     body_narrative = chat_invoke.build_body_narrative(cfg.get("EHA_BODY_STATE", "") or "{}")
     body_location_context = _run_text(["python3", os.path.join(SCRIPT_DIR, "body-context.py")], fallback="# 身体位置\n取得失敗", run=run)
     inner_voice = chat_invoke.build_inner_voice(cfg.get("ACTIVE_DESIRES", ""))
-    sys_prompt = f"{character}\n\n# 内なる衝動\n{inner_voice}\n\n# 身体状態\n{body_narrative}\n\n{projected_camera_note}\n\n{body_location_context}\n\n{recent_auditory_input}\n\n{anomaly_context}\n\n{policy_note}\n\n{behavior_policy_note}\n\nいまは『{config.label}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n{config.tools_desc}\n\n{config.task}\n{autonomous_note}\n{features_note}\n{build_json_format(resident)}"
+    sys_prompt = f"{character}\n\n# 内なる衝動\n{inner_voice}\n\n# 身体状態\n{body_narrative}\n\n{projected_camera_note}\n\n{body_location_context}\n\n{recent_auditory_input}\n\n{anomaly_context}\n\n{policy_note}\n\n{behavior_policy_note}\n\n{unread_chat_note}\n\nいまは『{config.label}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n{config.tools_desc}\n\n{config.task}\n{autonomous_note}\n{features_note}\n{build_json_format(resident)}"
     user_prompt = f"{config.label}です。今は{hour}時台。\n\n【あなたの長期記憶】\n{build_long_memory(paths.memory_file, run=run)}{build_recent_facts_block(selected_mode, paths)}\n\n【直近の探索メモ】\n{build_previous_explore(paths.explore_log)}\n\n【気にかけていること（やりかけ・約束）】\n{open_loops}\n\nでは、始めてください。"
     return {
         "cfg": cfg_with_queue,
@@ -741,6 +810,7 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
         "user_prompt": user_prompt,
         "allowed_tools": allowed_tools,
         "mcp_servers": list(mcp_servers),
+        "unread_autonomous_chat_count": unread_chat_count,
         "projected_camera_source": projected_camera_source,
         "queued_listen_file": queued_ctx.get("EHA_QUEUED_LISTEN_FILE"),
     }

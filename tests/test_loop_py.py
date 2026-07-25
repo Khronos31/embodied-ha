@@ -14,6 +14,105 @@ sys.path.insert(0, str(ROOT / "embodied_ha"))
 import loop  # noqa: E402
 
 
+class LoopPyUnreadChatTests(unittest.TestCase):
+    def _write_jsonl(self, path, rows):
+        path.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def test_counts_only_autonomous_chat_messages_after_last_read(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_log = tmp / "chat_log.jsonl"
+            last_read = tmp / "last_read.json"
+            last_read.write_text(
+                json.dumps({"chat": "2026-07-25T10:00:00+0900"}),
+                encoding="utf-8",
+            )
+            self._write_jsonl(
+                chat_log,
+                [
+                    {"timestamp": "2026-07-25T09:59:00+09:00", "source": "explore", "user": None, "claude": "既読"},
+                    {"timestamp": "2026-07-25T10:01:00+09:00", "source": "chat", "user": "質問", "claude": "会話応答"},
+                    {"timestamp": "2026-07-25T10:02:00+09:00", "source": "speak", "user": None, "claude": "音声記録"},
+                    {"timestamp": "2026-07-25T10:03:00+09:00", "source": "observe", "user": None, "claude": "一件目"},
+                    {"timestamp": "2026-07-25T10:04:00+09:00", "source": "reflect", "user": None, "claude": "二件目"},
+                    {"timestamp": "2026-07-25T10:05:00+09:00", "source": "web", "user": None, "claude": "三件目"},
+                    {"timestamp": "2026-07-25T10:06:00+09:00", "source": "explore", "user": None, "claude": ""},
+                ],
+            )
+
+            self.assertEqual(loop.count_unread_autonomous_chat(chat_log, last_read), 3)
+
+    def test_missing_or_invalid_read_receipt_fails_open(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_log = tmp / "chat_log.jsonl"
+            last_read = tmp / "last_read.json"
+            self._write_jsonl(
+                chat_log,
+                [{"timestamp": "2026-07-25T10:03:00+09:00", "source": "observe", "user": None, "claude": "投稿"}],
+            )
+
+            self.assertEqual(loop.count_unread_autonomous_chat(chat_log, last_read), 0)
+            last_read.write_text('{"chat":"invalid"}', encoding="utf-8")
+            self.assertEqual(loop.count_unread_autonomous_chat(chat_log, last_read), 0)
+
+    def test_constraint_starts_at_three_without_enforcing_a_hard_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_log = tmp / "chat_log.jsonl"
+            last_read = tmp / "last_read.json"
+            last_read.write_text(
+                json.dumps({"chat": "2026-07-25T10:00:00+09:00"}),
+                encoding="utf-8",
+            )
+            rows = [
+                {
+                    "timestamp": f"2026-07-25T10:0{minute}:00+09:00",
+                    "source": "explore",
+                    "user": None,
+                    "claude": f"投稿{minute}",
+                }
+                for minute in range(1, 5)
+            ]
+            self._write_jsonl(chat_log, rows[:2])
+            count, note = loop.build_unread_chat_constraint(chat_log, last_read)
+            self.assertEqual((count, note), (2, ""))
+
+            self._write_jsonl(chat_log, rows[:3])
+            count, note = loop.build_unread_chat_constraint(chat_log, last_read)
+            self.assertEqual(count, 3)
+            self.assertIn("新規投稿は制限されます", note)
+
+            self._write_jsonl(chat_log, rows)
+            count, note = loop.build_unread_chat_constraint(chat_log, last_read)
+            self.assertEqual(count, 4)
+            self.assertIn("4件", note)
+
+    def test_malformed_rows_and_naive_timestamps_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            chat_log = tmp / "chat_log.jsonl"
+            last_read = tmp / "last_read.json"
+            last_read.write_text(
+                json.dumps({"chat": "2026-07-25T10:00:00+09:00"}),
+                encoding="utf-8",
+            )
+            chat_log.write_text(
+                "{broken\n"
+                + json.dumps(
+                    {"timestamp": "2026-07-25T10:03:00", "source": "observe", "user": None, "claude": "時差なし"},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(loop.count_unread_autonomous_chat(chat_log, last_read), 0)
+
+
 class LoopPyModeSelectionTests(unittest.TestCase):
     def test_choose_mode_respects_explicit_mode(self):
         self.assertEqual(loop.choose_mode({"MODE": "reflect"}), "reflect")
@@ -756,6 +855,37 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 self.assertEqual(rows[0]["private"], "静かに確認している")
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
+
+    def test_run_injects_unread_autonomous_chat_constraint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            env = self.make_env(tmp, "reflect")
+            log_dir = Path(env["EHA_LOG_DIR"])
+            log_dir.mkdir(parents=True)
+            (log_dir / "last_read.json").write_text(
+                json.dumps({"chat": "2026-07-25T10:00:00+09:00"}),
+                encoding="utf-8",
+            )
+            rows = [
+                {
+                    "timestamp": f"2026-07-25T10:0{minute}:00+09:00",
+                    "source": "reflect",
+                    "user": None,
+                    "claude": f"投稿{minute}",
+                }
+                for minute in range(1, 4)
+            ]
+            (log_dir / "chat_log.jsonl").write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            calls = []
+
+            result = loop.run(env, run_subprocess=self.fake_run_factory(calls))
+
+            self.assertEqual(result["context"]["unread_autonomous_chat_count"], 3)
+            self.assertIn("# チャット投稿の配送状態", result["context"]["sys_prompt"])
+            self.assertIn("緊急でないチャットへの新規投稿は制限されます", result["context"]["sys_prompt"])
 
     def test_run_propagates_final_invoke_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
