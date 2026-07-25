@@ -12,17 +12,17 @@ class WebUITests(unittest.TestCase):
 
     def test_badge_helpers_for_chat_and_voice(self):
         """getBadgeText と getBadgeClass が chat と voice に対して正しいラベル/クラスを返し、自律モードに対しては空を返すこと"""
-        
+
         def parse_helper(func_name):
             pattern = r"function\s+" + func_name + r"\s*\(\s*type\s*\)\s*\{([\s\S]*?)\}"
             match = re.search(pattern, self.app_js)
             self.assertIsNotNone(match, f"Function {func_name} not found in app.js")
             body = match.group(1)
-            
+
             cases = {}
             current_cases = []
             default_val = None
-            
+
             for line in body.splitlines():
                 line = line.strip()
                 case_match = re.match(r"case\s+'([^']+)'\s*:", line)
@@ -36,7 +36,7 @@ class WebUITests(unittest.TestCase):
                         cases[c] = val
                     current_cases = []
                     continue
-            
+
             default_match = re.search(r"default\s*:[\s\S]*?return\s+'([^']*)'\s*;", body)
             if default_match:
                 default_val = default_match.group(1)
@@ -70,7 +70,7 @@ class WebUITests(unittest.TestCase):
         cond_match = re.search(r"const\s+isAgentDirectResponse\s*=\s*(.*?);", map_body)
         self.assertIsNotNone(cond_match, "isAgentDirectResponse declaration not found")
         cond_expr = cond_match.group(1).replace(" ", "")
-        
+
         # !isUser かつ (type == 'chat' || source == 'chat' || source == 'voice') であることをアサーション
         self.assertIn("!isUser", cond_expr)
         self.assertIn("m.type==='chat'", cond_expr)
