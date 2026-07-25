@@ -84,7 +84,8 @@ class ChatRunIntegrationTests(unittest.TestCase):
             chat_log = log_dir / "chat_log.jsonl"
             self.assertTrue(chat_log.exists())
             record = json.loads(chat_log.read_text(encoding="utf-8").splitlines()[-1])
-            self.assertEqual(record["claude"], "こんにちは、元気ですよ")
+            self.assertEqual(record["agent"], "こんにちは、元気ですよ")
+            self.assertNotIn("claude", record)
             self.assertEqual(record["private"], "テスト内省")
             self.assertEqual(record["user"], "こんにちは")
 

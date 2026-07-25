@@ -111,7 +111,7 @@ def build_chat_history(chat_log_file, resident):
         try:
             d = json.loads(line)
             lines.append(f"{resident}さん: {d.get('user', '')}")
-            lines.append(f"Claude: {d.get('claude', '')}")
+            lines.append(f"Agent: {d.get('agent') or d.get('claude', '')}")
         except Exception:
             pass
     return "\n".join(lines) if lines else "なし"

@@ -211,6 +211,7 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(args[args.index("--effort") + 1], "low")
             self.assertEqual(args[args.index("--json-schema") + 1], schema)
             self.assertEqual(args[args.index("--allowedTools") + 1], "Read,mcp__ha__ha_get")
+            self.assertEqual(args[args.index("--disallowedTools") + 1], "Bash")
             self.assertIn("--mcp-config", args)
             self.assertEqual(args[args.index("--append-system-prompt") + 1], "system prompt")
             message = json.loads(payload["stdin"])
@@ -233,6 +234,7 @@ class InvokeAgentTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
+                sys.stdin.read()
                 Path({record.as_posix()!r}).write_text(
                     json.dumps({{"args": sys.argv[1:], "pwd": os.environ.get("PWD")}}, ensure_ascii=False),
                     encoding="utf-8",
@@ -485,6 +487,8 @@ class InvokeAgentTests(unittest.TestCase):
                 """
                 #!/usr/bin/env python3
                 import json
+                import sys
+                sys.stdin.read()
                 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "1", "name": "mcp__ha__ha_get", "input": {}}]}}, ensure_ascii=False))
                 print(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "1"}]}}, ensure_ascii=False))
                 print(json.dumps({"type": "result", "structured_output": {"ok": True}}, ensure_ascii=False))
@@ -517,6 +521,7 @@ class InvokeAgentTests(unittest.TestCase):
                 import sys
                 from pathlib import Path
 
+                sys.stdin.read()
                 Path({record.as_posix()!r}).write_text(
                     json.dumps({{"args": sys.argv[1:]}}, ensure_ascii=False),
                     encoding="utf-8",

@@ -109,7 +109,7 @@ jsonl_sources = [
     ("observations.jsonl",   "観察", lambda d: d.get("private", "")),
     ("observations_recovered.jsonl", "観察(復元)", lambda d: d.get("private", "")),
     ("explore.jsonl",        "探索", lambda d: f"{d.get('topic','')} {d.get('private','')}".strip()),
-    ("chat_log.jsonl",       "会話", lambda d: f"{resident}「{d.get('user','')}」/ Claude「{d.get('claude','')}」"),
+    ("chat_log.jsonl",       "会話", lambda d: f"{resident}「{d.get('user','')}」/ Agent「{d.get('agent') or d.get('claude','')}」"),
 ]
 raw_hits = []
 for fname, label, extract in jsonl_sources:

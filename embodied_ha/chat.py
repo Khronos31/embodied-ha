@@ -300,7 +300,7 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     chat_postprocess.record_presented_features(parsed, SCRIPT_DIR)
 
     print(f"[chat] {resident}さん: {user_msg}")
-    print(f"[chat] Claude: {reply}")
+    print(f"[chat] Agent: {reply}")
 
     chat_postprocess.consume_pending_proposal(parsed, pending_file)
     chat_prefs_update.update_preferences(parsed, prefs_file)
