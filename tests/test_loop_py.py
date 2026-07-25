@@ -934,6 +934,17 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 for tool in required_tools:
                     self.assertIn(tool, cfg.allowed_tools.split(","))
 
+    def test_autonomous_modes_do_not_gain_relationship_or_social_state_writes(self):
+        for mode in ("observe", "explore"):
+            with self.subTest(mode=mode):
+                tools = set(loop.mode_config(mode).allowed_tools.split(","))
+                self.assertNotIn("mcp__sociality__update_relationship", tools)
+                self.assertNotIn("mcp__sociality__update_social_state", tools)
+                # Existing person-boundary tools remain unchanged by this fix.
+                self.assertIn("mcp__sociality__record_boundary", tools)
+                self.assertIn("mcp__sociality__record_consent", tools)
+                self.assertIn("mcp__sociality__ingest_interaction", tools)
+
 
 if __name__ == "__main__":
     unittest.main()

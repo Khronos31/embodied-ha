@@ -1,4 +1,5 @@
 import contextlib
+import datetime as dt
 import io
 import json
 import os
@@ -17,6 +18,62 @@ import sociality_state as ss  # type: ignore  # noqa: E402
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_transient_awaiting_reply_expires_after_cooldown(self):
+        now = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))
+        with patch.object(ss, "_now", return_value=now):
+            active = {
+                "state": "awaiting_reply",
+                "awaiting_reply": True,
+                "last_turn_at": (now - dt.timedelta(seconds=89)).isoformat(),
+                "cooldown_seconds": 90,
+            }
+            expired = {**active, "last_turn_at": (now - dt.timedelta(seconds=90)).isoformat()}
+            self.assertTrue(ss._turn_taking_blocks(active, hour=12, focus_match=False))
+            self.assertFalse(ss._turn_taking_blocks(expired, hour=12, focus_match=False))
+
+    def test_transient_awaiting_reply_with_unusable_timestamp_fails_open(self):
+        now = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone(dt.timedelta(hours=9)))
+        cases = [
+            "",
+            "not-a-timestamp",
+            (now + dt.timedelta(minutes=5)).isoformat(),
+        ]
+        with patch.object(ss, "_now", return_value=now):
+            for last_turn_at in cases:
+                with self.subTest(last_turn_at=last_turn_at):
+                    turn = {
+                        "state": "awaiting_reply",
+                        "awaiting_reply": True,
+                        "last_turn_at": last_turn_at,
+                        "cooldown_seconds": 90,
+                    }
+                    self.assertFalse(ss._turn_taking_blocks(turn, hour=12, focus_match=False))
+
+    def test_transient_awaiting_reply_accepts_naive_local_timestamp(self):
+        tz = dt.timezone(dt.timedelta(hours=9))
+        now = dt.datetime(2026, 7, 25, 12, 0, tzinfo=tz)
+        turn = {
+            "state": "awaiting_reply",
+            "awaiting_reply": True,
+            "last_turn_at": "2026-07-25T11:59:30",
+            "cooldown_seconds": 90,
+        }
+        with patch.object(ss, "_now", return_value=now):
+            self.assertTrue(ss._turn_taking_blocks(turn, hour=12, focus_match=False))
+
+    def test_explicit_turn_boundaries_do_not_expire(self):
+        now = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone.utc)
+        with patch.object(ss, "_now", return_value=now):
+            for state in ("closed", "blocked", "held", "waiting"):
+                with self.subTest(state=state):
+                    turn = {
+                        "state": state,
+                        "awaiting_reply": True,
+                        "last_turn_at": (now - dt.timedelta(days=365)).isoformat(),
+                        "cooldown_seconds": 90,
+                    }
+                    self.assertTrue(ss._turn_taking_blocks(turn, hour=12, focus_match=False))
+
     def test_quiet_hours_speak_is_blocked(self):
         result = boundary.check(
             mode="watch",
