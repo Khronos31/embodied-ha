@@ -1365,6 +1365,66 @@ class InvokeAgentTests(unittest.TestCase):
                 ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
+    def test_agy_denies_command_without_mcp_and_preserves_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            settings_path = agy_home / ".gemini" / "antigravity-cli" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings_path.write_text(
+                json.dumps({
+                    "permissions": {
+                        "allow": ["read_file(*)"],
+                        "ask": ["browser(*)"],
+                    },
+                    "theme": "keep-me",
+                }),
+                encoding="utf-8",
+            )
+            os.chmod(settings_path, 0o640)
+            fake = self.write_project_fake_agy(tmpdir)
+
+            for _ in range(2):
+                result = self.run_wrapper(
+                    ["hello"],
+                    {
+                        "EHA_AGENT_HARNESS": "agy",
+                        "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                        "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(settings["theme"], "keep-me")
+            self.assertEqual(settings["permissions"]["allow"], ["read_file(*)"])
+            self.assertEqual(settings["permissions"]["ask"], ["browser(*)"])
+            self.assertEqual(settings["permissions"]["deny"], ["command(*)"])
+            self.assertEqual(settings_path.stat().st_mode & 0o777, 0o640)
+
+    def test_agy_command_deny_fails_closed_on_invalid_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            settings_path = agy_home / ".gemini" / "antigravity-cli" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            original = json.dumps({"permissions": {"deny": "command(*)"}})
+            settings_path.write_text(original, encoding="utf-8")
+            fake = self.write_project_fake_agy(tmpdir)
+
+            result = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("permissions.deny is not a list", result.stderr)
+            self.assertEqual(settings_path.read_text(encoding="utf-8"), original)
+
     def test_agy_grants_read_file_when_read_builtin_intended(self):
         # F9(2026-07-23): agy native read_file は config.json globalPermissionGrants の read_file(*) grant で
         # headless でも通る(実機確認)。Read 意図(--allowed-builtins Read)がある時だけ配布する。

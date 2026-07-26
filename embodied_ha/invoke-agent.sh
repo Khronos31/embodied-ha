@@ -318,6 +318,66 @@ validate_allowed_builtins() {
 
 validate_allowed_builtins
 
+# agy 1.1.4以降のheadless(-p)モードはsettings.jsonのpermissionsを反映する。
+# 未承認のnative commandは確認画面を出せず空応答で終了するため、EHA専用identityでは
+# command(*)を明示的にdenyする。deny後のエラーはモデルへ返るので、MCP/read_file等への
+# フォールバックと最終応答を継続できる(agy 1.1.7実機確認、2026-07-26)。
+ensure_agy_command_denied() {
+  local agy_home="$1"
+  local settings_dir="$agy_home/.gemini/antigravity-cli"
+  mkdir -p "$settings_dir"
+  local lock_file="$settings_dir/.eha-permissions.lock"
+  (
+    flock -x 200
+    AGY_SETTINGS_JSON="$settings_dir/settings.json" python3 - <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path = os.environ["AGY_SETTINGS_JSON"]
+
+
+def fail(message):
+    print(f"invoke-agent.sh: agy settings.json permissions merge failed: {message} ({path})", file=sys.stderr)
+    sys.exit(1)
+
+
+file_existed = os.path.exists(path)
+settings = {}
+if file_existed:
+    try:
+        with open(path, encoding="utf-8") as f:
+            settings = json.load(f)
+    except ValueError as e:
+        fail(f"existing file is not valid JSON: {e}")
+    if not isinstance(settings, dict):
+        fail("existing JSON root is not an object")
+permissions = settings.setdefault("permissions", {})
+if not isinstance(permissions, dict):
+    fail("permissions is not an object")
+deny = permissions.setdefault("deny", [])
+if not isinstance(deny, list):
+    fail("permissions.deny is not a list")
+if "command(*)" not in deny:
+    deny.append("command(*)")
+    mode = os.stat(path).st_mode & 0o777 if file_existed else 0o600
+    fd, tmp = tempfile.mkstemp(prefix=".settings.json.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+PY
+  ) 200>"$lock_file"
+}
+
 # agy 1.1.3のheadless(-p)モードは、MCPツール実行の確認をsettings.jsonの
 # permissions.allowではなく、config.jsonのuserSettings.globalPermissionGrants
 # (grant store)で判定する(settings.json側はエラーメッセージの案内に反して
@@ -637,6 +697,7 @@ run_agy() {
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
+  ensure_agy_command_denied "$agy_home"
   local site_dir=""
   local project_arg=()
   if [[ -n "$mcp_servers" && -z "$agent_site" ]]; then
