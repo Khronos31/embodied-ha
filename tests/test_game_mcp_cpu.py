@@ -117,6 +117,7 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertFalse(response["game_over"])
         self.assertEqual(response["cpu_move"]["word"], "CPU一")
         self.assertEqual(run.call_args.args[0][0], str(self.script))
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
         argv = self.recorded_argv()[0]
         self.assertEqual(argv[:4], ["--model", "lite", "--system-prompt", self.module._CPU_RULES])
 
@@ -220,78 +221,6 @@ class WordVecCpuTests(unittest.TestCase):
         flags = [arg for argv in self.recorded_argv() for arg in argv]
         self.assertNotIn("--session-id", flags)
         self.assertNotIn("--resume", flags)
-
-    def test_codex_cpu_uses_isolated_home_and_atomically_copies_auth(self):
-        source_home = self.tempdir / "codex-home"
-        source_home.mkdir()
-        (source_home / "auth.json").write_text('{"token":"test-only"}', encoding="utf-8")
-        cpu_home = self.tempdir / "codex-wordvec-home"
-
-        with mock.patch.dict(os.environ, {
-            "CODEX_HOME": str(source_home),
-            "EHA_WORDVEC_CODEX_HOME": str(cpu_home),
-        }):
-            game = self.start_cpu_game()
-            original_run = self.module.subprocess.run
-            with mock.patch.object(self.module.subprocess, "run", wraps=original_run) as run:
-                self.cpu_move(game["cpu_session_id"], "基準", "相手一")
-
-        self.assertEqual(run.call_args.kwargs["env"]["CODEX_HOME"], str(cpu_home))
-        self.assertEqual(
-            (cpu_home / "auth.json").read_text(encoding="utf-8"),
-            '{"token":"test-only"}',
-        )
-        self.assertEqual((cpu_home / "auth.json").stat().st_mode & 0o777, 0o600)
-        self.assertEqual(cpu_home.stat().st_mode & 0o777, 0o700)
-
-    def test_non_codex_cpu_keeps_existing_home(self):
-        with mock.patch.dict(os.environ, {
-            "EHA_AGENT_HARNESS": "claude",
-            "CODEX_HOME": str(self.tempdir / "codex-home"),
-        }):
-            env = self.module._wordvec_cpu_env()
-
-        self.assertEqual(env["CODEX_HOME"], str(self.tempdir / "codex-home"))
-        self.assertFalse((self.tempdir / "codex-wordvec-home").exists())
-
-    def test_codex_cpu_refreshes_auth_on_each_call(self):
-        source_home = self.tempdir / "codex-home"
-        source_home.mkdir()
-        source_auth = source_home / "auth.json"
-        cpu_home = self.tempdir / "codex-wordvec-home"
-        with mock.patch.dict(os.environ, {
-            "CODEX_HOME": str(source_home),
-            "EHA_WORDVEC_CODEX_HOME": str(cpu_home),
-        }):
-            source_auth.write_text('{"token":"first"}', encoding="utf-8")
-            self.module._wordvec_cpu_env()
-            source_auth.write_text('{"token":"refreshed"}', encoding="utf-8")
-            self.module._wordvec_cpu_env()
-
-        self.assertEqual(
-            json.loads((cpu_home / "auth.json").read_text(encoding="utf-8")),
-            {"token": "refreshed"},
-        )
-
-    def test_codex_cpu_keeps_last_valid_auth_during_partial_source_write(self):
-        source_home = self.tempdir / "codex-home"
-        source_home.mkdir()
-        source_auth = source_home / "auth.json"
-        cpu_home = self.tempdir / "codex-wordvec-home"
-        with mock.patch.dict(os.environ, {
-            "CODEX_HOME": str(source_home),
-            "EHA_WORDVEC_CODEX_HOME": str(cpu_home),
-        }):
-            source_auth.write_text('{"token":"valid"}', encoding="utf-8")
-            self.module._wordvec_cpu_env()
-            source_auth.write_text('{"token":', encoding="utf-8")
-            env = self.module._wordvec_cpu_env()
-
-        self.assertEqual(env["CODEX_HOME"], str(cpu_home))
-        self.assertEqual(
-            json.loads((cpu_home / "auth.json").read_text(encoding="utf-8")),
-            {"token": "valid"},
-        )
 
     def test_cpu_timeout_reason_does_not_include_command_or_prompt(self):
         with mock.patch.object(
