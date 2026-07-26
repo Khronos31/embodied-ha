@@ -16,8 +16,6 @@ import os
 import random
 import subprocess
 import sys
-import tempfile
-import time
 import uuid
 from html.parser import HTMLParser
 from typing import Any
@@ -410,81 +408,6 @@ def _delete_cpu_state(cpu_session_id: str) -> None:
         pass
 
 
-def _partial_output_text(value: str | bytes | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
-
-
-def _timeout_diagnostic(stdout: str | bytes | None, stderr: str | bytes | None, timeout: int) -> dict[str, Any]:
-    stdout_text = _partial_output_text(stdout)
-    stderr_text = _partial_output_text(stderr)
-    lines = [line.strip() for line in stderr_text.splitlines()]
-    header_prefixes = (
-        "workdir:", "model:", "provider:", "approval:", "sandbox:",
-        "reasoning effort:", "reasoning summaries:", "session id:",
-    )
-    lower = stderr_text.lower()
-    warning_categories = [
-        category
-        for category, needles in {
-            "auth": ("auth", "login", "credential"),
-            "bwrap": ("bubblewrap", "bwrap"),
-            "model": ("model",),
-            "network": ("network", "connect", "dns"),
-            "plugin": ("plugin", "catalog"),
-            "sandbox": ("sandbox",),
-        }.items()
-        if any(needle in lower for needle in needles)
-    ]
-    return {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "event": "timeout",
-        "timeout_seconds": timeout,
-        "stdout_bytes": len(stdout_text.encode("utf-8", errors="replace")),
-        "stderr_bytes": len(stderr_text.encode("utf-8", errors="replace")),
-        "codex_banner_seen": any(line.startswith("OpenAI Codex ") for line in lines),
-        "headers_seen": [
-            prefix[:-1]
-            for prefix in header_prefixes
-            if any(line.startswith(prefix) for line in lines)
-        ],
-        "user_marker_seen": "user" in lines,
-        "warning_categories": warning_categories,
-    }
-
-
-def _record_timeout_diagnostic(event: dict[str, Any]) -> None:
-    log_dir = os.environ.get("EHA_LOG_DIR", "").strip()
-    if not log_dir:
-        return
-    os.makedirs(log_dir, exist_ok=True)
-    path = os.path.join(log_dir, "wordvec_cpu_diagnostic.jsonl")
-    lines: list[str] = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()[-19:]
-    except FileNotFoundError:
-        pass
-    lines.append(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
-    fd, temp_path = tempfile.mkstemp(prefix=".wordvec_cpu_diagnostic.", dir=log_dir)
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, path)
-        os.chmod(path, 0o600)
-    finally:
-        try:
-            os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
-
-
 def _run_cpu_once(
     cmd: list[str],
     *,
@@ -499,8 +422,7 @@ def _run_cpu_once(
             timeout=timeout,
             cwd=_SCRIPT_DIR,
         )
-    except subprocess.TimeoutExpired as e:
-        _record_timeout_diagnostic(_timeout_diagnostic(e.stdout, e.stderr, timeout))
+    except subprocess.TimeoutExpired:
         return None, f"timeout after {timeout}s"
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"

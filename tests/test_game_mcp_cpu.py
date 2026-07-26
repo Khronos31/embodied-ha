@@ -240,57 +240,6 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertEqual(error, "timeout after 30s")
         self.assertNotIn("private prompt", error)
 
-    def test_timeout_diagnostic_records_only_allowlisted_stage_facts(self):
-        secret = "SENTINEL-SECRET"
-        event = self.module._timeout_diagnostic(
-            b"partial stdout " + secret.encode(),
-            (
-                "OpenAI Codex v0.145.0\n"
-                "workdir: /private/path\n"
-                "model: private-model\n"
-                "provider: openai\n"
-                "sandbox: read-only\n"
-                "session id: private-session\n"
-                "warning: bubblewrap failed at https://secret.invalid/?token=" + secret + "\n"
-                "user\n"
-                "private prompt " + secret
-            ).encode(),
-            30,
-        )
-
-        serialized = json.dumps(event)
-        self.assertTrue(event["codex_banner_seen"])
-        self.assertEqual(
-            event["headers_seen"],
-            ["workdir", "model", "provider", "sandbox", "session id"],
-        )
-        self.assertTrue(event["user_marker_seen"])
-        self.assertIn("bwrap", event["warning_categories"])
-        self.assertNotIn(secret, serialized)
-        self.assertNotIn("private", serialized)
-        self.assertNotIn("https://", serialized)
-
-    def test_timeout_diagnostic_accepts_none_text_and_invalid_utf8_bytes(self):
-        event = self.module._timeout_diagnostic(None, b"\xffOpenAI Codex v0.145.0", 12)
-
-        self.assertEqual(event["stdout_bytes"], 0)
-        self.assertGreater(event["stderr_bytes"], 0)
-        self.assertFalse(event["codex_banner_seen"])
-        self.assertEqual(event["timeout_seconds"], 12)
-
-    def test_timeout_diagnostic_file_is_bounded_and_private(self):
-        log_dir = self.tempdir / "log"
-        with mock.patch.dict(os.environ, {"EHA_LOG_DIR": str(log_dir)}):
-            for index in range(25):
-                self.module._record_timeout_diagnostic({"event": "timeout", "index": index})
-
-        path = log_dir / "wordvec_cpu_diagnostic.jsonl"
-        lines = path.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 20)
-        self.assertEqual(json.loads(lines[0])["index"], 5)
-        self.assertEqual(json.loads(lines[-1])["index"], 24)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
     def test_cpu_no_output_is_concession_and_player_win(self):
         game = self.start_cpu_game()
         session_id = game["cpu_session_id"]
