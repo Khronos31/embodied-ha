@@ -6,6 +6,13 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.9] - 2026-07-26
+
+### Fixed / 修正
+
+- Antigravityの非対話ループが、未承認の`command`ツールへ迂回して空応答になる問題を抑制しました。
+  Prevented Antigravity headless loops from falling back to the unapproved `command` tool and returning an empty response.
+
 ## [2.0.4] - 2026-07-25
 
 ### Changed / 変更
