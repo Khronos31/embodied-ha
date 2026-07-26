@@ -23,7 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
-from mcp_lib import serve, text
+from mcp_lib import log, serve, text
 
 # /data/python-packages に永続インストールされた gensim 等を参照
 _pkg_dir = "/data/python-packages"
@@ -408,17 +408,24 @@ def _delete_cpu_state(cpu_session_id: str) -> None:
         pass
 
 
-def _run_cpu_once(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
+def _run_cpu_once(
+    cmd: list[str],
+    *,
+    timeout: int = 30,
+) -> tuple[str | None, str]:
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=_SCRIPT_DIR,
         )
+    except subprocess.TimeoutExpired:
+        return None, f"timeout after {timeout}s"
     except Exception as e:
-        return None, str(e)
+        return None, f"{type(e).__name__}: {e}"
 
     stdout = (result.stdout or "").strip()
     stderr = (result.stderr or "").strip()
@@ -435,7 +442,11 @@ def _run_cpu_once(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str
     return None, "; ".join(reasons) if reasons else "CPU call failed"
 
 
-def _run_cpu_with_retry(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
+def _run_cpu_with_retry(
+    cmd: list[str],
+    *,
+    timeout: int = 30,
+) -> tuple[str | None, str]:
     out, err = _run_cpu_once(cmd, timeout=timeout)
     if out:
         return out, ""
@@ -603,8 +614,9 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
 
         state = _load_cpu_state(cpu_session_id, start_key)
         cpu_msg = _cpu_state_message(state, answer_key, sim_answer)
-        cpu_word, _ = _ask_cpu_word(cpu_msg)
+        cpu_word, cpu_error = _ask_cpu_word(cpu_msg)
         if not cpu_word:
+            log(f"[game-mcp][wordvec-cpu] initial response failed: {cpu_error}")
             _delete_cpu_state(cpu_session_id)
             return _cpu_concedes(
                 start_key,
@@ -615,8 +627,9 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
         cpu_key = _lookup(kv, cpu_word)
         if cpu_key is None:
             retry_msg = f"{cpu_msg}\n「{cpu_word}」は辞書に無い。実在する別の日本語の単語を1つだけ。"
-            cpu_word, _ = _ask_cpu_word(retry_msg)
+            cpu_word, cpu_error = _ask_cpu_word(retry_msg)
             if not cpu_word:
+                log(f"[game-mcp][wordvec-cpu] vocabulary retry failed: {cpu_error}")
                 _delete_cpu_state(cpu_session_id)
                 return _cpu_concedes(
                     start_key,

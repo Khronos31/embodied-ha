@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -116,6 +117,7 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertFalse(response["game_over"])
         self.assertEqual(response["cpu_move"]["word"], "CPU一")
         self.assertEqual(run.call_args.args[0][0], str(self.script))
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
         argv = self.recorded_argv()[0]
         self.assertEqual(argv[:4], ["--model", "lite", "--system-prompt", self.module._CPU_RULES])
 
@@ -219,6 +221,24 @@ class WordVecCpuTests(unittest.TestCase):
         flags = [arg for argv in self.recorded_argv() for arg in argv]
         self.assertNotIn("--session-id", flags)
         self.assertNotIn("--resume", flags)
+
+    def test_cpu_timeout_reason_does_not_include_command_or_prompt(self):
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(
+                ["invoke-agent.sh", "private prompt"],
+                timeout=30,
+            ),
+        ):
+            out, error = self.module._run_cpu_once(
+                ["invoke-agent.sh", "private prompt"],
+                timeout=30,
+            )
+
+        self.assertIsNone(out)
+        self.assertEqual(error, "timeout after 30s")
+        self.assertNotIn("private prompt", error)
 
     def test_cpu_no_output_is_concession_and_player_win(self):
         game = self.start_cpu_game()
