@@ -18,13 +18,12 @@ import subprocess
 import sys
 import uuid
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
-from mcp_lib import log, serve, text
+from mcp_lib import serve, text
 
 # /data/python-packages に永続インストールされた gensim 等を参照
 _pkg_dir = "/data/python-packages"
@@ -409,65 +408,7 @@ def _delete_cpu_state(cpu_session_id: str) -> None:
         pass
 
 
-def _wordvec_cpu_env() -> dict[str, str]:
-    env = os.environ.copy()
-    if env.get("EHA_AGENT_HARNESS") != "codex":
-        return env
-
-    source_home_raw = env.get("CODEX_HOME", "").strip()
-    if not source_home_raw:
-        return env
-    source_home = Path(source_home_raw)
-    cpu_home = Path(
-        env.get("EHA_WORDVEC_CODEX_HOME", "").strip()
-        or source_home.parent / "codex-wordvec-home"
-    )
-    if cpu_home == source_home:
-        return env
-
-    source_auth = source_home / "auth.json"
-    if not source_auth.is_file():
-        return env
-
-    cpu_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(cpu_home, 0o700)
-    target_auth = cpu_home / "auth.json"
-    try:
-        auth_bytes = source_auth.read_bytes()
-        auth_data = json.loads(auth_bytes)
-        if not isinstance(auth_data, dict):
-            raise ValueError("auth root is not an object")
-    except (OSError, ValueError, json.JSONDecodeError):
-        # Codex may be replacing auth.json during token refresh. Keep the last
-        # complete CPU copy instead of installing a partial credential.
-        if target_auth.is_file():
-            env["CODEX_HOME"] = str(cpu_home)
-        return env
-
-    temp_auth = cpu_home / f".auth.json.{uuid.uuid4().hex}.tmp"
-    try:
-        with temp_auth.open("xb") as f:
-            f.write(auth_bytes)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(temp_auth, 0o600)
-        os.replace(temp_auth, target_auth)
-        os.chmod(target_auth, 0o600)
-    finally:
-        try:
-            temp_auth.unlink()
-        except FileNotFoundError:
-            pass
-    env["CODEX_HOME"] = str(cpu_home)
-    return env
-
-
-def _run_cpu_once(
-    cmd: list[str],
-    *,
-    timeout: int = 30,
-    env: dict[str, str] | None = None,
-) -> tuple[str | None, str]:
+def _run_cpu_once(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
     try:
         result = subprocess.run(
             cmd,
@@ -475,12 +416,9 @@ def _run_cpu_once(
             text=True,
             timeout=timeout,
             cwd=_SCRIPT_DIR,
-            env=env,
         )
-    except subprocess.TimeoutExpired:
-        return None, f"timeout after {timeout}s"
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+        return None, str(e)
 
     stdout = (result.stdout or "").strip()
     stderr = (result.stderr or "").strip()
@@ -497,16 +435,11 @@ def _run_cpu_once(
     return None, "; ".join(reasons) if reasons else "CPU call failed"
 
 
-def _run_cpu_with_retry(
-    cmd: list[str],
-    *,
-    timeout: int = 30,
-    env: dict[str, str] | None = None,
-) -> tuple[str | None, str]:
-    out, err = _run_cpu_once(cmd, timeout=timeout, env=env)
+def _run_cpu_with_retry(cmd: list[str], *, timeout: int = 30) -> tuple[str | None, str]:
+    out, err = _run_cpu_once(cmd, timeout=timeout)
     if out:
         return out, ""
-    retry_out, retry_err = _run_cpu_once(cmd, timeout=timeout, env=env)
+    retry_out, retry_err = _run_cpu_once(cmd, timeout=timeout)
     if retry_out:
         return retry_out, ""
     return None, retry_err or err or "CPU call failed"
@@ -562,7 +495,7 @@ def _ask_cpu_word(message: str) -> tuple[str | None, str]:
     ]
     # 30秒×最大2回×(初回+語彙外リトライ)=1手あたり最大約120秒(旧claude版と同じ上限。
     # 実測は4〜7秒/回)。60秒にするとchat側の全体タイムアウト300秒へ迫るため据え置き。
-    out, err = _run_cpu_with_retry(cmd, timeout=30, env=_wordvec_cpu_env())
+    out, err = _run_cpu_with_retry(cmd, timeout=30)
     if not out:
         return None, err
     word = _clean_cpu_word(out)
@@ -670,9 +603,8 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
 
         state = _load_cpu_state(cpu_session_id, start_key)
         cpu_msg = _cpu_state_message(state, answer_key, sim_answer)
-        cpu_word, cpu_error = _ask_cpu_word(cpu_msg)
+        cpu_word, _ = _ask_cpu_word(cpu_msg)
         if not cpu_word:
-            log(f"[game-mcp][wordvec-cpu] initial response failed: {cpu_error}")
             _delete_cpu_state(cpu_session_id)
             return _cpu_concedes(
                 start_key,
@@ -683,9 +615,8 @@ def game_wordvec_race_cpu_move(args: dict[str, Any]):
         cpu_key = _lookup(kv, cpu_word)
         if cpu_key is None:
             retry_msg = f"{cpu_msg}\n「{cpu_word}」は辞書に無い。実在する別の日本語の単語を1つだけ。"
-            cpu_word, cpu_error = _ask_cpu_word(retry_msg)
+            cpu_word, _ = _ask_cpu_word(retry_msg)
             if not cpu_word:
-                log(f"[game-mcp][wordvec-cpu] vocabulary retry failed: {cpu_error}")
                 _delete_cpu_state(cpu_session_id)
                 return _cpu_concedes(
                     start_key,
