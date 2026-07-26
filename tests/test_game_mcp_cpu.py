@@ -254,6 +254,45 @@ class WordVecCpuTests(unittest.TestCase):
         self.assertEqual(env["CODEX_HOME"], str(self.tempdir / "codex-home"))
         self.assertFalse((self.tempdir / "codex-wordvec-home").exists())
 
+    def test_codex_cpu_refreshes_auth_on_each_call(self):
+        source_home = self.tempdir / "codex-home"
+        source_home.mkdir()
+        source_auth = source_home / "auth.json"
+        cpu_home = self.tempdir / "codex-wordvec-home"
+        with mock.patch.dict(os.environ, {
+            "CODEX_HOME": str(source_home),
+            "EHA_WORDVEC_CODEX_HOME": str(cpu_home),
+        }):
+            source_auth.write_text('{"token":"first"}', encoding="utf-8")
+            self.module._wordvec_cpu_env()
+            source_auth.write_text('{"token":"refreshed"}', encoding="utf-8")
+            self.module._wordvec_cpu_env()
+
+        self.assertEqual(
+            json.loads((cpu_home / "auth.json").read_text(encoding="utf-8")),
+            {"token": "refreshed"},
+        )
+
+    def test_codex_cpu_keeps_last_valid_auth_during_partial_source_write(self):
+        source_home = self.tempdir / "codex-home"
+        source_home.mkdir()
+        source_auth = source_home / "auth.json"
+        cpu_home = self.tempdir / "codex-wordvec-home"
+        with mock.patch.dict(os.environ, {
+            "CODEX_HOME": str(source_home),
+            "EHA_WORDVEC_CODEX_HOME": str(cpu_home),
+        }):
+            source_auth.write_text('{"token":"valid"}', encoding="utf-8")
+            self.module._wordvec_cpu_env()
+            source_auth.write_text('{"token":', encoding="utf-8")
+            env = self.module._wordvec_cpu_env()
+
+        self.assertEqual(env["CODEX_HOME"], str(cpu_home))
+        self.assertEqual(
+            json.loads((cpu_home / "auth.json").read_text(encoding="utf-8")),
+            {"token": "valid"},
+        )
+
     def test_cpu_timeout_reason_does_not_include_command_or_prompt(self):
         with mock.patch.object(
             self.module.subprocess,

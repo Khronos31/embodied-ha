@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import random
-import shutil
 import subprocess
 import sys
 import uuid
@@ -433,11 +432,27 @@ def _wordvec_cpu_env() -> dict[str, str]:
     cpu_home.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(cpu_home, 0o700)
     target_auth = cpu_home / "auth.json"
+    try:
+        auth_bytes = source_auth.read_bytes()
+        auth_data = json.loads(auth_bytes)
+        if not isinstance(auth_data, dict):
+            raise ValueError("auth root is not an object")
+    except (OSError, ValueError, json.JSONDecodeError):
+        # Codex may be replacing auth.json during token refresh. Keep the last
+        # complete CPU copy instead of installing a partial credential.
+        if target_auth.is_file():
+            env["CODEX_HOME"] = str(cpu_home)
+        return env
+
     temp_auth = cpu_home / f".auth.json.{uuid.uuid4().hex}.tmp"
     try:
-        shutil.copyfile(source_auth, temp_auth)
+        with temp_auth.open("xb") as f:
+            f.write(auth_bytes)
+            f.flush()
+            os.fsync(f.fileno())
         os.chmod(temp_auth, 0o600)
         os.replace(temp_auth, target_auth)
+        os.chmod(target_auth, 0o600)
     finally:
         try:
             temp_auth.unlink()
