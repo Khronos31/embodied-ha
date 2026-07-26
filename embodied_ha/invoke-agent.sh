@@ -701,6 +701,12 @@ run_agy() {
   if [[ -n "$system_prompt" ]]; then
     full_prompt="あなたへの指示:"$'\n'"${system_prompt}"$'\n\n'"${full_prompt}"
   fi
+  if [[ -n "$mcp_servers" ]]; then
+    # agy headless は未承認の native command をモデルが選ぶと、確認を出せず
+    # ターン全体を空応答で終了する。接続済みMCPへ直行させ、許可済みの
+    # read_file/WebSearch等まで禁止しない。ツール失敗時の補完も防ぐ。
+    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"必要な操作には、接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（read_file、WebSearch等）を直接使用してください。native command、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
+  fi
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
   fi

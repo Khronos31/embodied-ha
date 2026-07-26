@@ -1254,6 +1254,33 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertIn("--new-project", records[0]["args"])
             self.assertEqual(records[0]["cwd"], str(site_dir))
+            prompt = records[0]["args"][-1]
+            self.assertIn("【Antigravity headlessでのツール利用】", prompt)
+            self.assertIn("native command、shell、terminal", prompt)
+            self.assertIn("read_file、WebSearch等", prompt)
+            self.assertIn("確認できない事実は推測で補わず", prompt)
+
+    def test_agy_without_mcp_does_not_add_headless_tool_instruction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = self.write_project_fake_agy(tmpdir)
+
+            result = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            records = self.read_agy_records(tmpdir)
+            self.assertEqual(len(records), 1)
+            self.assertNotIn(
+                "【Antigravity headlessでのツール利用】",
+                records[0]["args"][-1],
+            )
 
     def test_agy_reuses_existing_project_id(self):
         with tempfile.TemporaryDirectory() as tmp:
