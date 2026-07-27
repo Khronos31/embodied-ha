@@ -283,9 +283,12 @@ for line in raw.splitlines():
         event = json.loads(line)
     except Exception:
         continue
-    if event.get("type") == "result":
+    if isinstance(event, dict) and event.get("type") == "result":
         structured = event.get("structured_output")
         result = json.dumps(structured, ensure_ascii=False) if structured is not None else event.get("result", "")
+    elif isinstance(event, str):
+        # agy may JSON-encode its schema-shaped final response as a string.
+        result = event
 if not result:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     result = m.group(0) if m else raw
@@ -317,6 +320,70 @@ validate_allowed_builtins() {
 }
 
 validate_allowed_builtins
+
+# agy 1.1.4以降のheadless(-p)モードはsettings.jsonのpermissionsを反映する。
+# 未承認のnative command/write_fileは確認画面を出せず空応答で終了するため、
+# EHA専用identityでは両方を明示的にdenyする。deny後のエラーはモデルへ返るので、MCP/read_file等への
+# フォールバックと最終応答を継続できる(agy 1.1.7実機確認、2026-07-26)。
+ensure_agy_native_mutations_denied() {
+  local agy_home="$1"
+  local settings_dir="$agy_home/.gemini/antigravity-cli"
+  mkdir -p "$settings_dir"
+  local lock_file="$settings_dir/.eha-permissions.lock"
+  (
+    flock -x 200
+    AGY_SETTINGS_JSON="$settings_dir/settings.json" python3 - <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path = os.environ["AGY_SETTINGS_JSON"]
+
+
+def fail(message):
+    print(f"invoke-agent.sh: agy settings.json permissions merge failed: {message} ({path})", file=sys.stderr)
+    sys.exit(1)
+
+
+file_existed = os.path.exists(path)
+settings = {}
+if file_existed:
+    try:
+        with open(path, encoding="utf-8") as f:
+            settings = json.load(f)
+    except ValueError as e:
+        fail(f"existing file is not valid JSON: {e}")
+    if not isinstance(settings, dict):
+        fail("existing JSON root is not an object")
+permissions = settings.setdefault("permissions", {})
+if not isinstance(permissions, dict):
+    fail("permissions is not an object")
+deny = permissions.setdefault("deny", [])
+if not isinstance(deny, list):
+    fail("permissions.deny is not a list")
+changed = False
+for rule in ("command(*)", "write_file(*)"):
+    if rule not in deny:
+        deny.append(rule)
+        changed = True
+if changed:
+    mode = os.stat(path).st_mode & 0o777 if file_existed else 0o600
+    fd, tmp = tempfile.mkstemp(prefix=".settings.json.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+PY
+  ) 200>"$lock_file"
+}
 
 # agy 1.1.3のheadless(-p)モードは、MCPツール実行の確認をsettings.jsonの
 # permissions.allowではなく、config.jsonのuserSettings.globalPermissionGrants
@@ -637,6 +704,7 @@ run_agy() {
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
+  ensure_agy_native_mutations_denied "$agy_home"
   local site_dir=""
   local project_arg=()
   if [[ -n "$mcp_servers" && -z "$agent_site" ]]; then
@@ -700,6 +768,12 @@ run_agy() {
   fi
   if [[ -n "$system_prompt" ]]; then
     full_prompt="あなたへの指示:"$'\n'"${system_prompt}"$'\n\n'"${full_prompt}"
+  fi
+  if [[ -n "$mcp_servers" ]]; then
+    # agy headless は未承認の native command/write_file をモデルが選ぶと、確認を出せず
+    # ターン全体を空応答で終了する。接続済みMCPへ直行させ、許可済みの
+    # read_file/WebSearch等まで禁止しない。ツール失敗時の補完も防ぐ。
+    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"必要な操作には、接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（read_file、WebSearch等）を直接使用してください。native command、write_file、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
   fi
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
