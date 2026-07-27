@@ -1256,7 +1256,7 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(records[0]["cwd"], str(site_dir))
             prompt = records[0]["args"][-1]
             self.assertIn("【Antigravity headlessでのツール利用】", prompt)
-            self.assertIn("native command、shell、terminal", prompt)
+            self.assertIn("native command、write_file、shell、terminal", prompt)
             self.assertIn("read_file、WebSearch等", prompt)
             self.assertIn("確認できない事実は推測で補わず", prompt)
 
@@ -1365,7 +1365,7 @@ class InvokeAgentTests(unittest.TestCase):
                 ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
-    def test_agy_denies_command_without_mcp_and_preserves_settings(self):
+    def test_agy_denies_native_mutations_without_mcp_and_preserves_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
@@ -1399,10 +1399,13 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(settings["theme"], "keep-me")
             self.assertEqual(settings["permissions"]["allow"], ["read_file(*)"])
             self.assertEqual(settings["permissions"]["ask"], ["browser(*)"])
-            self.assertEqual(settings["permissions"]["deny"], ["command(*)"])
+            self.assertEqual(
+                settings["permissions"]["deny"],
+                ["command(*)", "write_file(*)"],
+            )
             self.assertEqual(settings_path.stat().st_mode & 0o777, 0o640)
 
-    def test_agy_command_deny_fails_closed_on_invalid_settings(self):
+    def test_agy_native_mutation_deny_fails_closed_on_invalid_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
@@ -1424,6 +1427,34 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("permissions.deny is not a list", result.stderr)
             self.assertEqual(settings_path.read_text(encoding="utf-8"), original)
+
+    def test_agy_extracts_json_encoded_string_response(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                print(json.dumps('{"private":"考えたこと","speak":null}', ensure_ascii=False))
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                {"private": "考えたこと", "speak": None},
+            )
 
     def test_agy_grants_read_file_when_read_builtin_intended(self):
         # F9(2026-07-23): agy native read_file は config.json globalPermissionGrants の read_file(*) grant で
