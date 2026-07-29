@@ -6,6 +6,24 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.11] - 2026-07-29
+
+### Fixed / 修正
+
+- Web UI から設定を保存すると、入力欄を持たない項目（カメラの PTZ 設定、スピーカーの
+  `media_player` など）が毎回黙って消えていた問題を修正しました。保存で送られてこなかった
+  キーは、これまでの値をそのまま残します。項目そのものの削除はこれまでどおり反映されます。
+  なお、すでに失われた値は戻りません。
+  Fixed the Web UI settings save silently dropping keys that have no input field (such as a camera's
+  PTZ settings or a speaker's `media_player`). Keys absent from the save request now keep their
+  previous values, while deleting an entry still works as before. Values already lost are not restored.
+- 日誌（daybook）のまとめが実際には作られていないのに「昨日まで済んだ」印だけが進んでしまい、
+  以後ずっと日誌が作られなくなる問題を修正しました。生存確認も、印だけでなく日誌ファイルの
+  有無を見るようになりました。
+  Fixed the daybook rollup advancing its "done through yesterday" marker even when no daybook was
+  actually written, which silently stopped all later rollups. The liveness check now also looks for
+  the daybook files themselves, not just the marker.
+
 ## [2.0.10] - 2026-07-29
 
 ### Security / セキュリティ
