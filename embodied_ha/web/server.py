@@ -31,6 +31,7 @@ import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from tts_options import validate_tts_options  # type: ignore  # noqa: E402
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
@@ -2169,7 +2170,18 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "設定データが空か無効です"}, 400)
                     return
                 validate_tts_options(body.get("tts_options"))
-                atomic_write(PREFS_FILE, json.dumps(body, ensure_ascii=False, indent=2))
+                # 全置換すると、UIがフォームに持っていないキーが保存のたびに消える(findings F-21)。
+                # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。
+                existing, ok = _load_prefs_for_update(PREFS_FILE)
+                if not ok:
+                    self.send_json(
+                        {"error": "既存の preferences.json を読めないため保存を中止しました"
+                                  "（壊れたファイルを上書きしないため）"},
+                        500,
+                    )
+                    return
+                merged = prefs_merge.merge_preferences(existing, body)
+                atomic_write(PREFS_FILE, json.dumps(merged, ensure_ascii=False, indent=2))
                 self.send_json({"ok": True})
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
                 self.send_json({"error": str(e)}, 400)

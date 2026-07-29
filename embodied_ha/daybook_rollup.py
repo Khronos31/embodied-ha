@@ -421,7 +421,11 @@ def main() -> None:
     else:
         start_d = yesterday_d
     if start_d > yesterday_d:
-        _write_marker(daybook_marker, today)
+        # マーカーは「日誌を作った最後の日」。ここで today を書くと、まだ終わっていない
+        # 今日の日誌ができたことになり、翌日は start_d = today+1 > yesterday でまた即スキップ——
+        # 一度ずれると永久に空振りする（2026-07-05 以降、実際にそうなっていた）。
+        # yesterday なら「昨日まで済んでいる」を正しく表し、この分岐は冪等になる。
+        _write_marker(daybook_marker, yesterday_d.isoformat())
         raise SystemExit(0)
 
     max_days = 7
@@ -486,7 +490,9 @@ def main() -> None:
     target_day = next((d for d in target_dates if entries_by_day.get(d)), None)
     new_marker = None
     if target_day is None:
-        new_marker = today
+        # 要約するものが無かった日。ここでも today ではなく yesterday。
+        # today にすると翌日以降ずっと即スキップになる。
+        new_marker = yesterday_d.isoformat()
     else:
         if ms.daybook_exists(log_dir, target_day):
             daybook = ms.load_daybook(log_dir, target_day)
@@ -496,7 +502,9 @@ def main() -> None:
             else:
                 print(f"[DAYBOOK] 既存の structured daybook を再利用: {target_day}")
             _maybe_consolidate(log_dir, target_day, target_day)
-            new_marker = today if target_day == yesterday_d.isoformat() else target_day
+            # マーカーは「日誌を作った最後の日」。ここで today を書くと、その日自身が
+            # 二度と要約されない（翌日は start_d = today+1 > yesterday で即スキップ）。
+            new_marker = target_day
         else:
             draft = _summarize_with_claude(target_day, entries_by_day[target_day])
             if not draft:
@@ -504,7 +512,9 @@ def main() -> None:
             normalized = _normalize_draft(target_day, entries_by_day[target_day], draft)
             _write_daybook(log_dir, memory_file, target_day, normalized, entries_by_day[target_day])
             _maybe_consolidate(log_dir, target_day, target_day)
-            new_marker = today if target_day == yesterday_d.isoformat() else target_day
+            # マーカーは「日誌を作った最後の日」。ここで today を書くと、その日自身が
+            # 二度と要約されない（翌日は start_d = today+1 > yesterday で即スキップ）。
+            new_marker = target_day
 
     if new_marker:
         _write_marker(daybook_marker, new_marker)

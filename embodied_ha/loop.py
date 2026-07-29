@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -927,7 +927,16 @@ def ingest_observe_scene(parsed: dict[str, Any], log_dir: str) -> None:
 def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=subprocess.run) -> None:
     marker = Path(paths.daybook_marker)
     last = _read_text(marker).strip() if marker.exists() else ""
-    if last == today or not (Path(paths.observation_log).exists() and Path(paths.observation_log).stat().st_size > 0):
+    # マーカーは「日誌を作った最後の日」。昨日まで済んでいれば今日やることは無い。
+    # 以前は `last == today` で見ていたが、マーカーが today を指すこと自体が
+    # 空振りの原因だった（daybook_rollup 側で yesterday を書くよう直した）。
+    try:
+        yesterday = (datetime.fromisoformat(today).date() - timedelta(days=1)).isoformat()
+    except ValueError:
+        yesterday = ""
+    if (yesterday and last >= yesterday) or not (
+        Path(paths.observation_log).exists() and Path(paths.observation_log).stat().st_size > 0
+    ):
         return
     print("[DAYBOOK] 前日分を要約中...")
     env = {
