@@ -67,5 +67,37 @@ class HaGetTests(unittest.TestCase):
         self.assertIn("22", self._json(result))
 
 
+class HaGetPathTraversalTests(unittest.TestCase):
+    """`path` で API ルートの外（Supervisor API）へ抜けられないこと。
+
+    curl は送信前に `..` を正規化するので、`ha-mcp` 側で弾かないと
+    `http://supervisor/core/api/../../addons/self/info` が
+    `http://supervisor/addons/self/info` として送られる（実測で到達を確認済み）。
+    """
+
+    def setUp(self):
+        self.ha_mcp = load_ha_mcp_module()
+
+    @mock.patch("subprocess.run")
+    def test_traversal_is_rejected_before_curl(self, mock_run):
+        result, is_error = self.ha_mcp.ha_get({"path": "../../addons/self/info"})
+        self.assertTrue(is_error)
+        self.assertIn("..", result[0]["text"])
+        mock_run.assert_not_called()  # curl まで到達させない
+
+    @mock.patch("subprocess.run")
+    def test_percent_encoded_traversal_is_rejected(self, mock_run):
+        _, is_error = self.ha_mcp.ha_get({"path": "%2e%2e/addons/self/info"})
+        self.assertTrue(is_error)
+        mock_run.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    def test_normal_path_still_reaches_curl(self, mock_run):
+        mock_run.return_value = mock.Mock(returncode=0, stdout="{}")
+        self.ha_mcp.ha_get({"path": "history/period?filter_entity_id=sensor.x"})
+        called_url = mock_run.call_args[0][0][-1]
+        self.assertTrue(called_url.endswith("/history/period?filter_entity_id=sensor.x"))
+
+
 if __name__ == "__main__":
     unittest.main()
