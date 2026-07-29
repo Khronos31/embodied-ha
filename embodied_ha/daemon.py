@@ -810,6 +810,11 @@ try:
             gap = (_dt.date.today() - _dt.date.fromisoformat(last)).days
             if gap >= 2:
                 print(f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）", flush=True)
+            # マーカーだけを見ると、マーカーは進むのに日誌ができていない状態を見逃す
+            # （2026-07-05〜07-29 が実際にそうだった）。**成果物の実在**を確かめる。
+            elif not os.path.exists(os.path.join(_LOG_DIR, "memory", "daybooks", f"{last}.json")):
+                print(f"[daemon] 警告: daybook マーカーは {last} ですが、その日の日誌ファイルがありません"
+                      "（マーカーだけが進んでいる疑い）", flush=True)
 except Exception:
     pass
 # メインスレッドを生かし続ける
