@@ -6,6 +6,26 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.12] - 2026-07-29
+
+### Fixed / 修正
+
+- 起動のタイミング次第で、アドオンは動いているのに自律ループ・会話・MQTT受信が
+  いつまでも始まらないことがある問題を修正しました。準備完了の確認と実際の起動の間に
+  状態が変わると起動を見送るのですが、そのあと誰も再試行していませんでした。
+  Fixed a startup race where the add-on could stay running while the autonomous loop, chat,
+  and MQTT listeners never started. When readiness changed between the check and the actual
+  start, the start was skipped and nothing retried it.
+
+### Changed / 変更
+
+- どのAIで動かしていても、自律ループ中にファイルを読めるようになりました。
+  これまでは Claude と Antigravity では実際には読めていた一方、Codex だけ読めておらず、
+  AIによって挙動が違っていました。
+  Made file reading available during autonomous loops regardless of which AI runs your
+  companion. Previously it effectively worked on Claude and Antigravity but not on Codex,
+  so behaviour differed by harness.
+
 ## [2.0.11] - 2026-07-29
 
 ### Fixed / 修正
