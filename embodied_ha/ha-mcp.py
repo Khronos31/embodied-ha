@@ -14,6 +14,7 @@ env: HA_URL, SUPERVISOR_TOKEN
 import os
 import subprocess
 
+from ha_api_path import api_path_error
 from mcp_lib import serve, text
 
 HA_URL = os.environ["HA_URL"].rstrip("/")
@@ -25,8 +26,10 @@ def _token():
 
 def ha_get(args):
     path = (args.get("path") or "").strip().lstrip("/")
-    if not path:
-        return [text("path が空です（例: states, states/climate.xxx, services）")], True
+    # curl は送信前に `..` を正規化するので、検証しないと HA_URL より上（Supervisor API）へ抜ける。
+    reason = api_path_error(path)
+    if reason:
+        return [text(reason)], True
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "15",
          "-H", f"Authorization: Bearer {_token()}",

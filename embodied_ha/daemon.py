@@ -24,6 +24,7 @@ import claude_setup
 import codex_setup
 import harness_state
 import harness_status
+import invoke_failure
 from instance_identity import MQTT_PREFIX
 from path_env import build_tools_path
 
@@ -66,6 +67,7 @@ _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG
 _setup_wait_notification_sent = False
 _setup_wait_notification_lock = threading.Lock()
 _SETUP_WAIT_NOTIFICATION_ID = f"{MQTT_PREFIX}_harness_setup_required"
+_LOOP_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_loop_invoke_failing"
 
 
 def load_enabled_mics() -> list[dict]:
@@ -180,6 +182,54 @@ def notify_setup_waiting() -> None:
             print("[daemon] setup-wait notification failed", flush=True)
         else:
             _setup_wait_notification_sent = True
+
+
+def notify_loop_failing(state: dict) -> bool:
+    """自律ループが連続で起動できないことを HA の通知へ上げる。
+
+    2026-07-27 の認証失効では、ループが21時間止まっているのに仕組み側の検知がゼロで、
+    翌日の人間の日次チェックまで誰も気づかなかった。その穴をここで塞ぐ。
+    送信できたら True。
+    """
+    payload = json.dumps({
+        "notification_id": _LOOP_FAILURE_NOTIFICATION_ID,
+        "title": "Embodied HA の自律ループが止まっています",
+        "message": invoke_failure.alert_message(state),
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/create",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+    except Exception:
+        print("[daemon] loop-failure notification failed", flush=True)
+        return False
+    return True
+
+
+def track_loop_outcome(success: bool, *, trigger_reason: str) -> None:
+    """ループの成否を連続失敗カウンタへ反映し、しきい値を越えたら通知する。"""
+    try:
+        if success:
+            invoke_failure.mark_success(_LOG_DIR)
+            return
+        state = invoke_failure.mark_failure(_LOG_DIR, source="loop", detail=trigger_reason)
+        threshold = invoke_failure.alert_threshold()
+        consecutive = int(state.get("consecutive") or 0)
+        print(f"[daemon] loop failed {consecutive} time(s) in a row", flush=True)
+        if invoke_failure.should_alert(state, threshold=threshold) and notify_loop_failing(state):
+            invoke_failure.mark_alerted(_LOG_DIR)
+    except Exception as e:
+        # 監視の失敗でループ本体を巻き込まない。ただし黙らない。
+        print(f"[daemon] loop outcome tracking error: {e}", flush=True)
+
 
 def load_schedule():
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
@@ -393,6 +443,7 @@ def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snap
             print(f"[daemon] loop done: {trigger_reason}", flush=True)
         except subprocess.TimeoutExpired:
             print(f"[daemon] loop TIMEOUT (>{LOOP_TIMEOUT}s), killed: {trigger_reason}", flush=True)
+        track_loop_outcome(success, trigger_reason=trigger_reason)
     finally:
         try:
             finish_body_state("loop", success, time.perf_counter() - start)

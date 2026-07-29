@@ -15,6 +15,7 @@ import subprocess
 import datetime
 
 from embodied_action import action_fields_for_control, apply_action_to_body_state
+from ha_api_path import service_name_error
 from mcp_lib import serve, text, log
 
 HA_URL = os.environ["HA_URL"].rstrip("/")
@@ -72,6 +73,11 @@ def ha_call_service(args):
     if not service or (not entity_id and not entity_optional):
         return [text(f"不完全: service と entity_id が必要です（domain={domain} "
                      f"service={service} entity_id={entity_id}）")], True
+    # domain は ALLOWED_DOMAINS で検査済みだが service は素通しで URL へ連結される。
+    # curl の `..` 正規化で allowlist の外（Supervisor API）へ POST できてしまうため入口で弾く。
+    service_reason = service_name_error(service)
+    if service_reason:
+        return [text(f"拒否: {service_reason}")], True
 
     action_fields = action_fields_for_control(entity_id, domain, service)
     hour = datetime.datetime.now().hour

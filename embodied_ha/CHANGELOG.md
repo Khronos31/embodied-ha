@@ -6,6 +6,23 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.10] - 2026-07-29
+
+### Security / セキュリティ
+
+- `ha_get` の `path` と `ha_call_service` の `service` を、HA REST URL へ連結する前に検証するようにしました。
+  検証していないと、curl のパス正規化により Home Assistant API の外へ到達できました。
+  Validated the `path` of `ha_get` and the `service` of `ha_call_service` before they are joined into a
+  Home Assistant REST URL. Without validation, curl's path normalization allowed requests to reach
+  outside the Home Assistant API.
+
+### Added / 追加
+
+- 自律ループの起動に連続して失敗したとき、Home Assistant の通知でお知らせするようにしました。
+  失敗の理由も `log/invoke_failures.jsonl` に残るので、後から原因を辿れます。
+  Added a Home Assistant notification when the autonomous loop repeatedly fails to start, and
+  recorded the failure reason in `log/invoke_failures.jsonl` so the cause can be traced afterwards.
+
 ## [2.0.9] - 2026-07-26
 
 ### Fixed / 修正

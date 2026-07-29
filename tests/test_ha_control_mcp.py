@@ -96,5 +96,59 @@ class HaControlQuietHoursTests(unittest.TestCase):
         run_mock.assert_called_once()
 
 
+class HaControlServiceValidationTests(unittest.TestCase):
+    """`service` が無検査で URL へ連結されないこと（F-28① の書き込み版）。
+
+    `domain` は ALLOWED_DOMAINS で守られているが `service` は素通しだったため、
+    curl の `..` 正規化で allowlist の外へ **POST** できた。
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        os.environ["EHA_LOG_DIR"] = self.tmpdir.name
+        self.mcp = load_ha_control_module()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _call(self, payload):
+        result = self.mcp.ha_call_service(payload)
+        content, is_error = result if isinstance(result, tuple) else (result, False)
+        return content[0]["text"], is_error
+
+    @mock.patch("subprocess.run")
+    def test_traversal_service_is_rejected_before_curl(self, mock_run):
+        text, is_error = self._call({
+            "domain": "light",
+            "service": "../../addons/self/options",
+            "entity_id": "light.living",
+        })
+        self.assertTrue(is_error)
+        self.assertIn("拒否", text)
+        mock_run.assert_not_called()  # curl まで到達させない
+
+    @mock.patch("subprocess.run")
+    def test_slash_in_service_is_rejected(self, mock_run):
+        _, is_error = self._call({
+            "domain": "script",
+            "service": "a/b",
+        })
+        self.assertTrue(is_error)
+        mock_run.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    def test_script_direct_call_still_works(self, mock_run):
+        # by-design で許可しているスクリプト名の直呼び（entity_id 省略可）を壊さない
+        mock_run.return_value = mock.Mock(returncode=0, stdout="")
+        _, is_error = self._call({
+            "domain": "script",
+            "service": "viewing_reservation_set",
+            "data": {"reservation_channel": "フジテレビ"},
+        })
+        self.assertFalse(is_error)
+        called_url = mock_run.call_args[0][0][-1]
+        self.assertTrue(called_url.endswith("/services/script/viewing_reservation_set"))
+
+
 if __name__ == "__main__":
     unittest.main()

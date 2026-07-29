@@ -35,7 +35,9 @@ import anomaly_state  # noqa: E402
 import chat_context  # noqa: E402
 import chat_invoke  # noqa: E402
 import eha_config  # noqa: E402
+import harness_state  # noqa: E402
 import introspection_facts  # noqa: E402
+import invoke_failure  # noqa: E402
 import scene_state  # noqa: E402
 from auditory_context import format_recent_auditory_prompt, resolve_source_filter  # noqa: E402
 from introspection_facts import extract_facts_from_stream_text, write_facts_file  # noqa: E402
@@ -69,6 +71,15 @@ class LoopPaths:
 
 class InvokeAgentError(RuntimeError):
     """invoke-agent.shが有効な応答を返せなかった。"""
+
+
+def _selected_harness() -> str:
+    """失敗記録に添えるための選択中ハーネス。取れなくても記録は続ける。"""
+    try:
+        _, selected = harness_state.read_selection()
+        return (selected or "").strip()
+    except Exception:
+        return ""
 
 
 def parse_loop_response(text: str) -> dict[str, Any]:
@@ -292,6 +303,18 @@ def invoke_loop_claude(
         result = run(cmd, **run_kwargs)
         if result.returncode != 0 or not result.stdout.strip():
             print(f"[loop][invoke-agent] 呼び出し失敗 returncode={result.returncode}", file=sys.stderr)
+            # アドオンログは Supervisor のリングバッファで遡れなくなるので JSONL にも残す。
+            # stderr は先頭も残す——run_claude が transcript を stderr へ流すため、
+            # 末尾だけ見ると原因の先頭が落ちる（2026-07-27 の認証失効で実際に落ちた）。
+            invoke_failure.record_failure(
+                (env.get("EHA_LOG_DIR") or "").strip(),
+                source="loop",
+                mode=mode,
+                returncode=result.returncode,
+                stdout_empty=not bool(result.stdout.strip()),
+                stderr=result.stderr,
+                harness=_selected_harness(),
+            )
             if result.stderr.strip():
                 print(f"[loop][invoke-agent][stderr] {result.stderr.strip()[-400:]}", file=sys.stderr)
             raise InvokeAgentError(

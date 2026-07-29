@@ -3,6 +3,10 @@ embodied_ha/log/
 **/*.pyc
 body_state.json
 body_state.json.lock
+invoke_failures.jsonl
+invoke_failures.jsonl.lock
+invoke_failure_state.json
+invoke_failure_state.json.lock
 embodied_ha/github_app.pem
 
 # ウェイクワードSE 開発アーティファクト（ディスク上には保全・公開アドオンには載せない）
