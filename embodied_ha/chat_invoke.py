@@ -19,6 +19,7 @@ from json_schemas import chat_schema
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import body_state as _bs_mod  # noqa: E402
+import file_read_capability  # noqa: E402
 from path_env import build_tools_path  # noqa: E402
 
 
@@ -363,10 +364,11 @@ _CHAT_MCP_SERVERS = (
     "body", "sensors", "http", "lounge", "game", "song",
 )
 
+# ハーネスごとの届け方の違いは file_read_capability に集約した(loop 側と共有するため)。
 # codex は本環境の bwrap 制約でシェル経由 Read が不可なので files MCP で Read を提供する。
 # claude は native Read、agy は native read_file(config.json の read_file(*) grant で headless でも通る・
 # 2026-07-23 実機確認)を使うため files MCP は付けない。→ files MCP は codex 限定。
-_FILES_MCP_HARNESSES = frozenset({"codex"})
+_FILES_MCP_HARNESSES = file_read_capability.FILES_MCP_HARNESSES
 
 
 def _effective_harness() -> str:
@@ -438,12 +440,8 @@ def build_invoke_agent_chat_command(
         raise ValueError("build_invoke_agent_chat_command: sound_file and content_json_path are mutually exclusive")
     allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
     mcp_servers = _CHAT_MCP_SERVERS
-    if _effective_harness() in _FILES_MCP_HARNESSES:
-        allowed = allowed + ",mcp__files__read_file"
-        # default の Codex モデルは大量の tool schema を選別するため、末尾へ足すと
-        # read_file だけがモデルから見えなくなる。Codex/agy の native Read 代替は
-        # 基本能力なので先頭に置き、tool 選別時にも必ず残す。
-        mcp_servers = ("files",) + mcp_servers
+    # _COMMON_TOOLS には既に Read が入っているので、ここで増えるのは codex の files MCP だけ。
+    allowed, mcp_servers = file_read_capability.grant_file_read(allowed, mcp_servers, _effective_harness())
     allowed_builtins, allowed_mcp_tools = _split_allowed_tools_for_invoke_agent(allowed)
     cmd = [
         "bash",
