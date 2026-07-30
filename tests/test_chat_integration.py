@@ -105,6 +105,12 @@ class ChatRunIntegrationTests(unittest.TestCase):
 
             chat_log = log_dir / "chat_log.jsonl"
             self.assertFalse(chat_log.exists())
+            voice_log = log_dir / "voice_introspection.jsonl"
+            record = json.loads(voice_log.read_text(encoding="utf-8"))
+            self.assertEqual(record["source"], "voice")
+            self.assertEqual(record["private"], "テスト内省")
+            self.assertNotIn("user", record)
+            self.assertNotIn("agent", record)
 
     def test_empty_message_exits_early_without_web_ui_status(self):
         with tempfile.TemporaryDirectory() as tmp:

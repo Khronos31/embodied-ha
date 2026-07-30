@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from json_schemas import chat_schema
@@ -430,6 +431,7 @@ def build_invoke_agent_chat_command(
     content_json_path=None,
     sound_file=None,
     http_post_enabled=False,
+    transcript_file=None,
 ):
     """Build an invoke-agent.sh command for chat.py's response path."""
     if sound_file and content_json_path is not None:
@@ -465,6 +467,8 @@ def build_invoke_agent_chat_command(
     cmd += ["--json-schema", json.dumps(chat_schema(voice=(chat_source == "voice")), ensure_ascii=False)]
     if content_json_path is not None:
         cmd += ["--content-json", f"@{content_json_path}"]
+    if transcript_file is not None:
+        cmd += ["--transcript-file", transcript_file]
     cmd.append(user_prompt)
     return cmd
 
@@ -473,7 +477,7 @@ def log_tool_use_diagnostics(stream_text, print_fn=None):
     """assistant側のtool_use呼び出しをstderrへ操作監査ログとして出す(副作用のみ)。
 
     旧経路ではclaude CLIのstdout(生stream-json)を読んでいたが、invoke-agent.sh経由では
-    生transcriptがstderrへ流れる契約のため、呼び出し元はr.stderrを渡す。家電操作・
+    生transcriptを明示的な一時ファイルへ保存する契約のため、呼び出し元はその内容を渡す。家電操作・
     memory更新等の成功したツール使用がSupervisorログに残らない監査回帰(PR#2最終レビュー
     指摘)への対応として増分7で削除されたものを復元した。agyハーネスのstderrには
     stream-jsonが含まれないため、単に何も出力されない(無害)。
@@ -527,8 +531,17 @@ def invoke_chat_claude(
     env.setdefault("CLAUDE_BIN", claude_bin)
     http_post_enabled = _read_http_post_enabled(prefs_file)
     content_json_path = None
+    transcript_file = None
     try:
         env["EHA_ACTOR"] = "chat"
+        selected_harness = (env.get("EHA_AGENT_HARNESS") or _effective_harness()).strip().lower()
+        if selected_harness in {"claude", "claude-code"} and not sound_file:
+            tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
+            os.makedirs(tmp_dir, exist_ok=True)
+            fd, transcript_file = tempfile.mkstemp(
+                prefix="chat-transcript-", suffix=".jsonl", dir=tmp_dir
+            )
+            os.close(fd)
         if prefix_blocks and not sound_file:
             content_blocks = list(prefix_blocks)
             content_blocks.append({"type": "text", "text": prompt})
@@ -540,9 +553,18 @@ def invoke_chat_claude(
             content_json_path=content_json_path,
             sound_file=sound_file,
             http_post_enabled=http_post_enabled,
+            transcript_file=transcript_file,
         )
         r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)
-        log_tool_use_diagnostics(r.stderr)
+        if transcript_file:
+            try:
+                transcript = Path(transcript_file).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"[chat][invoke-agent] transcript read failed: {exc}", file=sys.stderr)
+            else:
+                log_tool_use_diagnostics(transcript)
+        else:
+            log_tool_use_diagnostics(r.stderr)
         if r.returncode != 0 or not r.stdout.strip():
             print(f"[chat][invoke-agent] 呼び出し失敗 returncode={r.returncode}", file=sys.stderr)
             if r.stderr.strip():
@@ -552,5 +574,10 @@ def invoke_chat_claude(
         if content_json_path:
             try:
                 os.unlink(content_json_path)
+            except OSError:
+                pass
+        if transcript_file:
+            try:
+                os.unlink(transcript_file)
             except OSError:
                 pass

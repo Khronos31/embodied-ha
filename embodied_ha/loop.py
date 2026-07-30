@@ -189,6 +189,7 @@ def build_invoke_agent_loop_command(
     content_json_path: str | None = None,
     sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
+    transcript_file: str | None = None,
 ) -> list[str]:
     """Build an invoke-agent.sh command for loop.py Claude-compatible modes."""
     schema = loop_schema(mode) if response_schema is _DEFAULT_RESPONSE_SCHEMA else response_schema
@@ -221,6 +222,8 @@ def build_invoke_agent_loop_command(
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
     if content_json_path is not None:
         cmd += ["--content-json", f"@{content_json_path}"]
+    if transcript_file is not None:
+        cmd += ["--transcript-file", transcript_file]
     cmd.append(user_prompt)
     return cmd
 
@@ -269,6 +272,7 @@ def invoke_loop_claude(
     script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
     selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
     content_json_path = None
+    transcript_file = None
     try:
         model_tier, model_override = _invoke_agent_model_tier(selected_model)
         # sound_file時はagyがdieするため--content-jsonを渡さない(観測カメラ画像等の
@@ -276,6 +280,14 @@ def invoke_loop_claude(
         # 既知のトレードオフ)。
         if content_blocks is not None and not sound_file:
             content_json_path = _write_invoke_agent_content_json(content_blocks, env, mode)
+        selected_harness = (env.get("EHA_AGENT_HARNESS") or _selected_harness()).strip().lower()
+        if selected_harness in {"claude", "claude-code"} and not sound_file:
+            tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
+            os.makedirs(tmp_dir, exist_ok=True)
+            fd, transcript_file = tempfile.mkstemp(
+                prefix=f"{mode}-transcript-", suffix=".jsonl", dir=tmp_dir
+            )
+            os.close(fd)
         cmd = build_invoke_agent_loop_command(
             script_dir=script_dir,
             mode=mode,
@@ -287,6 +299,7 @@ def invoke_loop_claude(
             content_json_path=content_json_path,
             sound_file=sound_file,
             response_schema=response_schema,
+            transcript_file=transcript_file,
         )
         if model_override is not None:
             env["EHA_CLAUDE_MODEL_DEFAULT"] = model_override
@@ -323,12 +336,28 @@ def invoke_loop_claude(
                 f"stdout_empty={not bool(result.stdout.strip())}"
             )
         if facts_file:
-            write_facts_file(facts_file, extract_facts_from_stream_text(result.stderr))
+            if transcript_file:
+                try:
+                    transcript = Path(transcript_file).read_text(encoding="utf-8")
+                except OSError as exc:
+                    print(f"[loop][invoke-agent] transcript read failed: {exc}", file=sys.stderr)
+                else:
+                    if transcript.strip():
+                        write_facts_file(facts_file, extract_facts_from_stream_text(transcript))
+                    else:
+                        print("[loop][invoke-agent] transcript is empty; facts omitted", file=sys.stderr)
+            else:
+                write_facts_file(facts_file, extract_facts_from_stream_text(result.stderr))
         return result.stdout
     finally:
         if content_json_path:
             try:
                 os.unlink(content_json_path)
+            except OSError:
+                pass
+        if transcript_file:
+            try:
+                os.unlink(transcript_file)
             except OSError:
                 pass
 

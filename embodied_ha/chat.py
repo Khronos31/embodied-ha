@@ -312,6 +312,10 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         )
         # append_chat_log: chat.sh元コードと同様、意図的にガード無し
         chat_postprocess.append_chat_log(**append_chat_log_kwargs)
+    else:
+        chat_postprocess.append_voice_introspection(
+            parsed, timestamp, os.path.join(log_dir, "voice_introspection.jsonl")
+        )
 
     chat_postprocess.publish_private_to_mqtt(
         parsed, cfg.get("MQTT_HOST", ""), cfg.get("MQTT_PORT", "1883"),

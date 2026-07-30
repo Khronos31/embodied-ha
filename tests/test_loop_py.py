@@ -458,6 +458,119 @@ class LoopPyInvocationTests(unittest.TestCase):
 
         self.assertEqual(stderr_capture.getvalue(), "")
 
+    def test_invoke_loop_claude_reads_large_transcript_and_cleans_it_up(self):
+        class Result:
+            stdout = '{"private":"ok"}'
+            stderr = ""
+            returncode = 0
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            path = Path(cmd[cmd.index("--transcript-file") + 1])
+            captured["path"] = path
+            captured["mode"] = path.stat().st_mode & 0o777
+            padding = "x" * (500 * 1024)
+            events = [
+                {"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": "1", "name": "mcp__audio__speak", "input": {"text": padding}}
+                ]}},
+                {"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "1", "content": "ok"}
+                ]}},
+            ]
+            path.write_text(
+                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+                encoding="utf-8",
+            )
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            facts = Path(tmp) / "facts.json"
+            loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="reflect",
+                allowed_tools="mcp__audio__speak",
+                mcp_servers=["audio"],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmp,
+                    "EHA_TMP_DIR": tmp,
+                    "EHA_AGENT_HARNESS": "claude",
+                },
+                facts_file=str(facts),
+                run=fake_run,
+            )
+            parsed = json.loads(facts.read_text(encoding="utf-8"))
+
+        self.assertEqual(captured["mode"], 0o600)
+        self.assertEqual(parsed["speak_ok"], 1)
+        self.assertFalse(captured["path"].exists())
+
+    def test_empty_claude_transcript_omits_facts(self):
+        class Result:
+            stdout = '{"private":"ok"}'
+            stderr = "invoke-agent.sh: warning: failed to write transcript file"
+            returncode = 0
+
+        def fake_run(_cmd, **_kwargs):
+            return Result()
+
+        stderr_capture = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("sys.stderr", stderr_capture):
+            facts = Path(tmp) / "facts.json"
+            loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="reflect",
+                allowed_tools="",
+                mcp_servers=[],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmp,
+                    "EHA_TMP_DIR": tmp,
+                    "EHA_AGENT_HARNESS": "claude",
+                },
+                facts_file=str(facts),
+                run=fake_run,
+            )
+            self.assertFalse(facts.exists())
+        self.assertIn("transcript is empty; facts omitted", stderr_capture.getvalue())
+
+    def test_non_claude_facts_keep_using_stderr(self):
+        class Result:
+            stdout = '{"private":"ok"}'
+            returncode = 0
+            stderr = "\n".join([
+                json.dumps({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "id": "1", "name": "mcp__audio__speak", "input": {}}
+                ]}}),
+                json.dumps({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": "1"}
+                ]}}),
+            ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            facts = Path(tmp) / "facts.json"
+            loop.invoke_loop_claude(
+                user_prompt="user",
+                system_prompt="system",
+                mode="reflect",
+                allowed_tools="",
+                mcp_servers=[],
+                environ={
+                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
+                    "EHA_DATA_DIR": tmp,
+                    "EHA_TMP_DIR": tmp,
+                    "EHA_AGENT_HARNESS": "codex",
+                },
+                facts_file=str(facts),
+                run=lambda *_args, **_kwargs: Result(),
+            )
+            parsed = json.loads(facts.read_text(encoding="utf-8"))
+        self.assertEqual(parsed["speak_ok"], 1)
+
     def test_observe_invocation_uses_sonnet_and_does_not_set_actor(self):
         calls = []
 

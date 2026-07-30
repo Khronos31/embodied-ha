@@ -77,6 +77,16 @@ def append_chat_log(parsed, reply, user_msg, chat_source, timestamp, chat_log_fi
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def append_voice_introspection(parsed, timestamp, voice_introspection_file):
+    """音声ターンの非公開内省だけを専用JSONLへ保存する。"""
+    private = parsed.get("private", "") or ""
+    if not str(private).strip():
+        return
+    rec = {"timestamp": timestamp, "source": "voice", "private": private}
+    with open(voice_introspection_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
 def publish_private_to_mqtt(parsed, mqtt_host, mqtt_port="1883", mqtt_user="", mqtt_pass="", run=subprocess.run):
     """private内省をMQTT(embodied_ha/observation/state)へpublishする（chat.sh:886-897と同一契約）。
 

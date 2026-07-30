@@ -30,6 +30,8 @@ Options:
   --content-json JSON        Claude Code stream-json content blocks. Use
                              @PATH to read the JSON from a file instead of
                              inline (avoids the ~128KB argv element limit).
+  --transcript-file PATH     Write Claude's raw stream-json transcript to PATH
+                             instead of stderr (best effort)
   -h, --help                 Show this help
 
 Harness selection comes from EHA_AGENT_HARNESS unless --sound-file is present.
@@ -89,6 +91,7 @@ agent_site=""
 content_json=""
 content_json_file=""
 content_json_set="false"
+transcript_file=""
 prompt_parts=()
 
 while (($#)); do
@@ -154,6 +157,11 @@ while (($#)); do
         [[ -f "$content_json_file" ]] || die "--content-json file not found: $content_json_file"
         content_json=""
       fi
+      shift 2
+      ;;
+    --transcript-file)
+      (($# >= 2)) || die "--transcript-file requires a value"
+      transcript_file="$2"
       shift 2
       ;;
     -h|--help)
@@ -592,11 +600,12 @@ run_claude() {
     cmd+=("--mcp-config" "$mcp_config_arg")
   fi
   stdout="$(claude_message | (cd "$cwd" && "${cmd[@]}"))"
-  # Mirror run_codex()'s contract: full raw stream-json transcript goes to
-  # stderr (callers that need tool_use/tool_result events, e.g. loop.py's
-  # facts extraction, read it from there), extracted structured payload
-  # goes to stdout.
-  printf '%s\n' "$stdout" >&2
+  if [[ -n "$transcript_file" ]]; then
+    if ! printf '%s\n' "$stdout" >"$transcript_file"; then
+      rm -f -- "$transcript_file"
+      echo "invoke-agent.sh: warning: failed to write transcript file: $transcript_file" >&2
+    fi
+  fi
   printf '%s' "$stdout" | extract_result_json
 }
 
