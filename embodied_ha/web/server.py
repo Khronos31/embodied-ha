@@ -38,6 +38,10 @@ LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
 
 CHAT_LOG = os.path.join(LOG_DIR, "chat_log.jsonl")
+VOICE_INTROSPECTION_LOG = os.environ.get(
+    "EHA_VOICE_INTROSPECTION_LOG",
+    os.path.join(LOG_DIR, "voice_introspection.jsonl"),
+)
 OBS_LOG  = os.path.join(LOG_DIR, "observations.jsonl")
 OBS_RECOVERED_LOG = os.path.join(LOG_DIR, "observations_recovered.jsonl")
 EXP_LOG  = os.path.join(LOG_DIR, "explore.jsonl")
@@ -1065,7 +1069,7 @@ def get_chat_messages(limit: int = 300) -> list:
 
 
 def get_soliloquy_messages(limit: int = 300) -> list:
-    """observations.jsonl + recovered + explore.jsonl + chat_log.jsonl の private をマージして返す。"""
+    """各内省JSONLのprivateを時系列でマージして返す。"""
 
     def _entry(row: dict, source: str, *, include_mode: bool = False):
         timestamp = row.get("timestamp", "")
@@ -1117,6 +1121,11 @@ def get_soliloquy_messages(limit: int = 300) -> list:
             item = _entry(row, "chat")
             if item is not None:
                 messages.append(item)
+    for row in read_jsonl(VOICE_INTROSPECTION_LOG):
+        if row.get("private"):
+            item = _entry(row, "voice")
+            if item is not None:
+                messages.append(item)
     messages.sort(key=lambda d: d["timestamp"])
     return messages[-limit:]
 
@@ -1147,23 +1156,44 @@ def send_chat(message: str, source: str = "chat"):
 
 
 # --- ファイル監視スレッド（SSE 通知用）---
+def watched_log_rooms():
+    """更新通知の対象ログとSSEルームを返す。"""
+    return [
+        (CHAT_LOG, ["chat", "soliloquy"]),
+        (VOICE_INTROSPECTION_LOG, ["soliloquy"]),
+        (OBS_LOG, ["soliloquy"]),
+        (OBS_RECOVERED_LOG, ["soliloquy"]),
+        (EXP_LOG, ["soliloquy"]),
+        (NON_SPEECH_AUDIO_EVENTS_LOG, ["audio"]),
+        (AUDIO_EVENT_TAGS_LOG, ["audio"]),
+    ]
+
+
+def watched_file_changed(mtimes: dict, path: str, mtime: float) -> bool:
+    """初回作成またはmtime変更を検出し、現在値を保存する。"""
+    previous = mtimes.get(path)
+    mtimes[path] = mtime
+    return previous is None or previous != mtime
+
+
 def file_watcher():
     # chat_log は会話ルームと独り言ルーム（chat の private）の両方に使われるので両方へ通知する。
-    watched = [(CHAT_LOG, ["chat", "soliloquy"]),
-               (OBS_LOG, ["soliloquy"]), (OBS_RECOVERED_LOG, ["soliloquy"]),
-               (EXP_LOG, ["soliloquy"]),
-               (NON_SPEECH_AUDIO_EVENTS_LOG, ["audio"]), (AUDIO_EVENT_TAGS_LOG, ["audio"])]
+    watched = watched_log_rooms()
     mtimes: dict = {}
+    for path, _rooms in watched:
+        try:
+            mtimes[path] = os.path.getmtime(path)
+        except FileNotFoundError:
+            mtimes[path] = None
     while True:
         for path, rooms in watched:
             try:
                 mtime = os.path.getmtime(path)
-                if path in mtimes and mtimes[path] != mtime:
+                if watched_file_changed(mtimes, path, mtime):
                     for room in rooms:
                         notify_sse("update", {"room": room})
-                mtimes[path] = mtime
             except FileNotFoundError:
-                pass
+                mtimes[path] = None
         time.sleep(1)
 
 

@@ -4,6 +4,7 @@ append_chat_log/publish_private_to_mqttのフォルトインジェクション�
 tests/test_fault_injection.py に分離してある。
 """
 import sys
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -123,6 +124,32 @@ class PublishPrivateToMqttTests(unittest.TestCase):
             raise RuntimeError("boom")
 
         chat_postprocess.publish_private_to_mqtt({"private": "x"}, "192.168.1.10", run=failing_run)
+
+
+class AppendVoiceIntrospectionTests(unittest.TestCase):
+    def test_writes_only_private_voice_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "voice_introspection.jsonl"
+            chat_postprocess.append_voice_introspection(
+                {"private": "声を聞いた", "reply": "返事", "facts": {"future": True}},
+                "2026-07-30T12:00:00+09:00",
+                str(path),
+            )
+            row = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            row,
+            {
+                "timestamp": "2026-07-30T12:00:00+09:00",
+                "source": "voice",
+                "private": "声を聞いた",
+            },
+        )
+
+    def test_empty_private_does_not_create_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "voice_introspection.jsonl"
+            chat_postprocess.append_voice_introspection({}, "timestamp", str(path))
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

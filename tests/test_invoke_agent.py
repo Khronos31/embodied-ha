@@ -473,14 +473,13 @@ class InvokeAgentTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--content-json file not found", result.stderr)
 
-    def test_claude_emits_raw_stream_on_stderr_for_tool_use_extraction(self):
+    def test_claude_writes_raw_stream_to_explicit_transcript_file(self):
         # loop.pyのfacts抽出(introspection_facts.extract_facts_from_stream_text)は
         # assistant/userイベント中のtool_use/tool_resultを必要とするが、stdoutは
         # extract_result_json()が最終resultイベントだけに絞ってしまう。run_codex()の
-        # 「生transcriptはstderr、構造化結果はstdout」契約をrun_claude()にも揃え、
-        # callerがstderrから生ストリームを読めるようにする(2026-07-16)。
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
+            transcript = tmpdir / "transcript.jsonl"
             fake = tmpdir / "claude"
             write_executable(
                 fake,
@@ -496,7 +495,7 @@ class InvokeAgentTests(unittest.TestCase):
             )
 
             result = self.run_wrapper(
-                ["hello"],
+                ["--transcript-file", transcript.as_posix(), "hello"],
                 {
                     "EHA_AGENT_HARNESS": "claude",
                     "EHA_CLAUDE_BIN": fake.as_posix(),
@@ -505,8 +504,59 @@ class InvokeAgentTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), {"ok": True})
-            stderr_events = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
-            self.assertEqual([e["type"] for e in stderr_events], ["assistant", "user", "result"])
+            self.assertEqual(result.stderr, "")
+            events = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([e["type"] for e in events], ["assistant", "user", "result"])
+
+    def test_claude_transcript_write_failure_keeps_model_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "claude"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                import sys
+                sys.stdin.read()
+                print(json.dumps({"type": "result", "structured_output": {"ok": True}}))
+                """,
+            )
+            result = self.run_wrapper(
+                ["--transcript-file", "/proc/eha-transcript.jsonl", "hello"],
+                {"EHA_AGENT_HARNESS": "claude", "EHA_CLAUDE_BIN": fake.as_posix()},
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout), {"ok": True})
+        self.assertIn("failed to write transcript file", result.stderr)
+
+    def test_claude_large_transcript_stays_out_of_stderr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "claude"
+            transcript = tmpdir / "transcript.jsonl"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                import sys
+                sys.stdin.read()
+                print(json.dumps({
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "x" * (500 * 1024)}]},
+                }))
+                print(json.dumps({"type": "result", "structured_output": {"ok": True}}))
+                """,
+            )
+            result = self.run_wrapper(
+                ["--transcript-file", transcript.as_posix(), "hello"],
+                {"EHA_AGENT_HARNESS": "claude", "EHA_CLAUDE_BIN": fake.as_posix()},
+            )
+            data = transcript.read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"ok": True})
+        self.assertEqual(result.stderr, "")
+        self.assertGreater(len(data), 500 * 1024)
 
     def test_claude_system_prompt_uses_native_flag_distinct_from_append(self):
         with tempfile.TemporaryDirectory() as tmp:

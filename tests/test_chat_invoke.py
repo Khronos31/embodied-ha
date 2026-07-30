@@ -439,35 +439,40 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertIn("returncode=0", logged)
         self.assertIn("empty result event", logged)
 
-    def test_invoke_chat_claude_logs_tool_use_audit_from_stderr(self):
+    def test_invoke_chat_claude_logs_tool_use_audit_from_transcript(self):
         # 増分7で失われたchat経路のツール操作監査ログ([chat][tool])の復元
-        # (PR#2最終レビュー指摘)。invoke-agent.sh経由では生stream-jsonが
-        # stderrへ流れるため、そこからtool_useを抽出して出力する。
+        # (PR#2最終レビュー指摘)。生stream-jsonは一時ファイルから読み、
+        # stderrには要約済みの操作監査だけを出力する。
         class Result:
             stdout = '{"reply":"ok"}'
-            stderr = json.dumps({
+            stderr = ""
+            returncode = 0
+
+        transcript = json.dumps({
                 "type": "assistant",
                 "message": {"content": [{"type": "tool_use", "name": "recall", "input": {"keywords": ["エアコン"]}}]},
             }, ensure_ascii=False) + "\n"
-            returncode = 0
 
         def fake_run(cmd, **kwargs):
+            Path(_arg_after(cmd, "--transcript-file")).write_text(transcript, encoding="utf-8")
             return Result()
 
         stderr_capture = io.StringIO()
-        with patch("sys.stderr", stderr_capture):
+        with tempfile.TemporaryDirectory() as tmp, patch("sys.stderr", stderr_capture):
             chat_invoke.invoke_chat_claude(
                 chat_source="chat",
                 prompt="こんにちは",
                 prefix_blocks=[],
                 script_dir=str(EMBODIED_HA_DIR),
-                claude_env={},
+                claude_env={"EHA_TMP_DIR": tmp},
                 cwd="/tmp",
                 run=fake_run,
             )
+            self.assertEqual(list(Path(tmp).iterdir()), [])
 
         logged = stderr_capture.getvalue()
         self.assertIn("[chat][tool] recall", logged)
+        self.assertNotIn('"type": "assistant"', logged)
         self.assertIn("エアコン", logged)
         self.assertNotIn("呼び出し失敗", logged)
 
