@@ -18,7 +18,7 @@
 使えるため、**実態としては loop でも読めていた**。agy では chat で書かれた grant が
 残留するため、chat を1回でも通ると loop でも読めていた。つまり「loop では読めない」が
 成立していたのは codex だけで、3ハーネスで挙動がばらばらだった。
-これを揃える（ゆの判断・2026-07-29）。
+これを揃える（メンテナ判断・2026-07-29）。
 
 ⚠️ **読める範囲の制限（denylist）は別作業**。現状は read-anything。
 `secrets.yaml` / `.storage` / `.ssh` / `/data/options.json` / 各ハーネスの認証・config home /
