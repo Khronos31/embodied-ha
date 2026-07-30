@@ -6,6 +6,21 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.13] - 2026-07-30
+
+### Fixed / 修正
+
+- Claude Codeの生の実行記録を標準エラー出力へ大量に流すことで、長いツール結果を含む
+  自律ループが`BlockingIOError`で失敗する問題を修正しました。実行記録は権限を制限した
+  一時ファイルで受け渡し、処理後に削除します。
+  Fixed autonomous Claude Code turns failing with `BlockingIOError` when large tool results were
+  copied into stderr. Raw execution transcripts are now passed through restricted temporary files
+  and removed after processing.
+- 音声での会話中に生じた非公開の内省が保存されず、独り言画面から欠落する問題を修正しました。
+  音声の内省だけを専用ログへ保存し、発言内容や返答を会話履歴へ追加せずに独り言画面へ反映します。
+  Fixed private introspection from voice conversations being discarded. Voice introspection is now
+  stored separately and shown in the soliloquy view without adding the spoken turn to chat history.
+
 ## [2.0.12] - 2026-07-29
 
 ### Fixed / 修正
