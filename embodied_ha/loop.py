@@ -35,6 +35,7 @@ import anomaly_state  # noqa: E402
 import chat_context  # noqa: E402
 import chat_invoke  # noqa: E402
 import eha_config  # noqa: E402
+import file_read_capability  # noqa: E402
 import harness_state  # noqa: E402
 import introspection_facts  # noqa: E402
 import invoke_failure  # noqa: E402
@@ -796,6 +797,13 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     config = mode_config(selected_mode)
     hour = int(cfg.get("EHA_TEST_HOUR") or datetime.now().hour)
     allowed_tools, mcp_servers, autonomous_note = apply_boundary_gate(selected_mode, config, cfg, sensors, hour, run=run)
+    # ファイル読み取りは3ハーネスで届け方が違い、以前は loop でどれも要求していなかった。
+    # だが claude の --allowedTools は事前承認リストであって利用可能ツールの制限ではないため
+    # 実態として読めており、agy も chat で書かれた grant が残留して読めていた。
+    # 「loop では読めない」が成立していたのは codex だけ=挙動がばらばらだったので揃える。
+    allowed_tools, mcp_servers = file_read_capability.grant_file_read(
+        allowed_tools, mcp_servers, _selected_harness()
+    )
     character = _read_text(cfg.get("EHA_CHARACTER_FILE") or os.path.join(SCRIPT_DIR, "character.md"))
     home_policy = _read_text(cfg.get("EHA_HOME_POLICY_FILE") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "home_policy.md"))
     features_md = _read_text(os.path.join(SCRIPT_DIR, "features.md"))

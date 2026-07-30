@@ -727,12 +727,17 @@ def web_server_watchdog():
         time.sleep(60)
 
 
-def start_runtime_threads():
+def start_runtime_threads() -> bool:
+    """runtime が動いていれば True、未準備で起動を見送ったら False。
+
+    戻り値でポーラが「上がったのか見送られたのか」を判断できるようにしてある
+    (以前は返り値が無く、見送りが呼び出し側から見えなかった=codexレビューP1①)。
+    """
     if _runtime_started.is_set():
-        return
+        return True
     with _runtime_lock:
         if _runtime_started.is_set():
-            return
+            return True
         # 選択ハーネスを実行時ハーネスへ配線(Step4増分1a)。ポーラの harness_ready() 判定と
         # 起動の間にフラグ/認証が変わる競合(sol 1a-review High)を避けるため、ここで1回だけ
         # snapshot を取り、その snapshot が ready を認めた effective harness だけを export する
@@ -741,7 +746,7 @@ def start_runtime_threads():
         snap = harness_status.snapshot()
         if not snap["ready"]:
             print("[daemon] runtime 開始直前に harness 未準備を検出。起動を見送ります", flush=True)
-            return
+            return False
         # effective は valid→選択ハーネス、missing/移行→claude。初回選択(再起動なし)でも
         # 以降 spawn する loop/chat 子プロセスが継承する。継承された古い EHA_AGENT_HARNESS が
         # あっても effective で明示上書きし、valid フラグ優先を貫徹する(sol 1a-review Med3)。
@@ -767,14 +772,26 @@ def start_runtime_threads():
             print("[daemon] audio daemon watchdog enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)
         _runtime_started.set()
+        return True
 
 
 def boot_runtime_when_ready():
+    # start_runtime_threads() は、直前に取り直した snapshot が未準備なら起動を見送って返る。
+    # ポーラが harness_ready() を抜けた直後に1回だけ呼ぶ作りだと、その窓を踏んだときに
+    # loop/chat/MQTT が起動しないまま誰も再試行しない(codexレビューP1①)。
+    # 実際に runtime が上がるまで回し続ける。
     notify_setup_waiting()
-    while not harness_ready():
+    announced = False
+    while True:
+        if harness_ready():
+            if not announced:
+                # 見送りが続くとポーラは5秒ごとに回るので、検出の報告は1回だけにする
+                # (見送りの理由は start_runtime_threads 側が毎回出す)。
+                print("[daemon] ready harness を検出。runtime を開始します", flush=True)
+                announced = True
+            if start_runtime_threads():
+                return
         time.sleep(5)
-    print("[daemon] ready harness を検出。runtime を開始します", flush=True)
-    start_runtime_threads()
 
 
 # --- 多重起動ガード（flock）---
@@ -792,9 +809,9 @@ except OSError:
 # --- Web UI / runtime 起動 ---
 threading.Thread(target=web_server_watchdog, daemon=True).start()
 print("[daemon] web server watchdog enabled", flush=True)
-if harness_ready():
-    start_runtime_threads()
-else:
+# ready でも start_runtime_threads() が直前の snapshot で見送ることがある。
+# その場合もポーラを立てないと誰も再試行しない(codexレビューP1①)。
+if not (harness_ready() and start_runtime_threads()):
     print("[daemon] harness 未準備。Web UI でセットアップ後に runtime を開始します", flush=True)
     notify_setup_waiting()
     threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
