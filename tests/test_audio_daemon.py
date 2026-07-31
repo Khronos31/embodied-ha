@@ -530,6 +530,24 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(result, 1)
         load_mock.assert_not_called()
 
+    def test_invalid_or_missing_mics_wait_without_process_exit_and_recover(self):
+        config = self.audio_daemon.AudioSourceConfig(
+            "alsa://default", "Desk", 24, False, room="study"
+        )
+        loads = iter(({}, {"mics": [{"stt_enabled": True}]}))
+        with mock.patch.object(
+            self.audio_daemon,
+            "load_enabled_mics",
+            side_effect=([], [config]),
+        ), mock.patch.object(self.audio_daemon, "log") as log_mock:
+            preferences, sources = self.audio_daemon.wait_for_enabled_mics(
+                load_fn=lambda: next(loads),
+                sleep_fn=mock.Mock(),
+            )
+        self.assertEqual(preferences, {"mics": [{"stt_enabled": True}]})
+        self.assertEqual(sources, [config])
+        self.assertTrue(any("聴覚を無効" in call.args[0] for call in log_mock.call_args_list))
+
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
         settings = self.audio_daemon.load_runtime_settings(
@@ -919,6 +937,19 @@ class AudioDaemonTests(unittest.TestCase):
             "2026-07-05T10:00:01",
         )
         self.assertFalse(event["tv_playing"])
+
+    def test_tv_state_entities_accept_arbitrary_exact_room_ids(self):
+        prefs = {"tv_state_entities": {"kitchen": "media_player.kitchen_tv"}}
+        self.assertEqual(
+            self.audio_daemon.tv_state_entities(prefs),
+            {"kitchen": "media_player.kitchen_tv"},
+        )
+        self.assertTrue(
+            self.audio_daemon.tv_playing_for_room("kitchen", {"kitchen": "playing"})
+        )
+        self.assertFalse(
+            self.audio_daemon.tv_playing_for_room("hallway", {"kitchen": "playing"})
+        )
 
     def test_tv_state_cache_failure_is_best_effort(self):
         with mock.patch.object(self.audio_daemon, "ha_api_json", return_value=None):

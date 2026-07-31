@@ -85,6 +85,14 @@ class MemoryMcpRecallAudioTests(unittest.TestCase):
             module = load_memory_mcp_module()
         self.assertEqual(module.LOG_DIR, "/config/embodied-ha/log")
 
+    def test_unreadable_memory_is_not_replaced(self):
+        path = self.log_dir / "memory.md"
+        path.write_bytes(b"\xff\xfe")
+        result, is_error = self.memory_mcp.remember({"text": "消してはいけない"})
+        self.assertTrue(is_error)
+        self.assertIn("追記を中止", result[0]["text"])
+        self.assertEqual(path.read_bytes(), b"\xff\xfe")
+
 
 if __name__ == "__main__":
     unittest.main()

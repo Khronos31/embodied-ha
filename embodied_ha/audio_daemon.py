@@ -29,7 +29,7 @@ from enum import Enum
 from pathlib import Path
 
 from auditory_context import append_auditory_event
-from sensory_origin import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
+from spatial_context import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
 from speak import play_pcm_file
 from state_utils import clean, now, parse_ts, read_json
 
@@ -101,10 +101,6 @@ RECENT_MOTION_WINDOW_MINUTES = 20
 RECENT_VISUAL_WINDOW_MINUTES = 60
 RELATED_HA_STATE_LIMIT = 5
 LOCATION_PRIOR_ROOM_LIMIT = 4
-DEFAULT_TV_STATE_ENTITIES = {
-    "living": "media_player.rihinkunoterehi_2",
-    "study": "media_player.google_tv_streamer",
-}
 TV_PLAYING_STATES = {"on", "playing"}
 TV_OFF_STATES = {"off", "idle", "unavailable", "standby", ""}
 
@@ -645,12 +641,13 @@ def load_preferences() -> dict:
 
 def tv_state_entities(preferences: dict | None = None) -> dict[str, str]:
     prefs = preferences if isinstance(preferences, dict) else load_preferences()
-    entities = dict(DEFAULT_TV_STATE_ENTITIES)
+    entities: dict[str, str] = {}
     raw = prefs.get("tv_state_entities")
     if isinstance(raw, dict):
-        for key in DEFAULT_TV_STATE_ENTITIES:
-            value = clean(raw.get(key))
-            if value:
+        for raw_key, raw_value in raw.items():
+            key = clean(raw_key)
+            value = clean(raw_value)
+            if key and value:
                 entities[key] = value
     return entities
 
@@ -692,15 +689,10 @@ def cached_tv_states() -> dict[str, str | None] | None:
         return {key: clean(value) or None for key, value in states.items()}
 
 
-def tv_key_for_source_room(source_room: str | None) -> str:
-    room = clean(source_room).lower()
-    return "study" if "study" in room else "living"
-
-
 def tv_playing_for_room(source_room: str | None, tv_states: dict[str, str | None] | None) -> bool:
     if not isinstance(tv_states, dict):
         return False
-    state = clean(tv_states.get(tv_key_for_source_room(source_room))).lower()
+    state = clean(tv_states.get(clean(source_room))).lower()
     if state in TV_PLAYING_STATES:
         return True
     if state in TV_OFF_STATES:
@@ -2546,17 +2538,34 @@ def tcp_pull_worker(
         sleep_fn(retry_delay)
 
 
+def wait_for_enabled_mics(*, load_fn=None, sleep_fn=None) -> tuple[dict, list[AudioSourceConfig]]:
+    """Stay alive while hearing is intentionally unavailable, then recover."""
+    load_fn = load_fn or load_preferences
+    sleep_fn = sleep_fn or time.sleep
+    announced = False
+    while True:
+        preferences = load_fn()
+        sources = load_enabled_mics(preferences)
+        if sources:
+            if announced:
+                log("有効なマイク設定を検出しました。聴覚を開始します")
+            return preferences, sources
+        if not announced:
+            log(
+                "有効なマイクが設定されていないため聴覚を無効にしています。"
+                "preferences.json の mics を確認してください"
+            )
+            announced = True
+        sleep_fn(60)
+
+
 def main() -> int:
     lock_handle = acquire_audio_daemon_lock()
     if lock_handle is None:
         log("another audio daemon instance already holds the lock; exiting")
         return 1
 
-    preferences = load_preferences()
-    sources = load_enabled_mics(preferences)
-    if not sources:
-        log("no STT/background audio sources; exiting")
-        return 0
+    preferences, sources = wait_for_enabled_mics()
 
     if any(config.transport == "tcp_pull" for config in sources):
         log(

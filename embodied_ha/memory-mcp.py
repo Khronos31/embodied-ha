@@ -88,8 +88,10 @@ def _read_text(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
-    except Exception:
+    except FileNotFoundError:
         return ""
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("既存の記憶を読めないため追記を中止しました") from exc
 
 
 def _write_text(path: str, content: str) -> None:

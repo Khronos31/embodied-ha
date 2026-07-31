@@ -91,10 +91,11 @@ def ha_call_service(args):
     payload = dict(data) if entity_optional else {"entity_id": entity_id, **data}
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "10", "-X", "POST",
-         "-H", f"Authorization: Bearer {_token()}",
+         "-H", "@-",
          "-H", "Content-Type: application/json",
          "-d", json.dumps(payload, ensure_ascii=False),
          f"{HA_URL}/services/{domain}/{service}"],
+        input=f"Authorization: Bearer {_token()}\n",
         capture_output=True, text=True
     )
     ok = r.returncode == 0

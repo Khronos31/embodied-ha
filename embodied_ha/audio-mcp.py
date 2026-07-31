@@ -21,15 +21,9 @@ from embodied_action import action_fields_for_sensory, apply_action_to_body_stat
 from media_registry import resolve_media_item
 from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import log, serve, text
-from sensory_origin import classify_sensory_origin
+from spatial_context import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, now, parse_ts
 
-DEFAULT_SOURCES = [
-    {"source": "rtsp://localhost:8554/capture_tv", "label": "TV・レコーダー"},
-    {"source": "rtsp://localhost:8556/mic_only",   "label": "PC"},
-    {"source": "rtsp://localhost:8558/mic_only",   "label": "Google TV"},
-    {"source": "alsa://default",                    "label": "スタディマイク"},
-]
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
 DEFAULT_ACTIVE_LISTEN_LOG_FILE = "/data/embodied-ha/log/active_listen_log.jsonl"
@@ -150,7 +144,9 @@ def _prefs_path() -> str:
 
 def normalize_source_uri(value: str) -> str:
     source = clean(value)
-    if source in {"", "alsa", "default"}:
+    if not source:
+        return ""
+    if source in {"alsa", "default"}:
         return "alsa://default"
     if source.startswith("alsa://"):
         device = source[len("alsa://"):].lstrip("/")
@@ -994,6 +990,11 @@ def listen(args: dict):
     _src_cfgs = load_mic_configs()
     requested_source = clean(args.get("source"))
     source = normalize_source_uri(requested_source) if requested_source else normalize_source_uri(resolve_audio_source(_body_loc, _src_cfgs, default_source=DEFAULT_SOURCE))
+    if not source:
+        return [text(
+            "利用できるマイクが登録されていません。"
+            "preferences.json の mics に音声ソースを追加してください。"
+        )], True
     duration = normalize_duration(args.get("duration"))
     transcribe_arg = args.get("transcribe", False)
     transcribe = transcribe_arg if isinstance(transcribe_arg, bool) else _truthy(transcribe_arg)

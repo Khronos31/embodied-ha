@@ -767,9 +767,8 @@ def start_runtime_threads() -> bool:
             print("[daemon] 警告: MQTT_HOST 未設定。チャット/観察トリガーを受信できません"
                   "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
         threading.Thread(target=loop_scheduler, daemon=True).start()
-        if load_enabled_mics():
-            threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
-            print("[daemon] audio daemon watchdog enabled", flush=True)
+        threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
+        print("[daemon] audio daemon watchdog enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)
         _runtime_started.set()
         return True

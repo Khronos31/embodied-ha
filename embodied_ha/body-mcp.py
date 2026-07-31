@@ -364,7 +364,7 @@ def enter_cyberspace(args: dict[str, Any]):
     else:
         target_room = entry_room
         if not target_room:
-            from sensory_origin import area_for_entity, resolve_area_room
+            from spatial_context import area_for_entity, resolve_area_room
 
             area = area_for_entity(raw_entity)
             target_room = resolve_area_room(area, graph) if area else None
@@ -456,7 +456,7 @@ def move_cyber(args: dict[str, Any]):
     else:
         target_room = entry_room
         if not target_room:
-            from sensory_origin import area_for_entity, resolve_area_room
+            from spatial_context import area_for_entity, resolve_area_room
 
             area = area_for_entity(raw_entity)
             target_room = resolve_area_room(area, graph) if area else None

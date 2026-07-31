@@ -14,7 +14,9 @@
 env: EHA_PREFS_FILE, HA_URL, SUPERVISOR_TOKEN
 引数: minutes（省略時 15）
 """
-import sys, json, os, subprocess, datetime
+import sys, json, os, datetime
+import urllib.error
+import urllib.request
 
 MOTION_CLASSES = ("motion", "occupancy", "presence")
 
@@ -23,17 +25,19 @@ def get_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
 
 
-def _curl_get(url, token):
-    r = subprocess.run(
-        ["curl", "-sf", "--max-time", "10",
-         "-H", f"Authorization: Bearer {token}", url],
-        capture_output=True, text=True,
+def _ha_get(url, token):
+    request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
     )
-    if r.returncode != 0:
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError, UnicodeError, ValueError):
         return None
     try:
-        return json.loads(r.stdout)
-    except Exception:
+        return json.loads(body)
+    except (json.JSONDecodeError, TypeError):
         return None
 
 
@@ -67,7 +71,7 @@ def _strip_name(fn):
 
 def motion_map_from_discovery(ha_url, token):
     """(a) device_class で人感センサーを自動発見し entity→friendly_name を作る。"""
-    states = _curl_get(f"{ha_url.rstrip('/')}/states", token)
+    states = _ha_get(f"{ha_url.rstrip('/')}/states", token)
     if not states:
         return {}
     out = {}
@@ -88,7 +92,7 @@ def fetch_on_events(entities, minutes, ha_url, token):
     csv = ",".join(entities)
     url = (f"{ha_url.rstrip('/')}/history/period/{start}"
            f"?filter_entity_id={csv}&minimal_response")
-    data = _curl_get(url, token)
+    data = _ha_get(url, token)
     if not data:
         return []
     events = []
@@ -122,7 +126,8 @@ def main():
     token = get_token()
 
     try:
-        prefs = json.load(open(os.environ.get("EHA_PREFS_FILE", ""), encoding="utf-8"))
+        with open(os.environ.get("EHA_PREFS_FILE", ""), encoding="utf-8") as f:
+            prefs = json.load(f)
     except Exception:
         prefs = {}
 

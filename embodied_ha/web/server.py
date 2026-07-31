@@ -32,6 +32,7 @@ import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimport�
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import prefs_store  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from tts_options import validate_tts_options  # type: ignore  # noqa: E402
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
@@ -987,15 +988,9 @@ def _load_prefs_for_update(path: str) -> tuple[dict, bool]:
     ファイル不在 -> ({}, True) で新規作成を許容する。
     存在するがパース不能、またはdictでない -> ({}, False) で書き込みを止める。
     """
-    if not os.path.exists(path):
-        return {}, True
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            return data, True
-        return {}, False
-    except Exception:
+        return prefs_store.load_for_update(path), True
+    except prefs_store.PreferencesReadError:
         return {}, False
 
 
@@ -1148,11 +1143,11 @@ def send_chat(message: str, source: str = "chat"):
         )
         subprocess.run([
             "curl", "-sf", "-X", "POST",
-            "-H", f"Authorization: Bearer {HA_TOKEN}",
+            "-H", "@-",
             "-H", "Content-Type: application/json",
             "-d", payload,
             f"{HA_URL}/services/input_text/set_value"
-        ], capture_output=True, timeout=5)
+        ], input=f"Authorization: Bearer {HA_TOKEN}\n".encode(), capture_output=True, timeout=5)
 
 
 # --- ファイル監視スレッド（SSE 通知用）---
@@ -2202,16 +2197,10 @@ class Handler(BaseHTTPRequestHandler):
                 validate_tts_options(body.get("tts_options"))
                 # 全置換すると、UIがフォームに持っていないキーが保存のたびに消える(findings F-21)。
                 # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。
-                existing, ok = _load_prefs_for_update(PREFS_FILE)
-                if not ok:
-                    self.send_json(
-                        {"error": "既存の preferences.json を読めないため保存を中止しました"
-                                  "（壊れたファイルを上書きしないため）"},
-                        500,
-                    )
-                    return
-                merged = prefs_merge.merge_preferences(existing, body)
-                atomic_write(PREFS_FILE, json.dumps(merged, ensure_ascii=False, indent=2))
+                prefs_store.update(
+                    PREFS_FILE,
+                    lambda existing: prefs_merge.merge_preferences(existing, body),
+                )
                 self.send_json({"ok": True})
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
                 self.send_json({"error": str(e)}, 400)
@@ -2690,20 +2679,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(enabled, bool):
                     self.send_json({"error": "enabled must be boolean"}, 400)
                     return
-                prefs, ok = _load_prefs_for_update(PREFS_FILE)
-                if not ok:
-                    self.send_json({"error": "preferences.json が読み込めないため設定変更を中止しました（ファイル破損の可能性）"}, 500)
-                    return
-                games = prefs.get("games")
-                if not isinstance(games, dict):
-                    games = {}
-                    prefs["games"] = games
-                plugins = games.get("plugins")
-                if not isinstance(plugins, dict):
-                    plugins = {}
-                    games["plugins"] = plugins
-                plugins[game_id] = enabled
-                atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
+                def mutate_game(prefs):
+                    games = prefs.get("games")
+                    if not isinstance(games, dict):
+                        games = {}
+                        prefs["games"] = games
+                    plugins = games.get("plugins")
+                    if not isinstance(plugins, dict):
+                        plugins = {}
+                        games["plugins"] = plugins
+                    plugins[game_id] = enabled
+                    return prefs
+
+                prefs_store.update(PREFS_FILE, mutate_game)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
@@ -2717,12 +2705,11 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.exists(CHIVE_DIR):
                     shutil.rmtree(CHIVE_DIR)
                 _set_install_status("chive", "idle", "")
-                prefs, ok = _load_prefs_for_update(PREFS_FILE)
-                if not ok:
-                    self.send_json({"error": "preferences.json が読み込めないため設定変更を中止しました（ファイル破損の可能性）"}, 500)
-                    return
-                prefs.setdefault("games", {}).setdefault("plugins", {})["wordvec_race"] = False
-                atomic_write(PREFS_FILE, json.dumps(prefs, ensure_ascii=False, indent=2))
+                def disable_wordvec(prefs):
+                    prefs.setdefault("games", {}).setdefault("plugins", {})["wordvec_race"] = False
+                    return prefs
+
+                prefs_store.update(PREFS_FILE, disable_wordvec)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)

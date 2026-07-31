@@ -12,8 +12,7 @@ chat.sh側はこのブロック全体を外側のbash `2>/dev/null || true`
 関数全体を囲むtry/exceptを持たせている（唯一の意図的な追加）。
 chat.sh の行番号は、削除直前の git commit 537331b を参照する。
 """
-import json
-import os
+import prefs_store
 
 
 def _normalize_speakers(value):
@@ -207,28 +206,22 @@ def update_preferences(parsed, prefs_file, print_fn=print):
         if not update:
             return
 
-        try:
-            with open(prefs_file, encoding="utf-8") as fh:
-                prefs = json.load(fh)
-        except Exception:
-            prefs = {"cameras": [], "speakers": [], "presence": {}, "policies": []}
-
         changed = []
-        changed += apply_cameras_add(prefs, update.get("cameras_add"))
-        changed += apply_cameras_remove(prefs, update.get("cameras_remove"))
-        changed += apply_speakers_set(prefs, update.get("speakers_set"))
-        changed += apply_presence_set(prefs, update.get("presence_set"))
-        changed += apply_policies_add(prefs, update.get("policies_add"))
-        changed += apply_sensors_add(prefs, update.get("sensors_add"))
-        changed += apply_sensors_remove(prefs, update.get("sensors_remove"))
-        changed += apply_entities_add(prefs, update.get("entities_add"))
-        changed += apply_entities_remove(prefs, update.get("entities_remove"))
 
+        def mutate(prefs):
+            changed.extend(apply_cameras_add(prefs, update.get("cameras_add")))
+            changed.extend(apply_cameras_remove(prefs, update.get("cameras_remove")))
+            changed.extend(apply_speakers_set(prefs, update.get("speakers_set")))
+            changed.extend(apply_presence_set(prefs, update.get("presence_set")))
+            changed.extend(apply_policies_add(prefs, update.get("policies_add")))
+            changed.extend(apply_sensors_add(prefs, update.get("sensors_add")))
+            changed.extend(apply_sensors_remove(prefs, update.get("sensors_remove")))
+            changed.extend(apply_entities_add(prefs, update.get("entities_add")))
+            changed.extend(apply_entities_remove(prefs, update.get("entities_remove")))
+            return prefs if changed else None
+
+        prefs_store.update(prefs_file, mutate)
         if changed:
-            tmp = prefs_file + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(prefs, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, prefs_file)
             print_fn(f"[chat][prefs] 更新: {changed}")
-    except Exception:
-        pass
+    except Exception as exc:
+        print_fn(f"[chat][prefs] 更新を中止しました: {exc}")

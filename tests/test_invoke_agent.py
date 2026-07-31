@@ -1451,7 +1451,7 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(settings["permissions"]["ask"], ["browser(*)"])
             self.assertEqual(
                 settings["permissions"]["deny"],
-                ["command(*)", "write_file(*)"],
+                ["command(*)", "write_file(*)", "read_file(*)"],
             )
             self.assertEqual(settings_path.stat().st_mode & 0o777, 0o640)
 
@@ -1506,9 +1506,8 @@ class InvokeAgentTests(unittest.TestCase):
                 {"private": "考えたこと", "speak": None},
             )
 
-    def test_agy_grants_read_file_when_read_builtin_intended(self):
-        # F9(2026-07-23): agy native read_file は config.json globalPermissionGrants の read_file(*) grant で
-        # headless でも通る(実機確認)。Read 意図(--allowed-builtins Read)がある時だけ配布する。
+    def test_agy_does_not_grant_native_read_file_when_read_intended(self):
+        # Read は files MCP へ写像し、native read_file は機密パス policy の迂回を防ぐため配布しない。
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
@@ -1524,7 +1523,7 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             config = json.loads(config_path.read_text(encoding="utf-8"))
             allow = config["userSettings"]["globalPermissionGrants"]["allow"]
-            self.assertIn("read_file(*)", allow)
+            self.assertNotIn("read_file(*)", allow)
             self.assertIn("mcp(ha/*)", allow)
 
     def test_agy_does_not_grant_read_file_without_read_builtin(self):

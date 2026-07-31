@@ -48,3 +48,5 @@ class AudioSourceResolveTests(unittest.TestCase):
         ]
         self.assertEqual(self.resolver.resolve_audio_source(body_loc, sources), "rtsp://example.local/first")
 
+    def test_no_configured_source_has_no_personal_fallback(self):
+        self.assertEqual(self.resolver.resolve_audio_source({}, []), "")

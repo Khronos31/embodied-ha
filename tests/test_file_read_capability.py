@@ -3,8 +3,7 @@
 守っている性質は「**3ハーネスのどれで動いていても、ループがファイルを読める**」。
 
 以前は loop がどのハーネスでも Read を要求していなかったが、実態は揃っていなかった:
-claude は `--allowedTools` が事前承認リストにすぎないため読めており、agy は chat で
-書かれた `read_file(*)` grant が残留して読めていた。「読めない」のは codex だけだった。
+Claude はnative Read、CodexとAntigravityは同じdeny policyを持つfiles MCPを使う。
 """
 import sys
 import unittest
@@ -25,13 +24,13 @@ class GrantFileReadTests(unittest.TestCase):
         self.assertNotIn("files", servers)
         self.assertNotIn("mcp__files__read_file", allowed.split(","))
 
-    def test_agy_gets_read_builtin_and_no_files_server(self):
-        # agy は --allowed-builtins Read から native read_file の grant が書かれる。
+    def test_agy_gets_files_mcp_and_not_native_read(self):
         allowed, servers = file_read_capability.grant_file_read(
             "mcp__memory__recall", ("memory",), "agy"
         )
-        self.assertIn("Read", allowed.split(","))
-        self.assertNotIn("files", servers)
+        self.assertNotIn("Read", allowed.split(","))
+        self.assertIn("mcp__files__read_file", allowed.split(","))
+        self.assertEqual(servers[0], "files")
 
     def test_codex_gets_files_mcp_at_the_front(self):
         allowed, servers = file_read_capability.grant_file_read(
@@ -46,7 +45,7 @@ class GrantFileReadTests(unittest.TestCase):
         first = file_read_capability.grant_file_read("mcp__memory__recall", ("memory",), "codex")
         second = file_read_capability.grant_file_read(first[0], first[1], "codex")
         self.assertEqual(first, second)
-        self.assertEqual(first[0].split(",").count("Read"), 1)
+        self.assertEqual(first[0].split(",").count("Read"), 0)
         self.assertEqual(first[0].split(",").count("mcp__files__read_file"), 1)
 
     def test_existing_read_is_not_duplicated(self):
@@ -58,12 +57,11 @@ class GrantFileReadTests(unittest.TestCase):
         allowed, _ = file_read_capability.grant_file_read("ReadSomethingElse", (), "claude")
         self.assertIn("Read", allowed.split(","))
 
-    def test_unknown_harness_still_gets_read(self):
-        """ハーネスが取れなかった場合でもループが読めなくならない。"""
+    def test_unknown_harness_fails_closed_without_read(self):
         for harness in ("", "  ", "unknown"):
             with self.subTest(harness=harness):
                 allowed, servers = file_read_capability.grant_file_read("mcp__memory__recall", ("memory",), harness)
-                self.assertIn("Read", allowed.split(","))
+                self.assertNotIn("Read", allowed.split(","))
                 self.assertNotIn("files", servers)
 
     def test_empty_allowed_tools(self):

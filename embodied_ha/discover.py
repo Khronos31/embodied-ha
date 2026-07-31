@@ -27,6 +27,7 @@ import subprocess
 import sys
 
 from migrate_source_schema import build_source_draft, classify_source  # type: ignore  # noqa: F401  (classify_source re-exported for shared-classifier use/tests)
+import prefs_store
 
 
 def get_token():
@@ -67,10 +68,11 @@ SPEAKER_PREFER = ("nest", "mini", "alexa", "アレクサ", "echo", "homepod", "s
 def fetch_entities(ha_url, token):
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "15", "-X", "POST",
-         "-H", f"Authorization: Bearer {token}",
+         "-H", "@-",
          "-H", "Content-Type: application/json",
          "-d", json.dumps({"template": DISCOVERY_TEMPLATE}),
          f"{ha_url.rstrip('/')}/template"],
+        input=f"Authorization: Bearer {token}\n",
         capture_output=True, text=True
     )
     if r.returncode != 0:
@@ -97,7 +99,8 @@ def build_draft(rows, resident):
     # presence（preferences.presence から。無ければ汎用ラベルのみ）
     presence_entity = None
     try:
-        prefs = json.load(open(os.environ.get("EHA_PREFS_FILE", ""), encoding="utf-8"))
+        with open(os.environ.get("EHA_PREFS_FILE", ""), encoding="utf-8") as f:
+            prefs = json.load(f)
         presence_entity = prefs.get("presence", {}).get("entity")
     except Exception:
         pass
@@ -256,7 +259,8 @@ def main():
     source_warnings = []
     if prefs_file and os.path.exists(prefs_file):
         try:
-            prefs = json.load(open(prefs_file, encoding="utf-8"))
+            with open(prefs_file, encoding="utf-8") as f:
+                prefs = json.load(f)
         except Exception:
             prefs = {}
         if isinstance(prefs, dict):
@@ -267,33 +271,33 @@ def main():
 
     if args.write:
         prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+        def mutate(prefs):
+            if not prefs.get("sensors"):
+                prefs["sensors"] = draft
+                print("[discover] sensors 下書きを書き込みました", file=sys.stderr)
+            if not prefs.get("tts_entity") and default_tts:
+                prefs["tts_entity"] = default_tts
+            # speakers は既存ユーザー設定を尊重し、未設定（空）のときだけ下書きを入れる。
+            if not prefs.get("speakers") and speakers_draft:
+                prefs["speakers"] = speakers_draft
+                print(f"[discover] speakers 下書きを書き込みました（{len(speakers_draft)}部屋）", file=sys.stderr)
+            # entities（操作できる家電）も未設定のときだけ下書きを入れる。
+            if not prefs.get("entities") and entities_draft:
+                prefs["entities"] = entities_draft
+                print(f"[discover] entities 下書きを書き込みました（{len(entities_draft)}件）", file=sys.stderr)
+            source_keys = ("cameras", "mics", "video_media", "audio_media")
+            if not any(prefs.get(key) for key in source_keys) and any(source_draft.values()):
+                for key in source_keys:
+                    prefs[key] = source_draft[key]
+                total = sum(len(source_draft[key]) for key in source_keys)
+                print(f"[discover] source 下書きを書き込みました（{total}件）", file=sys.stderr)
+            return prefs
+
         try:
-            prefs = json.load(open(prefs_file, encoding="utf-8"))
-        except Exception:
-            prefs = {}
-        if not prefs.get("sensors"):
-            prefs["sensors"] = draft
-            print("[discover] sensors 下書きを書き込みました", file=sys.stderr)
-        if not prefs.get("tts_entity") and default_tts:
-            prefs["tts_entity"] = default_tts
-        # speakers は既存ユーザー設定を尊重し、未設定（空）のときだけ下書きを入れる。
-        if not prefs.get("speakers") and speakers_draft:
-            prefs["speakers"] = speakers_draft
-            print(f"[discover] speakers 下書きを書き込みました（{len(speakers_draft)}部屋）", file=sys.stderr)
-        # entities（操作できる家電）も未設定のときだけ下書きを入れる。
-        if not prefs.get("entities") and entities_draft:
-            prefs["entities"] = entities_draft
-            print(f"[discover] entities 下書きを書き込みました（{len(entities_draft)}件）", file=sys.stderr)
-        source_keys = ("cameras", "mics", "video_media", "audio_media")
-        if not any(prefs.get(key) for key in source_keys) and any(source_draft.values()):
-            for key in source_keys:
-                prefs[key] = source_draft[key]
-            total = sum(len(source_draft[key]) for key in source_keys)
-            print(f"[discover] source 下書きを書き込みました（{total}件）", file=sys.stderr)
-        tmp = prefs_file + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(prefs, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, prefs_file)
+            prefs = prefs_store.update(prefs_file, mutate)
+        except Exception as exc:
+            print(f"[discover] preferences.json の更新を中止しました: {exc}", file=sys.stderr)
+            sys.exit(1)
         if prefs.get("sensors") == draft:
             n = sum(len(g["items"]) for g in draft["groups"])
             print(f"[discover] preferences.json に sensors を書き込みました（{len(draft['groups'])}グループ / {n}項目）",

@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
-"""Classify where a sensory input is experienced from."""
+"""Resolve where an observed or heard event sits in the configured room graph."""
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
+import urllib.error
+import urllib.request
 from typing import Any
 
 from room_graph import (
@@ -14,7 +14,6 @@ from room_graph import (
     initial_room,
     load_room_graph,
     resolve_room,
-    room_graph_path as room_graph_path,  # noqa: F401
     rooms,
     shortest_path,
 )
@@ -22,10 +21,6 @@ from state_utils import clean, load_prefs, read_json
 
 DEFAULT_DATA_DIR = "/config/embodied-ha"
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
-DEFAULT_CALIB_FILE = "/config/embodied-ha/calibration/audio_calibration.json"
-
-_CALIB_INVALID_THRESHOLD = -200.0
-
 SPECIAL_SOURCE_HINTS = {}
 
 
@@ -56,22 +51,20 @@ def _ha_template(template: str) -> str | None:
     token = _ha_token()
     if not token:
         return None
-    body = json.dumps({"template": template}, ensure_ascii=False)
-    result = subprocess.run(
-        [
-            "curl", "-sf", "--max-time", "5",
-            "-X", "POST",
-            "-H", f"Authorization: Bearer {token}",
-            "-H", "Content-Type: application/json",
-            "-d", body,
-            f"{_ha_api_base().rstrip('/')}/template",
-        ],
-        capture_output=True,
-        text=True,
+    request = urllib.request.Request(
+        f"{_ha_api_base().rstrip('/')}/template",
+        data=json.dumps({"template": template}, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
-    if result.returncode != 0:
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            value = clean(response.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None
-    value = clean(result.stdout)
     return value or None
 
 
@@ -106,7 +99,7 @@ def area_for_entity(entity_id: Any) -> str | None:
     cached = _AREA_CACHE.get(eid)
     if cached and cached[0] > now:
         return cached[1]
-    template = "{{ area_name(%s) or '' }}" % json.dumps(eid, ensure_ascii=False)
+    template = f"{{{{ area_name({json.dumps(eid, ensure_ascii=False)}) or '' }}}}"
     area = _ha_template(template)
     _AREA_CACHE[eid] = (now + AREA_CACHE_TTL_SEC, area)
     return area
@@ -172,35 +165,6 @@ def current_projected_room(graph: dict[str, Any] | None = None) -> str | None:
 
 
 
-def _calib_path() -> str:
-    data = clean(os.environ.get("EHA_DATA_DIR")) or DEFAULT_DATA_DIR
-    calib_dir = clean(os.environ.get("EHA_CALIB_DIR")) or os.path.join(data, "calibration")
-    return clean(os.environ.get("EHA_CALIB_FILE")) or os.path.join(calib_dir, "audio_calibration.json")
-
-
-def _attenuation_db(body_room: str, source_room: str) -> float | None:
-    """校正データから body_room 基準での source_room の相対減衰 (dB) を返す。"""
-    if body_room == source_room:
-        return 0.0
-    calib = read_json(_calib_path(), {})
-    if not isinstance(calib, dict):
-        return None
-    body_sources = calib.get(body_room, {}).get("sources", {})
-    ref_node, ref_db = None, None
-    for node, v in body_sources.items():
-        db = v.get("tone_db")
-        if isinstance(db, (int, float)) and db > _CALIB_INVALID_THRESHOLD:
-            if ref_db is None or db > ref_db:
-                ref_node, ref_db = node, db
-    if ref_node is None or ref_db is None:
-        return None
-    src_v = calib.get(source_room, {}).get("sources", {}).get(ref_node, {})
-    src_db = src_v.get("tone_db")
-    if not isinstance(src_db, (int, float)) or src_db <= _CALIB_INVALID_THRESHOLD:
-        return None
-    return round(src_db - ref_db, 1)
-
-
 def classify_sensory_origin(
     *,
     source: Any = "",
@@ -232,11 +196,9 @@ def classify_sensory_origin(
         else:
             origin = "remote"
         move_cost, move_path = shortest_path(body_room, source_room, graph)
-        attenuation = _attenuation_db(body_room, source_room)
     else:
         origin = "home_assistant"
         move_cost, move_path = None, []
-        attenuation = None
 
     return {
         "modality": clean(modality) or None,
@@ -250,5 +212,4 @@ def classify_sensory_origin(
         "access_mode": origin,
         "move_cost": move_cost,
         "move_path": move_path,
-        "attenuation_db": attenuation,
     }

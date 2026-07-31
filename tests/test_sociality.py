@@ -90,6 +90,24 @@ class SocialityTests(unittest.TestCase):
         self.assertIn("今日は会話の流れが少し落ち着いていた", narrative)
         self.assertIn("- ", narrative)
 
+    def test_corrupt_relationships_are_not_replaced(self):
+        path = Path(self.tmpdir.name) / "relationships.json"
+        path.write_text("{broken", encoding="utf-8")
+        result, is_error = self.sociality.update_relationship(
+            {"person": "alice", "note": "失われてはいけない"}
+        )
+        self.assertTrue(is_error)
+        self.assertIn("更新を中止", result[0]["text"])
+        self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
+
+    def test_unreadable_narrative_is_not_replaced(self):
+        path = Path(self.tmpdir.name) / "self_narrative.md"
+        path.write_bytes(b"\xff\xfe")
+        result, is_error = self.sociality.append_narrative({"text": "追記"})
+        self.assertTrue(is_error)
+        self.assertIn("更新を中止", result[0]["text"])
+        self.assertEqual(path.read_bytes(), b"\xff\xfe")
+
     def test_get_social_state_returns_defaults_when_missing(self):
         payload = json.loads(self._text(self.sociality.get_social_state({})))
         self.assertEqual(payload["mode"], "idle")

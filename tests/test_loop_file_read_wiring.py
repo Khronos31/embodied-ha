@@ -49,8 +49,8 @@ class LoopFileReadWiringTests(unittest.TestCase):
 
     def test_agy_loop_gets_read(self):
         ctx = self._context("agy")
-        self.assertIn("Read", ctx["allowed_tools"].split(","))
-        self.assertNotIn("files", ctx["mcp_servers"])
+        self.assertIn("mcp__files__read_file", ctx["allowed_tools"].split(","))
+        self.assertEqual(ctx["mcp_servers"][0], "files")
 
     def test_codex_loop_gets_files_mcp(self):
         # codex は組み込みのファイル読み取りが無いので files MCP で代替する。

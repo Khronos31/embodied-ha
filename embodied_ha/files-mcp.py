@@ -2,7 +2,7 @@
 """ファイル読み取り MCP サーバー（embodied-ha 用）。
 
 ツール:
-  read_file … 絶対 or cwd 相対のパスを受け取り、テキスト内容を返す。
+  read_file … 絶対パスを受け取り、許可されたテキスト内容を返す。
 
 背景: codex/agy ハーネスは本環境(HAOS 非特権コンテナ)で bubblewrap サンドボックスを
 初期化できず、シェル経由のファイル読み取り(cat 等)が bwrap エラーで全滅する
@@ -11,7 +11,8 @@ EHA 管理プロセスで安全に提供するのがこの MCP。--dangerously-b
 与えずに Read だけを最小権限で許すための薄いラッパー。
 
 方針:
-  - read-anything: パス制限はしない(Claude の native Read と同じ到達範囲=コンテナ内どこでも)。
+  - policy-read: `read_policy.py` と解決済み実パスの検査で認証・機密パスを拒否。
+    Claude の native Read に設定する deny rule と対象を揃える。
   - secure-read: O_NOFOLLOW で開き(末端 symlink 拒否)、fstat で regular file 確認
     (fifo/device/dir を拒否=ブロッキング/副作用回避)、size cap で OOM 回避。
 env: なし(パスは呼び出し引数)。
@@ -21,6 +22,7 @@ import os
 import stat
 
 from mcp_lib import serve, text
+from read_policy import read_deny_reason
 
 # テキスト読み取りの上限。超過分は切り詰めて注記する(巨大ファイルでの OOM を避ける)。
 MAX_READ_BYTES = 1024 * 1024  # 1 MiB
@@ -35,6 +37,11 @@ def read_file(args):
     raw_path = (args.get("path") or "").strip()
     if not raw_path:
         return [text("read_file: path が空です。読みたいファイルのパスを指定してください。")], True
+    if not os.path.isabs(raw_path):
+        return [text("read_file: 絶対パスを指定してください。")], True
+    reason = read_deny_reason(raw_path)
+    if reason:
+        return [text(f"read_file: {reason}")], True
 
     # O_NOFOLLOW: 末端が symlink なら拒否(想定外の場所への誘導を防ぐ)。
     # O_NONBLOCK: fifo/デバイスを O_RDONLY で開くとライタ待ちでブロックし得るため非ブロックで開き、
@@ -66,6 +73,9 @@ def read_file(args):
             real = raw_path
         if real.startswith(_DENY_REALPATH_PREFIXES):
             return [text(f"read_file: 仮想ファイルシステム(/proc・/sys)は読めません: {raw_path}")], True
+        reason = read_deny_reason(real)
+        if reason:
+            return [text(f"read_file: {reason}")], True
 
         # short read 対応: cap まで(または EOF まで)ループで読む。
         chunks = []
@@ -122,7 +132,7 @@ if __name__ == "__main__":
                 "name": "read_file",
                 "description": (
                     "ファイルのパスを受け取り、その中身(テキスト)を返す。\n"
-                    "絶対パス、または現在の作業ディレクトリからの相対パスを指定する。\n"
+                    "絶対パスを指定する。\n"
                     "通常ファイルのみ(ディレクトリ・デバイス・symlink は不可)。\n"
                     "巨大ファイルは先頭のみ返す。バイナリは内容を表示しない。"
                 ),
@@ -131,7 +141,7 @@ if __name__ == "__main__":
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "読みたいファイルのパス(絶対 or cwd 相対)",
+                            "description": "読みたいファイルの絶対パス",
                         },
                     },
                     "required": ["path"],

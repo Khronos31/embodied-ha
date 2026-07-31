@@ -28,14 +28,15 @@ def fetch_frame(source: str, *, ha_url: str, go2rtc_url: str, token: str) -> byt
         url = _camera_proxy_url(ha_url, source)
         cmd = ["curl", "-sf", "--max-time", "8"]
         if token:
-            cmd += ["-H", f"Authorization: Bearer {token}"]
+            cmd += ["-H", "@-"]
         cmd += [url]
     else:
         url = (go2rtc_url or "").rstrip("/") + f"/api/frame.jpeg?src={source}"
         cmd = ["curl", "-sf", "--max-time", "8", url]
 
     try:
-        result = subprocess.run(cmd, capture_output=True)
+        header_input = f"Authorization: Bearer {token}\n".encode() if "." in source and token else None
+        result = subprocess.run(cmd, input=header_input, capture_output=True)
     except Exception:
         return None
     if result.returncode != 0 or len(result.stdout or b"") < 100:

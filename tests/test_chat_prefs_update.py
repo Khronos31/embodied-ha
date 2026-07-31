@@ -42,17 +42,18 @@ class UpdatePreferencesBehaviorTests(unittest.TestCase):
             self.assertEqual(prefs["sensors"]["groups"][0]["title"], "new")
             self.assertEqual(prefs["entities"], [{"name": "new", "entity_id": "light.new"}])
 
-    def test_invalid_json_recovers_to_default_shape(self):
+    def test_invalid_json_is_left_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             prefs_file = Path(tmp) / "preferences.json"
             prefs_file.write_text("not json", encoding="utf-8")
+            printed = []
             chat_prefs_update.update_preferences(
                 {"preferences_update": {"policies_add": ["新規ポリシー"]}},
                 str(prefs_file),
+                print_fn=printed.append,
             )
-            prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
-            self.assertEqual(prefs["policies"], ["新規ポリシー"])
-            self.assertEqual(prefs["cameras"], [])
+            self.assertEqual(prefs_file.read_text(encoding="utf-8"), "not json")
+            self.assertTrue(any("更新を中止" in line for line in printed))
 
     def test_empty_prefs_file_string_is_noop(self):
         # 例外を投げないことの確認
