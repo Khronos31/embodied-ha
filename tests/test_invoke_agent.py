@@ -1215,47 +1215,100 @@ class InvokeAgentTests(unittest.TestCase):
                 ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
-    def test_agy_denies_native_mutations_without_mcp_and_preserves_settings(self):
+    def test_agy_migrates_native_read_policy_and_preserves_future_user_grants(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
             settings_path = agy_home / ".gemini" / "antigravity-cli" / "settings.json"
+            config_path = agy_home / ".gemini" / "config" / "config.json"
             settings_path.parent.mkdir(parents=True)
+            config_path.parent.mkdir(parents=True)
             settings_path.write_text(
                 json.dumps({
+                    "allowNonWorkspaceAccess": True,
                     "permissions": {
-                        "allow": ["read_file(*)"],
+                        "allow": ["read_file(*)", "browser(example.com)"],
+                        "deny": ["read_file(*)", "browser(blocked.example)"],
                         "ask": ["browser(*)"],
                     },
                     "theme": "keep-me",
                 }),
                 encoding="utf-8",
             )
+            config_path.write_text(
+                json.dumps({
+                    "userSettings": {
+                        "remoteControlHostname": "keep-me",
+                        "globalPermissionGrants": {
+                            "allow": ["read_file(*)", "mcp(existing/*)"],
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
             os.chmod(settings_path, 0o640)
+            os.chmod(config_path, 0o640)
             fake = self.write_project_fake_agy(tmpdir)
 
-            for _ in range(2):
-                result = self.run_wrapper(
-                    ["hello"],
-                    {
-                        "EHA_AGENT_HARNESS": "agy",
-                        "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
-                        "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
-                    },
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
+            env = {
+                "EHA_AGENT_HARNESS": "agy",
+                "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+            }
+            result = self.run_wrapper(["hello"], env)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertEqual(settings["theme"], "keep-me")
-            self.assertEqual(settings["permissions"]["allow"], ["read_file(*)"])
+            self.assertFalse(settings["allowNonWorkspaceAccess"])
+            self.assertEqual(
+                settings["permissions"]["allow"],
+                ["browser(example.com)"],
+            )
             self.assertEqual(settings["permissions"]["ask"], ["browser(*)"])
             self.assertEqual(
                 settings["permissions"]["deny"],
-                ["command(*)", "write_file(*)", "read_file(*)"],
+                [
+                    "browser(blocked.example)",
+                    "command(*)",
+                    "write_file(*)",
+                    "read_file(/config)",
+                    "read_file(/data)",
+                    "read_file(/proc)",
+                    "read_file(/root)",
+                    "read_file(/run/secrets)",
+                ],
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config["userSettings"]["remoteControlHostname"], "keep-me")
+            self.assertEqual(
+                config["userSettings"]["globalPermissionGrants"]["allow"],
+                ["mcp(existing/*)"],
             )
             self.assertEqual(settings_path.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(config_path.stat().st_mode & 0o777, 0o640)
+            marker = settings_path.parent / ".eha-native-read-policy-v1"
+            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
 
-    def test_agy_native_mutation_deny_fails_closed_on_invalid_settings(self):
+            # marker後にユーザーが明示的に同名grantを追加した場合は、EHA由来と
+            # 区別できないため再削除しない。core denyは引き続き維持する。
+            settings["permissions"]["allow"].append("read_file(*)")
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+            config["userSettings"]["globalPermissionGrants"]["allow"].append(
+                "read_file(*)"
+            )
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            result = self.run_wrapper(["hello again"], env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertIn("read_file(*)", settings["permissions"]["allow"])
+            self.assertIn(
+                "read_file(*)",
+                config["userSettings"]["globalPermissionGrants"]["allow"],
+            )
+
+    def test_agy_native_safety_policy_fails_closed_on_invalid_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
@@ -1344,7 +1397,7 @@ class InvokeAgentTests(unittest.TestCase):
             allow = config["userSettings"]["globalPermissionGrants"]["allow"]
             self.assertNotIn("read_file(*)", allow)
 
-    def test_agy_permission_grants_merge_is_add_only_and_dedupes(self):
+    def test_agy_permission_grants_remove_legacy_read_once_and_dedupe(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
@@ -1367,7 +1420,7 @@ class InvokeAgentTests(unittest.TestCase):
             config = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 config["userSettings"]["globalPermissionGrants"]["allow"],
-                ["mcp(ha/*)", "read_file(*)", "mcp(memory/*)"],
+                ["mcp(ha/*)", "mcp(memory/*)"],
             )
 
     def test_agy_permission_grants_written_without_allowed_tools(self):
@@ -1394,16 +1447,21 @@ class InvokeAgentTests(unittest.TestCase):
             tmpdir = Path(tmp)
             agy_home = tmpdir / "agy-home"
             config_path = agy_home / ".gemini" / "config" / "config.json"
+            settings_path = agy_home / ".gemini" / "antigravity-cli" / "settings.json"
             config_path.parent.mkdir(parents=True)
+            settings_path.parent.mkdir(parents=True)
             config_path.write_text("{broken json", encoding="utf-8")
+            original_settings = json.dumps({"permissions": {"deny": ["read_file(*)"]}})
+            settings_path.write_text(original_settings, encoding="utf-8")
 
             result = self._run_agy_with_servers(
                 tmpdir, agy_home, ["--mcp-servers", "ha"],
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("grants merge failed", result.stderr)
+            self.assertIn("native safety policy failed", result.stderr)
             self.assertEqual(config_path.read_text(encoding="utf-8"), "{broken json")
+            self.assertEqual(settings_path.read_text(encoding="utf-8"), original_settings)
 
     def test_agy_permission_grants_die_on_invalid_nested_types(self):
         with tempfile.TemporaryDirectory() as tmp:

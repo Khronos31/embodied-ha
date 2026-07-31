@@ -19,6 +19,13 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
   Instances that do not use Antigravity now remove the obsolete Antigravity binary and credentials
   at startup. Character data and memories are not removed.
 
+### Fixed / 修正
+
+- Antigravityのファイル読み取り制限が、深聴きで生成した一時音声まで拒否してしまう問題を修正しました。
+  `/config`・`/data`・プロセス環境などの機密領域は引き続き明示的に拒否します。
+  Fixed Antigravity file-read hardening blocking the temporary audio produced by deep listening.
+  Sensitive areas such as `/config`, `/data`, and process environments remain explicitly denied.
+
 ### Removed / 削除
 
 - Claude Code / Codexから一時的にAntigravityへ切り替えて音声を処理するフォールバックと、
