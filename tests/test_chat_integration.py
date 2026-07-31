@@ -42,8 +42,6 @@ def _make_isolated_env(tmp, **overrides):
     character_file.write_text("私はあかね。", encoding="utf-8")
     body_location_file = Path(tmp) / "body_location.json"
     body_location_file.write_text(json.dumps({"current_entity": ""}), encoding="utf-8")
-    next_listen_request_file = Path(tmp) / "next_listen_request.json"  # 存在しない=予約無し
-
     env = {
         "CHAT_MESSAGE": "こんにちは",
         "CHAT_SOURCE": "chat",
@@ -53,7 +51,6 @@ def _make_isolated_env(tmp, **overrides):
         "EHA_CHARACTER_FILE": str(character_file),
         "EHA_BODY_LOCATION_FILE": str(body_location_file),
         "EHA_DATA_DIR": str(tmp),
-        "EHA_NEXT_LISTEN_REQUEST_FILE": str(next_listen_request_file),
         "CLAUDE_CONFIG_DIR": str(Path(tmp) / "claude-home"),
         "CLAUDE_BIN": "claude",
         "MQTT_HOST": "",  # 空=publish無し(実MQTTブローカーに触れない)
@@ -221,43 +218,6 @@ class ChatRunIntegrationTests(unittest.TestCase):
             self.assertEqual(len(captured_calls), 1)
             prompt_text = captured_calls[0]["prompt"]
             self.assertIn("私はテスト用のあかね。特徴的な一文。", prompt_text)
-
-    def test_queued_listen_context_propagates_to_claude_env(self):
-        # Codexレビューで発見: chat.shはprepare_queued_listen_session()の戻り値を
-        # eval "$(export ...)"でシェル環境へ持ち込み、Claude呼び出しの環境にも
-        # 継承されていた。chat.py側がこの伝播を欠いていたため、深聴きセッション
-        # 限定のEHA_SESSION_BIN/EHA_SESSION_MODEL等がclaude_envに乗ることを確認する。
-        with tempfile.TemporaryDirectory() as tmp:
-            env, log_dir, prefs_file = _make_isolated_env(tmp)
-
-            captured_envs = []
-
-            def capture_invoke_chat(**kwargs):
-                captured_envs.append(kwargs["claude_env"])
-                return _fake_chat_response()
-
-            fake_queued_ctx = {
-                "RECENT_AUDITORY_INPUT": None,
-                "EHA_QUEUED_LISTEN_FILE": None,
-                "EHA_SESSION_BIN": "agy",
-                "EHA_SESSION_MODEL": "Gemini 3.5 Flash (High)",
-            }
-
-            with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=capture_invoke_chat), \
-                 patch.object(chat, "_build_long_memory", return_value="なし"), \
-                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
-                 patch.object(chat, "_build_open_loops", return_value="なし"), \
-                 patch.object(chat, "_build_sensors", return_value=""), \
-                 patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat.chat_context, "resolve_queued_listen_context", return_value=fake_queued_ctx):
-                chat.run(env)
-
-            self.assertEqual(len(captured_envs), 1)
-            self.assertEqual(captured_envs[0].get("EHA_SESSION_BIN"), "agy")
-            self.assertEqual(captured_envs[0].get("EHA_SESSION_MODEL"), "Gemini 3.5 Flash (High)")
-
 
 if __name__ == "__main__":
     unittest.main()

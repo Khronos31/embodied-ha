@@ -380,18 +380,14 @@ def make_runtime(
         "EHA_AGENT_CWD": str(workdir),
         "EHA_SHADOW_RUN_ROOT": str(run_root),
         "EHA_SHADOW_TRACE_DIR": str(trace_dir),
-        "EHA_NEXT_LISTEN_REQUEST_FILE": str(data_dir / "runtime" / "next_listen_request.json"),
-        "EHA_NEXT_LISTEN_LOG_FILE": str(log_dir / "next_listen_log.jsonl"),
         "EHA_ACTIVE_LISTEN_LOG_FILE": str(log_dir / "active_listen_log.jsonl"),
         "EHA_TEST_TIMESTAMP": timestamp,
         "EHA_TEST_HOUR": "12",
-        "EHA_SESSION_MODEL": "opus",
         "HA_URL": "http://fixture.local/api",
         "SUPERVISOR_TOKEN": "fixture-token",
         "INGRESS_PORT": "18099",
         "RESIDENT": "ユーザー",
     }
-    env.pop("EHA_SESSION_BIN", None)
     return log_dir, env
 
 

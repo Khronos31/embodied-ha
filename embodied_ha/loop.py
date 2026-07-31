@@ -14,7 +14,7 @@ import random
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -187,7 +187,6 @@ def build_invoke_agent_loop_command(
     system_prompt: str,
     user_prompt: str,
     content_json_path: str | None = None,
-    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
     transcript_file: str | None = None,
 ) -> list[str]:
@@ -202,21 +201,13 @@ def build_invoke_agent_loop_command(
         "--append-system-prompt",
         system_prompt,
     ]
-    if sound_file:
-        # --sound-fileはinvoke-agent.sh側でharness=agyへ強制されるため、agyがdieする
-        # --allowed-builtinsは渡さない(#14増分5・chat_invoke.pyと同じ制約)。
-        cmd += ["--sound-file", sound_file, "--agent-site", mode]
-    elif allowed_builtins:
+    if allowed_builtins:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
     if mcp_servers:
-        # invoke-agent.sh の run_agy は --mcp-servers があると --agent-site を必須にする
-        # (agyのMCP config生成にサイトが要る)。sound_file 経路は上で付与済みだが、
-        # 通常ターン(非sound_file)でも agy 選択時に落ちないよう常に付ける。claude/codex は
-        # --agent-site を無視するため3ハーネス安全(案A・[[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
-        if not sound_file:
-            cmd += ["--agent-site", mode]
+        # Antigravity の site-scoped MCP config 用。claude/codex は無視する。
+        cmd += ["--agent-site", mode]
         cmd += ["--mcp-servers", " ".join(mcp_servers)]
     if schema is not None:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
@@ -263,25 +254,21 @@ def invoke_loop_claude(
     content_blocks: list[dict[str, Any]] | None = None,
     facts_file: str | None = None,
     model: str | None = None,
-    sound_file: str | None = None,
     response_schema: Any = _DEFAULT_RESPONSE_SCHEMA,
     run=subprocess.run,
 ) -> str:
     """Claude Codeをstream-jsonで呼び、最後のresult payloadを返す。"""
     env = build_loop_claude_env(environ, actor=None if mode == "observe" else "loop")
     script_dir = env.get("SCRIPT_DIR") or SCRIPT_DIR
-    selected_model = model or env.get("EHA_SESSION_MODEL") or "sonnet"
+    selected_model = model or "sonnet"
     content_json_path = None
     transcript_file = None
     try:
         model_tier, model_override = _invoke_agent_model_tier(selected_model)
-        # sound_file時はagyがdieするため--content-jsonを渡さない(観測カメラ画像等の
-        # content_blocksはこのターンでは黙って落とす。#14増分5・chat_invoke.pyと同じ
-        # 既知のトレードオフ)。
-        if content_blocks is not None and not sound_file:
+        if content_blocks is not None:
             content_json_path = _write_invoke_agent_content_json(content_blocks, env, mode)
         selected_harness = (env.get("EHA_AGENT_HARNESS") or _selected_harness()).strip().lower()
-        if selected_harness in {"claude", "claude-code"} and not sound_file:
+        if selected_harness in {"claude", "claude-code"}:
             tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
             os.makedirs(tmp_dir, exist_ok=True)
             fd, transcript_file = tempfile.mkstemp(
@@ -297,7 +284,6 @@ def invoke_loop_claude(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             content_json_path=content_json_path,
-            sound_file=sound_file,
             response_schema=response_schema,
             transcript_file=transcript_file,
         )
@@ -554,16 +540,16 @@ def mode_config(mode: str) -> ModeConfig:
     configs = {
         "observe": ModeConfig(
             label="家の見守りの時間",
-            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える\n-- watch_media … テレビ・PC画面等のメディアを観る（侵入不要）\n-- listen … 音声を短時間だけ聴く\n-- listen_media … 番組音・音楽等のメディア音声を聴く（侵入不要）\n-- concentrate_hearing … 次のセッション開始時に音声を処理するため、聴取キューだけ積む（物理体モード専用・即時には解析されない）\n-- recall … 過去ログをキーワードで全文検索\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
+            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える\n-- watch_media … テレビ・PC画面等のメディアを観る（侵入不要）\n-- listen … 音声を短時間だけ聴く\n-- listen_media … 番組音・音楽等のメディア音声を聴く（侵入不要）\n-- recall … 過去ログをキーワードで全文検索\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
             task="# やってほしいこと\n1. 見守りシステムからの報告とセンサー・聴覚情報で家の様子を掴む\n2. 報告は伝聞。気になることがあれば move_to → enter_cyberspace → use_device_camera で現地を自分の目で確認する\n3. 現地確認していないものを「見た」と語らない（報告を根拠に見たことにしない）\n4. 自分の目で見た内容は scene grounding として保存する\n5. 家人に伝えたいことがあれば speak / use_device_speaker を使う",
-            allowed_tools="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__camera__watch_media,mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__sociality__get_narrative,mcp__sociality__append_narrative,mcp__http__http_get,mcp__song__record",
+            allowed_tools="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__camera__watch_media,mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__sociality__get_narrative,mcp__sociality__append_narrative,mcp__http__http_get,mcp__song__record",
             mcp_servers=("sensors", "ha", "camera", "audio", "body", "memory", "sociality", "http", "song"),
         ),
         "explore": ModeConfig(
             label="家を自由に探索する時間",
-            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する\n-- use_device_camera / watch_media … 必要なら使う（watch_media は侵入不要）\n-- listen / listen_media / concentrate_hearing / read_heard_audio_log / read_active_listen_log … 聴覚系（listen_media は侵入不要、concentrate_hearing は次セッション向けの聴取予約で、物理体モード専用）\n-- recall … 過去ログを全文検索\n-- game_wordvec_race_start(mode=\"cpu\") / game_wordvec_race_cpu_move … WordVecレースをCPU相手に一人で遊べる。start→game_overになるまでcpu_moveを繰り返す\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
+            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- get_location / move_to / enter_cyberspace / move_cyber / return_to_body / estimate_move_cost … 物理体の位置と電脳体状態を確認する\n-- use_device_camera / watch_media … 必要なら使う（watch_media は侵入不要）\n-- listen / listen_media / read_heard_audio_log / read_active_listen_log … 聴覚系（listen_media は侵入不要）\n-- recall … 過去ログを全文検索\n-- game_wordvec_race_start(mode=\"cpu\") / game_wordvec_race_cpu_move … WordVecレースをCPU相手に一人で遊べる。start→game_overになるまでcpu_moveを繰り返す\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
             task="# やってほしいこと\n1. get_sensors で家の様子を掴み、気になったものを ha_get で掘る\n2. 必要なら use_device_camera / listen で確認してよい\n3. 体を動かしたいなら move_to、電脳体で飛び回りたいなら enter_cyberspace → move_cyber を選んでよい\n4. 自由時間なら映像/音声ソース（テレビ・PC画面・音楽）を watch_media / listen_media で楽しんでよい。カメラ（部屋を見る目）と違って侵入は不要。気分転換にWordVecレースをCPU戦で一人で遊んでもよい（game_wordvec_race_start mode=cpu → cpu_moveを繰り返す）\n5. 気に入った視聴体験は record_episode(kind=media_watch/media_listen) で残してよい\n6. 新しい出来事は record_episode で残す\n7. 因果関係がはっきりするなら record_causal_chain も使い、つながりを記録する\n8. 操作で直せそうな問題を見つけたら proposal で提案する",
-            allowed_tools="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__camera__watch_media,mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__sociality__get_narrative,mcp__sociality__append_narrative,mcp__http__http_get,mcp__game__game_wordvec_race_start,mcp__game__game_wordvec_race_cpu_move,mcp__song__record",
+            allowed_tools="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__camera__watch_media,mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__sociality__get_narrative,mcp__sociality__append_narrative,mcp__http__http_get,mcp__game__game_wordvec_race_start,mcp__game__game_wordvec_race_cpu_move,mcp__song__record",
             mcp_servers=("sensors", "ha", "camera", "audio", "body", "memory", "sociality", "http", "game", "song"),
         ),
         "reflect": ModeConfig(
@@ -826,12 +812,22 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     config = mode_config(selected_mode)
     hour = int(cfg.get("EHA_TEST_HOUR") or datetime.now().hour)
     allowed_tools, mcp_servers, autonomous_note = apply_boundary_gate(selected_mode, config, cfg, sensors, hour, run=run)
+    harness = (cfg.get("EHA_AGENT_HARNESS") or _selected_harness()).strip().lower()
+    if harness in {"agy", "antigravity", "gemini"} and "mcp__audio__listen" in allowed_tools:
+        allowed_tools += ",mcp__audio__concentrate_hearing"
+        config = replace(
+            config,
+            tools_desc=(
+                config.tools_desc
+                + "\n-- concentrate_hearing … その場で耳を澄ませ、返された音声ファイルを同じターンでview_fileして音そのものを確認する（物理体専用）"
+            ),
+        )
     # ファイル読み取りは3ハーネスで届け方が違い、以前は loop でどれも要求していなかった。
     # だが claude の --allowedTools は事前承認リストであって利用可能ツールの制限ではないため
     # 実態として読めており、agy も chat で書かれた grant が残留して読めていた。
     # 「loop では読めない」が成立していたのは codex だけ=挙動がばらばらだったので揃える。
     allowed_tools, mcp_servers = file_read_capability.grant_file_read(
-        allowed_tools, mcp_servers, _selected_harness()
+        allowed_tools, mcp_servers, harness
     )
     character = _read_text(cfg.get("EHA_CHARACTER_FILE") or os.path.join(SCRIPT_DIR, "character.md"))
     home_policy = _read_text(cfg.get("EHA_HOME_POLICY_FILE") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "home_policy.md"))
@@ -839,13 +835,6 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     features_presented = _run_text(["python3", os.path.join(SCRIPT_DIR, "feature-flags.py"), "get"], fallback="", run=run)
     projected_camera_source = detect_projected_camera(body_location_file)
     recent_auditory_input = build_recent_auditory_input(cfg.get("EHA_PREFS_FILE", ""), body_location_file)
-    queued_ctx = chat_context.resolve_queued_listen_context("loop")
-    if queued_ctx.get("RECENT_AUDITORY_INPUT"):
-        recent_auditory_input = queued_ctx["RECENT_AUDITORY_INPUT"]
-    cfg_with_queue = dict(cfg)
-    for key, value in queued_ctx.items():
-        if value is not None:
-            cfg_with_queue[key] = str(value)
     projected_camera_note = f"【現在の視界】電脳体が {projected_camera_source} に投射中です。" if projected_camera_source else ""
     presented_note = f"既に伝えた機能: {features_presented}（繰り返し紹介しなくてよい）\n" if features_presented else ""
     features_note = f"\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n{presented_note}{features_md}\n" if features_md else ""
@@ -863,7 +852,7 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     sys_prompt = f"{character}\n\n# 内なる衝動\n{inner_voice}\n\n# 身体状態\n{body_narrative}\n\n{projected_camera_note}\n\n{body_location_context}\n\n{recent_auditory_input}\n\n{anomaly_context}\n\n{policy_note}\n\n{behavior_policy_note}\n\n{unread_chat_note}\n\nいまは『{config.label}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n{config.tools_desc}\n\n{config.task}\n{autonomous_note}\n{features_note}\n{build_json_format(resident)}"
     user_prompt = f"{config.label}です。今は{hour}時台。\n\n【あなたの長期記憶】\n{build_long_memory(paths.memory_file, run=run)}{build_recent_facts_block(selected_mode, paths)}\n\n【直近の探索メモ】\n{build_previous_explore(paths.explore_log)}\n\n【気にかけていること（やりかけ・約束）】\n{open_loops}\n\nでは、始めてください。"
     return {
-        "cfg": cfg_with_queue,
+        "cfg": cfg,
         "mode": selected_mode,
         "mode_config": config,
         "sys_prompt": sys_prompt,
@@ -872,7 +861,6 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
         "mcp_servers": list(mcp_servers),
         "unread_autonomous_chat_count": unread_chat_count,
         "projected_camera_source": projected_camera_source,
-        "queued_listen_file": queued_ctx.get("EHA_QUEUED_LISTEN_FILE"),
     }
 
 
@@ -996,12 +984,6 @@ def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=
 
 def postprocess_loop_response(parsed: dict[str, Any], response: str, context: dict[str, Any], paths: LoopPaths, timestamp: str, *, run=subprocess.run) -> None:
     mode = context["mode"]
-    queued_file = context.get("queued_listen_file")
-    if queued_file:
-        try:
-            os.remove(str(queued_file))
-        except OSError:
-            pass
     record_presented_features(parsed, run=run)
     record_parse_skip_if_needed(parsed=parsed, response=response, log_dir=paths.log_dir, timestamp=timestamp, mode=mode)
     if mode == "observe":
@@ -1060,7 +1042,6 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             content_blocks=content_blocks,
             facts_file=facts_file,
             model="sonnet" if context["mode"] == "observe" else None,
-            sound_file=context.get("queued_listen_file"),
             response_schema=loop_schema(context["mode"]),
             run=run_subprocess,
         )

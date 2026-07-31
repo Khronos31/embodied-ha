@@ -676,79 +676,8 @@
                     </div>
                     <!-- Tab 5: Experimental Features -->
                     <div class="settings-tab-content" id="settings-tab-experimental" style="display:none;">
-                        <section class="settings-section card experimental-card">
-                            <div class="section-header" style="border-bottom: 1px solid var(--claude-border); padding-bottom: 12px; margin-bottom: 16px;">
-                                <h3 style="display: flex; align-items: center; gap: 8px;">
-                                    <svg style="width: 20px; height: 20px; fill: var(--claude-accent);" viewBox="0 0 24 24">
-                                        <path d="M12 3L1 21h22L12 3zm1 14h-2v-2h2v2zm0-4h-2V9h2v4z"/>
-                                    </svg>
-                                    Antigravityによる音声認識
-                                </h3>
-                                <span class="experimental-badge-pill">実験中機能</span>
-                            </div>
-
-                            <div class="experimental-desc-box" id="antigravity-description-box" style="margin-bottom: 16px;">
-                                <p class="section-desc">
-                                    エージェントが Claude Code や Codex の場合でも、「音を聴きたい」と決意したときは、そのセッションだけ一時的に Antigravity（Google Gemini）に切り替えて、録音した音声の内容や雰囲気を要約・記録します。
-                                </p>
-                                <p class="section-desc" style="margin-top: 6px; color: var(--claude-text-sub); font-size: 12px;">
-                                    利用には Google アカウントへの認証が必要です。音声データは外部に送信されます。
-                                </p>
-                            </div>
-
-                            <!-- 選択ハーネスが Antigravity のときは、導入/認証/管理操作を隠して代替文を出す
-                                 (稼働中ハーネスを壊す導線を防ぐ・§13.2/13.3)。app.js が出し分ける。 -->
-                            <div id="antigravity-selected-notice" class="section-desc" style="display: none;">
-                                このエージェントは現在 Antigravity で動作しているため、この機能（音声のための一時切り替え）は不要です。
-                            </div>
-
-                            <!-- Status Dashboard -->
-                            <div class="antigravity-dashboard" id="antigravity-dashboard-box" style="margin-bottom: 20px;">
-                                <div class="dashboard-title">接続ステータス</div>
-                                <div class="dashboard-grid">
-                                    <div class="dashboard-item">
-                                        <span class="dashboard-label">導入状況</span>
-                                        <div class="dashboard-value">
-                                            <span id="antigravity-status-installed" class="status-badge unknown">読み込み中...</span>
-                                        </div>
-                                    </div>
-                                    <div class="dashboard-item">
-                                        <span class="dashboard-label">認証状況</span>
-                                        <div class="dashboard-value">
-                                            <span id="antigravity-status-authenticated" class="status-badge unknown">読み込み中...</span>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="dashboard-details" style="display: none;">
-                                    <div class="dashboard-detail-row">
-                                        <span class="dashboard-label">ユーザーホーム:</span>
-                                        <span id="antigravity-status-home" class="dashboard-detail-val">-</span>
-                                    </div>
-                                    <div class="dashboard-detail-row">
-                                        <span class="dashboard-label">実行パス:</span>
-                                        <span id="antigravity-status-bin" class="dashboard-detail-val">-</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="btn-group" id="antigravity-setup-actions" style="margin-top: 8px; flex-wrap: wrap; gap: 8px;">
-                                <button type="button" id="antigravity-install-btn" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2);" onclick="startAntigravityInstall()">インストール</button>
-                                <button type="button" id="antigravity-login-btn" class="btn btn-primary btn-large" style="min-width: 160px; box-shadow: 0 2px 4px rgba(204,90,55,0.2); display: none;" onclick="startAntigravityLogin()">認証を開始</button>
-                            </div>
-
-                            <div id="antigravity-danger-zone" style="margin-top: 24px; border-top: 1px dashed var(--claude-border); padding-top: 16px; display: none;">
-                                <div style="font-size: 13px; font-weight: 600; color: #dc2626; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                                    管理操作（危険）
-                                </div>
-                                <div class="btn-group" style="margin-top: 0; flex-wrap: wrap; gap: 8px;">
-                                    <button type="button" id="antigravity-uninstall-btn" class="btn btn-danger btn-large" style="min-width: 160px; display: none;" onclick="antigravityUninstall()">アンインストール</button>
-                                    <button type="button" id="antigravity-clear-auth-btn" class="btn btn-danger btn-large" style="min-width: 160px; display: none;" onclick="antigravityClearAuth()">認証情報を削除</button>
-                                </div>
-                            </div>
-
-                            <div id="antigravity-auth-ui" style="margin-top: 16px;"></div>
-
+                        <section class="settings-section card" style="text-align: center; color: var(--claude-text-sub); padding: 40px 20px;">
+                            <p role="status">現在実験中の機能はありません</p>
                         </section>
                     </div>
 

@@ -303,7 +303,7 @@ def on_audio_session(
     *,
     now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
-    """Apply energy/stress cost for a queued listen audio session."""
+    """Apply energy/stress cost for a concentrated-hearing audio session."""
     current = normalize_state(dict(state))
     current["energy"] = round(_clamp(current["energy"] - 0.08), 3)
     current["stress"] = round(_clamp(current["stress"] + 0.03), 3)

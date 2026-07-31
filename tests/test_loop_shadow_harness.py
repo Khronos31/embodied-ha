@@ -51,15 +51,6 @@ class LoopMigrationSafetyTests(unittest.TestCase):
     # としてリポジトリ外(メモリ側 embodied_ha_loop_runtime_contracts.md)へ移設し、
     # カットオーバー完了により「移行期間中のdoc↔コード同期ガード」という目的も消滅したため。
 
-    def test_loop_py_no_longer_blocks_agy_after_invoke_agent_cutover(self):
-        # 仕様変更(2026-07-17、#14増分6): EHA_SESSION_BIN=agyのSystemExitガードは
-        # invoke-agent.sh --sound-file経由のAntigravity音声サポート実装に伴い撤去した。
-        # このテストは「もう落ちない」ことを確認する形へ更新する(loop.pyのソースに
-        # 撤去済みのSystemExit文字列が残っていないことを直接確認)。
-        source = (ROOT / "embodied_ha" / "loop.py").read_text(encoding="utf-8")
-        self.assertNotIn("EHA_SESSION_BIN", source)
-        self.assertNotIn("does not implement EHA_SESSION_BIN=agy", source)
-
     def test_side_effect_snapshot_normalizes_runtime_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -399,50 +390,6 @@ class LoopPyCutoverRegressionTests(unittest.TestCase):
             any(call.get("ANOMALY_URGENCY") == "99" and not call.get("MODE") for call in captured),
             captured,
         )
-
-    def test_postprocess_removes_queued_file_before_recording_presented_features(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            queued = tmp / "queued.wav"
-            queued.write_bytes(b"queued")
-            prefs = tmp / "preferences.json"
-            prefs.write_text(json.dumps({"speakers": [{"room": "living"}]}), encoding="utf-8")
-            paths = loop.LoopPaths(
-                log_dir=str(tmp),
-                observation_log=str(tmp / "observations.jsonl"),
-                explore_log=str(tmp / "explore.jsonl"),
-                chat_log=str(tmp / "chat_log.jsonl"),
-                memory_file=str(tmp / "memory.md"),
-                pending_file=str(tmp / "pending_proposal.json"),
-                daybook_marker=str(tmp / ".last_daybook"),
-                tmp_dir=str(tmp / "tmp"),
-            )
-            feature_call_saw_file = []
-
-            def fake_run(cmd, **_kwargs):
-                if len(cmd) >= 3 and cmd[1].endswith("feature-flags.py") and cmd[2] == "add":
-                    feature_call_saw_file.append(queued.exists())
-                return self.Result()
-
-            loop.postprocess_loop_response(
-                {
-                    "_parse_ok": True,
-                    "topic": "fixture",
-                    "private": "順序確認",
-                    "emotion": "calm",
-                    "speak": None,
-                    "proposal": None,
-                    "feature_presented": "feature-x",
-                },
-                "{}",
-                {"mode": "explore", "cfg": {"EHA_PREFS_FILE": str(prefs)}, "queued_listen_file": str(queued)},
-                paths,
-                "2026-07-15T12:00:00+09:00",
-                run=fake_run,
-            )
-
-        self.assertEqual(feature_call_saw_file, [False])
-
 
 if __name__ == "__main__":
     unittest.main()

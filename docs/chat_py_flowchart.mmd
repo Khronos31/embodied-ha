@@ -25,10 +25,8 @@ flowchart TD
     G7 --> G8{"CHAT_SOURCE == voice?"}
     G8 -->|"はい"| G8a["⚠ recent_auditory_input取得\nガード無し=失敗で全体クラッシュ"]
     G8 -->|"いいえ"| G8b["recent_auditory_input = 空文字列\n(依存先を呼ばない)"]
-    G8a --> G9
-    G8b --> G9["queued listen(深聴き予約)解決\n(あればenv継承)"]
-
-    G9 --> H["プロンプト構築\nbuild_chat_prompt()"]
+    G8a --> H
+    G8b --> H["プロンプト構築\nbuild_chat_prompt()"]
     H --> I["Claude CLI起動\ninvoke_chat_claude()\n(invoke-agent.sh経由)"]
     I --> J["レスポンス抽出\nchat_extract()"]
 

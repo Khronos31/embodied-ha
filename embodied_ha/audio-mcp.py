@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import atexit
+import fcntl
 import json
 import os
 import re
@@ -17,18 +19,37 @@ from pathlib import Path
 
 import audio_stt
 from audio_source_resolve import DEFAULT_SOURCE, resolve_audio_source
+import concentrate_hearing_files
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from media_registry import resolve_media_item
-from listen_queue import check_listen_queue_cooldown, queue_next_listen_request
 from mcp_lib import log, serve, text
 from spatial_context import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, now, parse_ts
 
 MAX_DURATION = 30
 TMP_DIR = Path("/tmp/embodied-ha/audio")
+CONCENTRATE_HEARING_COOLDOWN_SECONDS = 60
+CONCENTRATE_HEARING_FILE_TTL_SECONDS = (
+    concentrate_hearing_files.CONCENTRATE_HEARING_FILE_TTL_SECONDS
+)
+CONCENTRATE_HEARING_DIR = concentrate_hearing_files.CONCENTRATE_HEARING_DIR
 DEFAULT_ACTIVE_LISTEN_LOG_FILE = "/data/embodied-ha/log/active_listen_log.jsonl"
 DEFAULT_AUDITORY_EVENTS_FILE = "/data/embodied-ha/log/auditory_events.jsonl"
 _ACTIVE_LISTEN_LOCK = threading.Lock()
+_CONCENTRATE_HEARING_FILES: set[str] = set()
+
+
+def _cleanup_created_concentrate_hearing_files() -> None:
+    for raw_path in tuple(_CONCENTRATE_HEARING_FILES):
+        try:
+            Path(raw_path).unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            _CONCENTRATE_HEARING_FILES.discard(raw_path)
+
+
+atexit.register(_cleanup_created_concentrate_hearing_files)
 
 
 def default_audio_log_path() -> str:
@@ -94,6 +115,54 @@ def default_active_listen_request_dir() -> str:
 
 def active_listen_request_dir() -> str:
     return clean(os.environ.get("EHA_ACTIVE_LISTEN_REQUEST_DIR")) or default_active_listen_request_dir()
+
+
+def concentrate_hearing_state_path() -> Path:
+    data_dir = clean(os.environ.get("EHA_DATA_DIR")) or "/config/embodied-ha"
+    configured = clean(os.environ.get("EHA_CONCENTRATE_HEARING_STATE_FILE"))
+    return Path(configured) if configured else Path(data_dir) / "runtime" / "concentrate_hearing_state.json"
+
+
+def concentrate_hearing_cooldown_seconds() -> int:
+    try:
+        configured = clean(os.environ.get("EHA_CONCENTRATE_HEARING_COOLDOWN_SECONDS"))
+        return max(5, int(configured or CONCENTRATE_HEARING_COOLDOWN_SECONDS))
+    except (TypeError, ValueError):
+        return CONCENTRATE_HEARING_COOLDOWN_SECONDS
+
+
+def _is_antigravity_harness() -> bool:
+    return clean(os.environ.get("EHA_AGENT_HARNESS")).lower() in {"agy", "antigravity", "gemini"}
+
+
+def _prune_stale_concentrate_hearing_files(current_time: float | None = None) -> None:
+    concentrate_hearing_files.prune_stale_files(
+        current_time,
+        directory=CONCENTRATE_HEARING_DIR,
+        ttl_seconds=CONCENTRATE_HEARING_FILE_TTL_SECONDS,
+    )
+    _CONCENTRATE_HEARING_FILES.intersection_update(
+        {path for path in _CONCENTRATE_HEARING_FILES if Path(path).exists()}
+    )
+
+
+def _read_concentrate_hearing_success_epoch(path: Path) -> float | None:
+    try:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        value = float(payload.get("last_success_epoch"))
+        return value if value > 0 else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _write_concentrate_hearing_success_epoch(path: Path, epoch: float) -> None:
+    _write_json_atomic(str(path), {"last_success_epoch": epoch})
+
+
+def _concentrate_hearing_lock_path() -> Path:
+    state_path = concentrate_hearing_state_path()
+    return state_path.with_name(f"{state_path.name}.lock")
 
 
 def _write_json_atomic(path: str, payload: dict) -> None:
@@ -449,6 +518,14 @@ def normalize_duration(value) -> int:
     return max(1, min(MAX_DURATION, seconds))
 
 
+def validate_concentrate_hearing_duration(value) -> int:
+    if value is None:
+        return 5
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_DURATION:
+        raise ValueError(f"duration は1〜{MAX_DURATION}の整数で指定してください。")
+    return value
+
+
 def _truthy(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -751,17 +828,99 @@ TOOL_USE_DEVICE_MICROPHONE = {
 TOOL_CONCENTRATE_HEARING = {
     "name": "concentrate_hearing",
     "description": (
-        "耳を澄ます。次セッションで音声をマルチモーダル解析するためのキューを積む。\n"
-        "物理体モード専用。電脳体モードでは使用不可。\n"
-        "非同期: このツールは即座に「キューしました」と返す。次回セッション開始時に音声が処理される。\n"
-        "通常の listen（テキスト返却・即時）よりも深い聴覚的注意が必要なときに使う。"
+        "耳を澄ませ、その場で録音した音声ファイルのパスを返す。物理体モード専用。"
+        "録音時間はデフォルト5秒、最大30秒。音声の内容や文字起こしは返さない。\n"
+        "返り値の file_path を同じターンで必ず view_file に直接渡し、音として確認すること。"
+        "command、shell、terminal、Python、外部スクリプト、外部STTで解析してはいけない。"
     ),
     "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "duration": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30,
+                "default": 5,
+                "description": "録音秒数。デフォルト 5、最大 30",
+            },
+        },
         "required": [],
     },
 }
+
+
+def _record_concentrate_hearing_webm(source: str, duration: int) -> str:
+    source = normalize_source_uri(source)
+    if source not in _source_map() and not source.startswith(
+        ("rtsp://", "alsa://", "tcp://")
+    ):
+        raise RuntimeError(f"unknown source: {source}")
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found")
+
+    CONCENTRATE_HEARING_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_stale_concentrate_hearing_files()
+    wav_path = ""
+    webm_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=CONCENTRATE_HEARING_DIR,
+            prefix="eha-concentrate-hearing-",
+            suffix=".wav",
+            delete=False,
+        ) as wav_file:
+            wav_path = wav_file.name
+        with tempfile.NamedTemporaryFile(
+            dir=CONCENTRATE_HEARING_DIR,
+            prefix="eha-concentrate-hearing-",
+            suffix=".webm",
+            delete=False,
+        ) as webm_file:
+            webm_path = webm_file.name
+
+        if source.startswith("tcp://"):
+            request_daemon_capture_to_wav(source, duration, wav_path)
+        else:
+            command = build_record_command(source, duration) + [wav_path]
+            command[0] = ffmpeg
+            recorded = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=duration + 15,
+                check=False,
+            )
+            if recorded.returncode != 0:
+                raise RuntimeError(clean(recorded.stderr) or clean(recorded.stdout) or "recording failed")
+
+        converted = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", wav_path, "-vn", "-c:a", "libopus", webm_path],
+            capture_output=True,
+            text=True,
+            timeout=duration + 15,
+            check=False,
+        )
+        if converted.returncode != 0:
+            raise RuntimeError(clean(converted.stderr) or clean(converted.stdout) or "WebM conversion failed")
+        if not os.path.isfile(webm_path) or os.path.getsize(webm_path) <= 0:
+            raise RuntimeError("WebM conversion produced an empty file")
+        os.chmod(webm_path, 0o600)
+        _CONCENTRATE_HEARING_FILES.add(webm_path)
+        return webm_path
+    except Exception:
+        if webm_path:
+            try:
+                os.unlink(webm_path)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        if wav_path:
+            try:
+                os.unlink(wav_path)
+            except FileNotFoundError:
+                pass
 
 
 def _current_body_state() -> tuple[dict, str, str, str]:
@@ -1051,30 +1210,79 @@ def use_device_microphone(args: dict):
 
 
 def concentrate_hearing(args: dict):
+    if not _is_antigravity_harness():
+        return [text("現在のハーネスでは concentrate_hearing は使えません。")], True
     _, current_entity, _, projected_room = _current_body_state()
     broken_state = _broken_cyber_state_error(current_entity, projected_room)
     if broken_state:
         return broken_state
     if current_entity:
         return [text("電脳体モードでは concentrate_hearing は使えません。")], True
-    ok, reason = check_listen_queue_cooldown()
-    if not ok:
-        return [text(reason)], True
-    request = {
+    source = default_listen_source()
+    if not source:
+        return [text(
+            "利用できるマイクが登録されていません。"
+            "preferences.json の mics に音声ソースを追加してください。"
+        )], True
+    try:
+        duration = validate_concentrate_hearing_duration(args.get("duration"))
+    except ValueError as exc:
+        return [text(str(exc))], True
+
+    state_path = concentrate_hearing_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _concentrate_hearing_lock_path()
+    with lock_path.open("a+b") as lock_file:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        current_epoch = time.time()
+        last_success = _read_concentrate_hearing_success_epoch(state_path)
+        cooldown = concentrate_hearing_cooldown_seconds()
+        if last_success is not None and current_epoch - last_success < cooldown:
+            remaining = max(1, int(cooldown - (current_epoch - last_success) + 0.999))
+            return [text(f"concentrate_hearing はクールダウン中です。あと {remaining} 秒待ってください。")], True
+        try:
+            file_path = _record_concentrate_hearing_webm(source, duration)
+        except Exception as exc:
+            detail = clean(str(exc)) or "unknown error"
+            return [text(f"concentrate_hearing の録音に失敗しました: {detail}")], True
+        _write_concentrate_hearing_success_epoch(state_path, time.time())
+
+    try:
+        import body_state as _body_state
+
+        _body_state.update_body_state(lambda state: _body_state.on_audio_session(state))
+    except Exception as exc:
+        log(f"[audio-mcp] concentrate_hearing body-state update failed: {exc}")
+    record_active_listen({
         "timestamp": now().isoformat(timespec="seconds"),
-        "request_id": uuid.uuid4().hex,
-        "duration": 5,
-        "transcribe": False,
-        "mode": clean(os.environ.get("EHA_ACTOR")) or "unknown",
-        "reason": "concentrate_hearing",
-        "note": "",
+        "kind": "active_listen",
+        "type": "active_listen",
+        "actor": clean(os.environ.get("EHA_ACTOR")) or "unknown",
+        "source": source,
+        "source_label": label_for_source(source),
+        "duration": duration,
+        "duration_sec": duration,
+        "transcribe_requested": False,
+        "transcript": None,
+        "deep_listen": True,
+    }, source)
+    payload = {
+        "file_path": file_path,
+        "media_type": "audio/webm",
+        "audio_codec": "opus",
+        "duration_sec": duration,
+        "available_for_current_turn": True,
+        "instruction": (
+            "file_path を同じターンで view_file に直接渡して音として確認してください。"
+            "command、shell、terminal、Python、外部スクリプト、外部STTは使わないでください。"
+        ),
     }
-    queue_next_listen_request(request)
-    return [text("キューしました")]
+    return [text(json.dumps(payload, ensure_ascii=False))]
 
 
-if __name__ == "__main__":
-    serve("audio-mcp", "1.0", {
+def _audio_tools() -> dict:
+    tools = {
         "listen": {"spec": TOOL_LISTEN, "handler": listen},
         "listen_media": {"spec": TOOL_LISTEN_MEDIA, "handler": listen_media},
         "read_audio_log": {"spec": TOOL_READ_AUDIO_LOG, "handler": read_audio_log},
@@ -1085,5 +1293,11 @@ if __name__ == "__main__":
         "speak": {"spec": TOOL_SPEAK, "handler": speak},
         "use_device_speaker": {"spec": TOOL_USE_DEVICE_SPEAKER, "handler": use_device_speaker},
         "use_device_microphone": {"spec": TOOL_USE_DEVICE_MICROPHONE, "handler": use_device_microphone},
-        "concentrate_hearing": {"spec": TOOL_CONCENTRATE_HEARING, "handler": concentrate_hearing},
-    })
+    }
+    if _is_antigravity_harness():
+        tools["concentrate_hearing"] = {"spec": TOOL_CONCENTRATE_HEARING, "handler": concentrate_hearing}
+    return tools
+
+
+if __name__ == "__main__":
+    serve("audio-mcp", "1.0", _audio_tools())

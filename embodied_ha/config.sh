@@ -22,11 +22,6 @@ export EHA_ANTIGRAVITY_HOME="${EHA_ANTIGRAVITY_HOME:-/data/}"
 export EHA_ANTIGRAVITY_BIN_DIR="${EHA_ANTIGRAVITY_BIN_DIR:-$EHA_ANTIGRAVITY_HOME/bin}"
 export EHA_ANTIGRAVITY_BIN="${EHA_ANTIGRAVITY_BIN:-$EHA_ANTIGRAVITY_BIN_DIR/agy}"
 
-# --- 音声の次回聴取予約（次回セッションに音声コンテキストを注入するための準備） ---
-export EHA_NEXT_LISTEN_REQUEST_FILE="${EHA_NEXT_LISTEN_REQUEST_FILE:-${EHA_DATA_DIR:-/config/embodied-ha}/runtime/next_listen_request.json}"
-export EHA_NEXT_LISTEN_LOG_FILE="${EHA_NEXT_LISTEN_LOG_FILE:-${EHA_DATA_DIR:-/config/embodied-ha}/log/next_listen_log.jsonl}"
-export EHA_AUDIO_SESSION_BIN="${EHA_AUDIO_SESSION_BIN:-agy}"
-export EHA_AUDIO_SESSION_MODEL="${EHA_AUDIO_SESSION_MODEL:-Gemini 3.5 Flash (High)}"
 
 # --- メモリディレクトリ ---
 export EHA_MEMORY_DIR="${EHA_MEMORY_DIR:-/config/.tools/claude-home/projects/-config/memory}"

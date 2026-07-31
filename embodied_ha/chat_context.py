@@ -14,7 +14,6 @@ import os
 import datetime
 
 from auditory_context import format_recent_auditory_prompt, resolve_source_filter
-from listen_queue import prepare_queued_listen_session
 
 import sociality_state as ss
 
@@ -176,17 +175,3 @@ def build_recent_auditory_input(chat_source, user_msg, prefs_file, body_location
     if should_show:
         return format_recent_auditory_prompt(user_msg or "", source_filter=source_filter)
     return ""
-
-
-def resolve_queued_listen_context(mode="chat"):
-    """予約された深聴きセッションのコンテキストを取得する。
-
-    chat.shは`eval "$(... export KEY=value ...)"`でサブプロセスの値を
-    シェル環境へ持ち込んでいたが、chat.pyはプロセス境界を跨がないため
-    listen_queue.prepare_queued_listen_sessionを直接呼ぶだけでよい。
-    chat.sh側で実際に後続処理が参照していたのは`RECENT_AUDITORY_INPUT`
-    (上書き用)と`EHA_QUEUED_LISTEN_FILE`(クリーンアップ用)の2キーのみ
-    （他のキーはchat.sh自身では未消費）。戻り値が無ければ空辞書。
-    """
-    ctx = prepare_queued_listen_session(mode)
-    return ctx or {}

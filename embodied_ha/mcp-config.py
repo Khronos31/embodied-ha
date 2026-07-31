@@ -56,6 +56,7 @@ _GAME_NESTED_ENV_KEYS = (
     "EHA_ANTIGRAVITY_BIN", "EHA_ANTIGRAVITY_BIN_DIR", "EHA_ANTIGRAVITY_HOME",
 )
 GAME_NESTED_ENV = {k: os.environ[k] for k in _GAME_NESTED_ENV_KEYS if k in os.environ}
+SELECTED_HARNESS = os.environ.get("EHA_AGENT_HARNESS", "").strip().lower()
 
 
 def _load_prefs():
@@ -110,8 +111,8 @@ def _http_tools():
     return tuple(tools)
 
 
-SERVER_SPECS = {
-    "audio": ServerSpec(lambda: _server("audio-mcp.py"), (
+def _audio_tools():
+    tools = [
         "listen",
         "listen_media",
         "read_audio_log",
@@ -122,8 +123,17 @@ SERVER_SPECS = {
         "speak",
         "use_device_speaker",
         "use_device_microphone",
-        "concentrate_hearing",
-    )),
+    ]
+    if SELECTED_HARNESS in {"agy", "antigravity", "gemini"}:
+        tools.append("concentrate_hearing")
+    return tuple(tools)
+
+
+SERVER_SPECS = {
+    "audio": ServerSpec(
+        lambda: _server("audio-mcp.py", extra_env={"EHA_AGENT_HARNESS": SELECTED_HARNESS or None}),
+        _audio_tools,
+    ),
     "body": ServerSpec(lambda: _server("body-mcp.py"), (
         "get_location",
         "move_to",

@@ -311,54 +311,8 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors")
         self.assertNotIn("EHA_CLAUDE_MODEL_DEFAULT", kwargs["env"])
 
-    def test_invoke_loop_claude_sound_file_forwards_agent_site_and_drops_content_json(self):
-        # #14増分6: queued listen(sound_file)がobserveの投射カメラ画像content_blocksと
-        # 同時に発生しても、agyは--content-json/--allowed-builtinsで即死するため
-        # 黙って落とす(chat_invoke.pyと同じ既知のトレードオフ)。
-        calls = []
-
-        class Result:
-            def __init__(self, stdout="", stderr="", returncode=0):
-                self.stdout = stdout
-                self.stderr = stderr
-                self.returncode = returncode
-
-        def fake_run(cmd, **kwargs):
-            calls.append((cmd, kwargs))
-            return Result(stdout="音が聞こえました")
-
-        content_blocks = [{"type": "text", "text": "camera frame note"}]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            response = loop.invoke_loop_claude(
-                user_prompt="observe prompt",
-                system_prompt="system",
-                mode="observe",
-                allowed_tools="Read,mcp__sensors__get_sensors",
-                mcp_servers=["sensors"],
-                environ={
-                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
-                    "EHA_DATA_DIR": tmpdir,
-                    "EHA_TMP_DIR": str(tmp / "tmp"),
-                },
-                model="sonnet",
-                content_blocks=content_blocks,
-                sound_file="/tmp/queued.wav",
-                response_schema=None,
-                run=fake_run,
-            )
-
-            self.assertEqual(response, "音が聞こえました")
-
-        cmd, kwargs = calls[0]
-        self.assertEqual(cmd[cmd.index("--sound-file") + 1], "/tmp/queued.wav")
-        self.assertEqual(cmd[cmd.index("--agent-site") + 1], "observe")
-        self.assertNotIn("--allowed-builtins", cmd)
-        self.assertNotIn("--content-json", cmd)
-        self.assertEqual(cmd[cmd.index("--allowed-mcp-tools") + 1], "mcp__sensors__get_sensors")
-
-    def test_command_without_sound_file_sets_agent_site_for_agy(self):
-        # 案A: 通常ターン(非sound_file)でも --mcp-servers があれば --agent-site を付ける。
+    def test_command_sets_agent_site_for_agy(self):
+        # --mcp-servers があれば Antigravity のsite-scoped設定用に --agent-site を付ける。
         # agy選択時に invoke-agent.sh run_agy が --agent-site 必須で落ちるのを防ぐ
         # ([[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
         cmd = loop.build_invoke_agent_loop_command(
@@ -371,7 +325,6 @@ class LoopPyInvocationTests(unittest.TestCase):
             user_prompt="observe prompt",
             response_schema=None,
         )
-        self.assertNotIn("--sound-file", cmd)
         self.assertEqual(cmd[cmd.index("--agent-site") + 1], "observe")
         self.assertEqual(cmd[cmd.index("--mcp-servers") + 1], "sensors")
 
@@ -595,7 +548,6 @@ class LoopPyInvocationTests(unittest.TestCase):
                 environ={
                     "SCRIPT_DIR": str(ROOT / "embodied_ha"),
                     "CLAUDE_BIN": "/bin/claude",
-                    "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
                 },
                 model="sonnet",
@@ -635,7 +587,6 @@ class LoopPyInvocationTests(unittest.TestCase):
                     "SCRIPT_DIR": str(ROOT / "embodied_ha"),
                     "CLAUDE_BIN": "/bin/claude",
                     "EHA_PREFS_FILE": str(prefs),
-                    "EHA_SESSION_MODEL": "opus",
                     "EHA_DATA_DIR": tmpdir,
                 },
                 "projected_camera_source": "",
@@ -969,6 +920,27 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
 
+    def test_observe_prompt_and_allowlist_expose_concentrate_hearing_only_to_antigravity(self):
+        for harness in ("claude", "codex", "agy"):
+            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                calls = []
+                env = self.make_env(tmp, "observe")
+                env["EHA_AGENT_HARNESS"] = harness
+                result = loop.run(env, run_subprocess=self.fake_run_factory(calls))
+                allowed = set(result["context"]["allowed_tools"].split(","))
+                system_prompt = result["context"]["sys_prompt"]
+                if harness == "agy":
+                    self.assertIn("mcp__audio__concentrate_hearing", allowed)
+                    self.assertIn("concentrate_hearing", system_prompt)
+                    self.assertIn("view_file", system_prompt)
+                    self.assertIn("音声ファイル", system_prompt)
+                    self.assertNotIn("WebM", system_prompt)
+                    self.assertNotIn("Antigravity個体専用", system_prompt)
+                else:
+                    self.assertNotIn("mcp__audio__concentrate_hearing", allowed)
+                    self.assertNotIn("concentrate_hearing", system_prompt)
+
     def test_run_injects_unread_autonomous_chat_constraint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -1016,18 +988,6 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                     self.make_env(tmp, "reflect"),
                     run_subprocess=failing_invoke,
                 )
-
-    def test_eha_session_bin_agy_no_longer_blocks_run(self):
-        # #14増分6: EHA_SESSION_BIN=agyでも(既にレガシー変数として無視されるだけで)
-        # run()がSystemExitしないことを確認する。
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            calls = []
-            env = self.make_env(tmp, "reflect")
-            env["EHA_SESSION_BIN"] = "/data/bin/agy"
-            result = loop.run(env, run_subprocess=self.fake_run_factory(calls))
-
-            self.assertEqual(result["mode"], "reflect")
 
     def test_mode_config_contract(self):
         expected = {

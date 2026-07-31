@@ -202,6 +202,8 @@ def build_chat_prompt(
 - preferences_update: 設定変更があればその内容、なければ省略（null）。
 - feature_presented: この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"""
 
+    deep_listen_capability = "、音声そのものを直接確認する深聴き（concentrate_hearing）" if _effective_harness() in {"agy", "antigravity", "gemini"} else ""
+
     return f"""# あなた自身について
 
 {character}
@@ -214,7 +216,7 @@ def build_chat_prompt(
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、カメラデバイスへの侵入後に撮影・PTZ操作（use_device_camera: action=capture/ptz_left/right/up/down）、テレビ・画面・音楽などのメディアを侵入不要で観る/聴く（watch_media / listen_media）、気に入った視聴体験を record_episode(kind=media_watch/media_listen) で残すこと、短時間の音声確認（listen/use_device_microphone）と次セッションでの深聴き予約（concentrate_hearing）、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（enter_cyberspace / move_cyber / return_to_body）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、カメラデバイスへの侵入後に撮影・PTZ操作（use_device_camera: action=capture/ptz_left/right/up/down）、テレビ・画面・音楽などのメディアを侵入不要で観る/聴く（watch_media / listen_media）、気に入った視聴体験を record_episode(kind=media_watch/media_listen) で残すこと、短時間の音声確認（listen/use_device_microphone）{deep_listen_capability}、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（enter_cyberspace / move_cyber / return_to_body）
 - **今の自分にはできない**: ファイルへの書き込み・設定ファイルの編集・コードの実装。ファイルの読み取り（Read）はできる。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 - **ツールが失敗したときは正直に伝える**: Readでファイルが見つからない・読めない場合は「読めなかった」と伝える。読んでいないのに読めたふりをしない。ディレクトリ一覧は取得できないので、ファイル名が不明なら「ファイル名を教えてください」と聞く。
@@ -349,7 +351,7 @@ _COMMON_TOOLS = (
     "mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,"
     "mcp__camera__use_device_camera,mcp__camera__watch_media,"
     "mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,"
-    "mcp__audio__use_device_microphone,mcp__audio__concentrate_hearing,"
+    "mcp__audio__use_device_microphone,"
     "mcp__audio__read_non_speech_audio_events,mcp__audio__read_audio_event_tags,"
     "mcp__http__http_get,"
     "mcp__lounge__read_lounge_discussions,mcp__lounge__read_lounge_discussion,"
@@ -392,6 +394,8 @@ def _read_http_post_enabled(prefs_file):
 
 def _allowed_tools_for_chat_source(chat_source, *, http_post_enabled=False):
     allowed = _COMMON_TOOLS
+    if _effective_harness() in {"agy", "antigravity", "gemini"}:
+        allowed += ",mcp__audio__concentrate_hearing"
     if http_post_enabled:
         allowed += ",mcp__http__http_post"
     if chat_source == "voice":
@@ -428,17 +432,10 @@ def build_invoke_agent_chat_command(
     script_dir,
     user_prompt,
     content_json_path=None,
-    sound_file=None,
     http_post_enabled=False,
     transcript_file=None,
 ):
     """Build an invoke-agent.sh command for chat.py's response path."""
-    if sound_file and content_json_path is not None:
-        # run_agy() dies unconditionally on --content-json; the only current
-        # caller (invoke_chat_claude) already avoids this combination, but
-        # guard here too so a future caller can't silently build a command
-        # that kills the queued-listen audio path (sol review, 2026-07-17).
-        raise ValueError("build_invoke_agent_chat_command: sound_file and content_json_path are mutually exclusive")
     allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
     mcp_servers = _CHAT_MCP_SERVERS
     # _COMMON_TOOLS には既に Read が入っているので、ここで増えるのは codex の files MCP だけ。
@@ -450,15 +447,10 @@ def build_invoke_agent_chat_command(
         "--model",
         "default",
     ]
-    if sound_file:
-        cmd += ["--sound-file", sound_file, "--agent-site", "chat"]
-    else:
-        # chat は下で --mcp-servers を常に付けるため、agy 選択時に run_agy が
-        # --agent-site 必須で落ちないよう、通常ターンでも --agent-site chat を常に付ける
-        # (sound_file 経路は上で付与済み)。claude/codex は無視するため3ハーネス安全
-        # (案A・[[embodied_ha_agent_site_missing_for_normal_agy_turns_2026-07-17]])。
-        cmd += ["--agent-site", "chat"]
-    if allowed_builtins and not sound_file:
+    # chat は --mcp-servers を常に付けるため、agy の site-scoped MCP config 用に必須。
+    # claude/codex は --agent-site を無視する。
+    cmd += ["--agent-site", "chat"]
+    if allowed_builtins:
         cmd += ["--allowed-builtins", allowed_builtins]
     if allowed_mcp_tools:
         cmd += ["--allowed-mcp-tools", allowed_mcp_tools]
@@ -510,22 +502,10 @@ def invoke_chat_claude(
     cwd,
     prefix_blocks=None,
     claude_bin="claude",
-    is_queued_listen=False,
-    sound_file=None,
     prefs_file=None,
     run=subprocess.run,
 ):
-    """Invoke the chat response path and return the final response text.
-
-    Queued-listen turns pass sound_file through invoke-agent.sh with
-    --sound-file and --agent-site chat, while --allowed-builtins and
-    --content-json are omitted for agy compatibility. As a result,
-    prefix_blocks such as projected camera image blocks are silently ignored
-    when sound_file is also present. That is an accepted tradeoff:
-    concentrate_hearing is expected to become effectively physical-body-only
-    after the body-state gate fix, making this overlap rare rather than a
-    chat-path bug.
-    """
+    """Invoke the chat response path and return the final response text."""
     env = dict(claude_env)
     env.setdefault("CLAUDE_BIN", claude_bin)
     http_post_enabled = _read_http_post_enabled(prefs_file)
@@ -534,14 +514,14 @@ def invoke_chat_claude(
     try:
         env["EHA_ACTOR"] = "chat"
         selected_harness = (env.get("EHA_AGENT_HARNESS") or _effective_harness()).strip().lower()
-        if selected_harness in {"claude", "claude-code"} and not sound_file:
+        if selected_harness in {"claude", "claude-code"}:
             tmp_dir = env.get("EHA_TMP_DIR") or tempfile.gettempdir()
             os.makedirs(tmp_dir, exist_ok=True)
             fd, transcript_file = tempfile.mkstemp(
                 prefix="chat-transcript-", suffix=".jsonl", dir=tmp_dir
             )
             os.close(fd)
-        if prefix_blocks and not sound_file:
+        if prefix_blocks:
             content_blocks = list(prefix_blocks)
             content_blocks.append({"type": "text", "text": prompt})
             content_json_path = _write_invoke_agent_content_json(content_blocks, env)
@@ -550,7 +530,6 @@ def invoke_chat_claude(
             script_dir=script_dir,
             user_prompt=prompt,
             content_json_path=content_json_path,
-            sound_file=sound_file,
             http_post_enabled=http_post_enabled,
             transcript_file=transcript_file,
         )

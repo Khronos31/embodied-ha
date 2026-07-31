@@ -69,10 +69,6 @@ def load_config(script_dir=None, environ=None, run_extra_context=subprocess.run)
     _env_default(resolved, "EHA_ANTIGRAVITY_BIN", os.path.join(resolved["EHA_ANTIGRAVITY_BIN_DIR"], "agy"))
 
     data_dir = resolved.get("EHA_DATA_DIR") or "/config/embodied-ha"
-    _env_default(resolved, "EHA_NEXT_LISTEN_REQUEST_FILE", os.path.join(data_dir, "runtime", "next_listen_request.json"))
-    _env_default(resolved, "EHA_NEXT_LISTEN_LOG_FILE", os.path.join(data_dir, "log", "next_listen_log.jsonl"))
-    _env_default(resolved, "EHA_AUDIO_SESSION_BIN", "agy")
-    _env_default(resolved, "EHA_AUDIO_SESSION_MODEL", "Gemini 3.5 Flash (High)")
     _env_default(resolved, "EHA_MEMORY_DIR", "/config/.tools/claude-home/projects/-config/memory")
     _env_default(resolved, "EHA_PREFS_FILE", os.path.join(script_dir, "preferences.json"))
     _env_default(resolved, "EHA_CHARACTER_FILE", os.path.join(script_dir, "character.md"))

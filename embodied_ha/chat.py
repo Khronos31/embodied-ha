@@ -219,10 +219,6 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     recent_auditory_input = chat_context.build_recent_auditory_input(
         chat_source, user_msg, prefs_file, body_location_file
     )
-    queued_ctx = chat_context.resolve_queued_listen_context("chat")
-    if queued_ctx.get("RECENT_AUDITORY_INPUT"):
-        recent_auditory_input = queued_ctx["RECENT_AUDITORY_INPUT"]
-    queued_listen_file = queued_ctx.get("EHA_QUEUED_LISTEN_FILE")
 
     active_desires_raw = cfg.get("ACTIVE_DESIRES", "")
     inner_voice = chat_invoke.build_inner_voice(active_desires_raw)
@@ -256,17 +252,7 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         recent_auditory_input=recent_auditory_input,
         user_msg=user_msg,
     )
-    # chat.shはprepare_queued_listen_session()の戻り値を`eval "$(export ...)"`で
-    # シェル環境へ持ち込み、以降のClaude呼び出しの環境にも自然に継承されていた
-    # (EHA_SESSION_BIN/EHA_SESSION_MODEL等、深聴きセッション限定のバックエンド
-    # 切替に使われる)。Codexレビューで、chat.py側がこの伝播を欠いていることが
-    # 発見された。cfgのコピーへ全キー（Noneを除く）をマージしてから
-    # build_claude_envへ渡すことで、同じ継承挙動を再現する。
-    env_with_queued_ctx = dict(cfg)
-    for key, value in queued_ctx.items():
-        if value is not None:
-            env_with_queued_ctx[key] = str(value)
-    claude_env = chat_invoke.build_claude_env(env_with_queued_ctx)
+    claude_env = chat_invoke.build_claude_env(cfg)
     cwd = (
         cfg.get("EHA_AGENT_CWD")
         or cfg.get("EHA_CLAUDE_CWD")
@@ -280,16 +266,8 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         claude_env=claude_env,
         cwd=cwd,
         claude_bin=cfg.get("CLAUDE_BIN", "claude"),
-        is_queued_listen=bool(queued_listen_file),
-        sound_file=queued_listen_file,
         prefs_file=prefs_file,
     )
-
-    if queued_listen_file:
-        try:
-            os.remove(queued_listen_file)
-        except OSError:
-            pass
 
     parsed = chat_extract(response_text)
 

@@ -1,5 +1,4 @@
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,12 +24,6 @@ class AgyHarnessTests(unittest.TestCase):
             ]
         )
         self.assertEqual(prompt, "first\n[カメラ画像]\nlast\nJSON:\n")
-
-    def test_write_mcp_config_returns_empty_string_for_missing_generator(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = antigravity_setup.write_mcp_config(Path(tmpdir).as_posix())
-            self.assertEqual(result, "")
-
 
 if __name__ == "__main__":
     unittest.main()

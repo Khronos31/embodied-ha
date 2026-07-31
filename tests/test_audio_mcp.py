@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,202 @@ class AudioMcpTests(unittest.TestCase):
     def test_build_record_command_rejects_tcp(self):
         with self.assertRaises(ValueError):
             self.audio_mcp.build_record_command("tcp://192.168.1.100:3333", 5)
+
+    def test_concentrate_hearing_spec_requires_view_file_without_execution_tools(self):
+        description = self.audio_mcp.TOOL_CONCENTRATE_HEARING["description"]
+        self.assertIn("view_file", description)
+        self.assertIn("デフォルト5秒、最大30秒", description)
+        self.assertNotIn("WebM", description)
+        self.assertNotIn("Antigravity個体専用", description)
+        duration_spec = self.audio_mcp.TOOL_CONCENTRATE_HEARING["inputSchema"]["properties"]["duration"]
+        self.assertEqual(duration_spec["type"], "integer")
+        self.assertEqual(duration_spec["minimum"], 1)
+        self.assertEqual(duration_spec["maximum"], 30)
+        self.assertEqual(duration_spec["default"], 5)
+        self.assertIn("デフォルト 5、最大 30", duration_spec["description"])
+        for forbidden in ("command", "shell", "terminal", "Python", "外部スクリプト", "外部STT"):
+            self.assertIn(forbidden, description)
+
+    def test_concentrate_hearing_is_registered_only_for_antigravity(self):
+        with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}, clear=False):
+            self.assertNotIn("concentrate_hearing", self.audio_mcp._audio_tools())
+        with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "codex"}, clear=False):
+            self.assertNotIn("concentrate_hearing", self.audio_mcp._audio_tools())
+        with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "agy"}, clear=False):
+            self.assertIn("concentrate_hearing", self.audio_mcp._audio_tools())
+
+    def test_concentrate_hearing_rejects_non_antigravity_before_recording(self):
+        with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}, clear=False), \
+             mock.patch.object(self.audio_mcp, "_record_concentrate_hearing_webm") as record_mock:
+            content, is_error = self.audio_mcp.concentrate_hearing({})
+        self.assertTrue(is_error)
+        self.assertIn("現在のハーネス", content[0]["text"])
+        self.assertNotIn("Antigravity個体専用", content[0]["text"])
+        record_mock.assert_not_called()
+
+    def test_record_concentrate_hearing_converts_to_audio_only_webm_and_keeps_result(self):
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            if "libopus" in command:
+                Path(command[-1]).write_bytes(b"webm-opus")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch.object(self.audio_mcp, "CONCENTRATE_HEARING_DIR", Path(tmpdir)), \
+             mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
+             mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=fake_run):
+            result_path = self.audio_mcp._record_concentrate_hearing_webm(
+                "rtsp://localhost:8554/room",
+                5,
+            )
+            result = Path(result_path)
+            self.assertTrue(result.exists())
+            self.assertEqual(result.read_bytes(), b"webm-opus")
+            self.assertEqual(stat.S_IMODE(result.stat().st_mode), 0o600)
+            self.assertFalse(any(Path(tmpdir).glob("*.wav")))
+            self.assertIn("-vn", commands[1])
+            self.assertEqual(commands[1][commands[1].index("-c:a") + 1], "libopus")
+            self.audio_mcp._cleanup_created_concentrate_hearing_files()
+            self.assertFalse(result.exists())
+
+    def test_concentrate_hearing_returns_webm_path_then_enforces_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            prefs = tmp / "preferences.json"
+            state = tmp / "concentrate-state.json"
+            webm = tmp / "heard.webm"
+            prefs.write_text(
+                json.dumps({"mics": [{"source": "rtsp://localhost:8554/room", "label": "Room"}]}),
+                encoding="utf-8",
+            )
+            webm.write_bytes(b"webm")
+            fake_body_state = mock.Mock(
+                update_body_state=lambda updater: updater({}),
+                on_audio_session=lambda current: current,
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_CONCENTRATE_HEARING_STATE_FILE": str(state),
+                    "EHA_CONCENTRATE_HEARING_COOLDOWN_SECONDS": "60",
+                },
+                clear=False,
+            ), mock.patch.object(
+                self.audio_mcp,
+                "_record_concentrate_hearing_webm",
+                return_value=str(webm),
+            ) as record_mock, mock.patch.object(
+                self.audio_mcp,
+                "record_active_listen",
+            ) as log_mock, mock.patch.dict(
+                "sys.modules",
+                {"body_state": fake_body_state},
+                clear=False,
+            ):
+                payload = self._json(self.audio_mcp.concentrate_hearing({"duration": 17}))
+                second_content, second_is_error = self.audio_mcp.concentrate_hearing({})
+
+            self.assertEqual(payload["file_path"], str(webm))
+            self.assertEqual(payload["media_type"], "audio/webm")
+            self.assertEqual(payload["audio_codec"], "opus")
+            self.assertEqual(payload["duration_sec"], 17)
+            self.assertIs(payload["available_for_current_turn"], True)
+            self.assertIn("view_file", payload["instruction"])
+            self.assertNotIn("transcript", payload)
+            self.assertTrue(second_is_error)
+            self.assertIn("クールダウン中", second_content[0]["text"])
+            record_mock.assert_called_once_with("rtsp://localhost:8554/room", 17)
+            log_mock.assert_called_once()
+            self.assertEqual(log_mock.call_args.args[0]["duration"], 17)
+            self.assertEqual(log_mock.call_args.args[0]["duration_sec"], 17)
+
+    def test_concentrate_hearing_rejects_invalid_duration_before_recording(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            prefs.write_text(
+                json.dumps({"mics": [{"source": "rtsp://localhost:8554/room"}]}),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"EHA_AGENT_HARNESS": "agy", "EHA_PREFS_FILE": str(prefs)},
+                clear=False,
+            ), mock.patch.object(
+                self.audio_mcp,
+                "_record_concentrate_hearing_webm",
+            ) as record_mock:
+                for invalid in (0, -1, 31, "3", True):
+                    with self.subTest(duration=invalid):
+                        content, is_error = self.audio_mcp.concentrate_hearing({"duration": invalid})
+                        self.assertTrue(is_error)
+                        self.assertIn("duration は1〜30の整数", content[0]["text"])
+            record_mock.assert_not_called()
+
+    def test_failed_concentrate_hearing_does_not_start_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            prefs = tmp / "preferences.json"
+            state = tmp / "concentrate-state.json"
+            prefs.write_text(
+                json.dumps({"mics": [{"source": "rtsp://localhost:8554/room"}]}),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_CONCENTRATE_HEARING_STATE_FILE": str(state),
+                },
+                clear=False,
+            ), mock.patch.object(
+                self.audio_mcp,
+                "_record_concentrate_hearing_webm",
+                side_effect=RuntimeError("capture failed"),
+            ) as record_mock:
+                first_content, first_is_error = self.audio_mcp.concentrate_hearing({})
+                second_content, second_is_error = self.audio_mcp.concentrate_hearing({})
+
+            self.assertTrue(first_is_error)
+            self.assertTrue(second_is_error)
+            self.assertIn("capture failed", first_content[0]["text"])
+            self.assertIn("capture failed", second_content[0]["text"])
+            self.assertEqual(record_mock.call_count, 2)
+            record_mock.assert_has_calls([
+                mock.call("rtsp://localhost:8554/room", 5),
+                mock.call("rtsp://localhost:8554/room", 5),
+            ])
+            self.assertFalse(state.exists())
+
+    def test_concentrate_hearing_rejects_cyber_body(self):
+        with mock.patch.dict(os.environ, {"EHA_AGENT_HARNESS": "agy"}, clear=False), \
+             mock.patch.object(self.audio_mcp, "_current_body_state", return_value=({}, "camera.room", "room", "room")), \
+             mock.patch.object(self.audio_mcp, "_record_concentrate_hearing_webm") as record_mock:
+            content, is_error = self.audio_mcp.concentrate_hearing({})
+        self.assertTrue(is_error)
+        self.assertIn("電脳体モード", content[0]["text"])
+        record_mock.assert_not_called()
+
+    def test_prune_concentrate_hearing_removes_only_expired_webm(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch.object(self.audio_mcp, "CONCENTRATE_HEARING_DIR", Path(tmpdir)):
+            stale = Path(tmpdir) / "eha-concentrate-hearing-stale.webm"
+            fresh = Path(tmpdir) / "eha-concentrate-hearing-fresh.webm"
+            unrelated = Path(tmpdir) / "keep.webm"
+            for path in (stale, fresh, unrelated):
+                path.write_bytes(b"x")
+            os.utime(stale, (100, 100))
+            os.utime(fresh, (1000, 1000))
+            self.audio_mcp._prune_stale_concentrate_hearing_files(
+                1000 + self.audio_mcp.CONCENTRATE_HEARING_FILE_TTL_SECONDS - 1
+            )
+            self.assertFalse(stale.exists())
+            self.assertTrue(fresh.exists())
+            self.assertTrue(unrelated.exists())
 
     def test_default_audio_log_path_prefers_eha_data_dir(self):
         with mock.patch.dict(os.environ, {"EHA_DATA_DIR": "/config/embodied-ha"}, clear=False):

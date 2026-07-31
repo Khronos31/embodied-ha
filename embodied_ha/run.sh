@@ -146,10 +146,6 @@ export EHA_BACKGROUND_AUDIO_LOG_FILE="${EHA_BACKGROUND_AUDIO_LOG_FILE:-$EHA_DATA
 export EHA_NON_SPEECH_AUDIO_EVENTS_FILE="${EHA_NON_SPEECH_AUDIO_EVENTS_FILE:-$EHA_DATA_DIR/log/non_speech_audio_events.jsonl}"
 export EHA_AUDIO_EVENT_TAGS_FILE="${EHA_AUDIO_EVENT_TAGS_FILE:-$EHA_DATA_DIR/log/audio_event_tags.jsonl}"
 export EHA_AUDIO_WAV_DIR="${EHA_AUDIO_WAV_DIR:-$EHA_DATA_DIR/wav}"
-export EHA_NEXT_LISTEN_REQUEST_FILE="${EHA_NEXT_LISTEN_REQUEST_FILE:-$EHA_DATA_DIR/runtime/next_listen_request.json}"
-export EHA_NEXT_LISTEN_LOG_FILE="${EHA_NEXT_LISTEN_LOG_FILE:-$EHA_DATA_DIR/log/next_listen_log.jsonl}"
-export EHA_AUDIO_SESSION_BIN="${EHA_AUDIO_SESSION_BIN:-agy}"
-export EHA_AUDIO_SESSION_MODEL="${EHA_AUDIO_SESSION_MODEL:-Gemini 3.5 Flash (High)}"
 export EHA_ROOM_GRAPH_FILE="${EHA_ROOM_GRAPH_FILE:-$EHA_DATA_DIR/floorplan_room_graph_draft.json}"
 export EHA_BODY_LOCATION_FILE="${EHA_BODY_LOCATION_FILE:-$EHA_DATA_DIR/body_location.json}"
 export EHA_BODY_LOCATION_LOG_FILE="${EHA_BODY_LOCATION_LOG_FILE:-$EHA_DATA_DIR/log/body_location_log.jsonl}"
@@ -172,6 +168,12 @@ mkdir -p "$EHA_ANTIGRAVITY_HOME" "$EHA_ANTIGRAVITY_BIN_DIR"
 echo "[run] Antigravity home: ${EHA_ANTIGRAVITY_HOME}"
 echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
 
+# --- F-141: 旧Antigravity音声フォールバックの一回限り移行 ---
+# validな非agy選択でだけ、不要になったバイナリとOAuth認証を削除する。
+# missing/invalidは旧agy個体の可能性があるためfail-closedで何もしない。
+python3 "$SCRIPT_DIR/migrate_remove_unused_antigravity.py" 2>&1 | sed 's/^/[run] /' \
+    || echo "[run] F-141 Antigravity cleanup failed（削除を完了できず続行）"
+
 # --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
 # agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
 # （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
@@ -183,21 +185,6 @@ if python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import antigravit
 else
     python3 "$SCRIPT_DIR/agy_update_freeze.py" remove 2>&1 | sed 's/^/[run] /' || true
 fi
-
-# --- agy 用 MCP config 生成（Antigravityが音声解析セッションで使うMCPサーバー設定）---
-python3 -c "
-import os, sys
-sys.path.insert(0, os.environ.get('SCRIPT_DIR', '/app'))
-import antigravity_setup
-result = antigravity_setup.write_mcp_config(
-    os.environ.get('SCRIPT_DIR', '/app'),
-    servers=('audio', 'memory', 'ha', 'sensors', 'body'),
-)
-if result:
-    print(f'[run] agy MCP config: {result}')
-else:
-    print('[run] agy MCP config: 生成スキップ（mcp-config.py なし or エラー）', file=sys.stderr)
-" 2>&1 || true
 
 # --- Claude 設定ディレクトリ ---
 # 解決は claude_setup.resolve_config_dir に一本化(§13.9: claude_config_dirオプション撤去)。

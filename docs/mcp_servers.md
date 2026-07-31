@@ -59,7 +59,9 @@ GitHub App情報を受け取ります。`http` は `EHA_HTTP_ALLOW_POST` が無�
 - `speak` — 物理体として発話する
 - `use_device_speaker` — 電脳体でスピーカーデバイスから発話する
 - `use_device_microphone` — 電脳体でマイクデバイスから録音する
-- `concentrate_hearing` — 次セッション用の聴取キューを積む
+- `concentrate_hearing` — 物理体にいるとき、その場で既定5秒（最大30秒）録音し、同じターンで
+  `view_file` する音声ファイルのパスを返す。agyハーネスでのみツール一覧へ公開する。内部では
+  agyのMIME判定問題を避けるため、音声のみのWebM（Opus）へ変換する
 
 `listen` は `rtsp://`, `alsa://`, `tcp://` を扱い、`transcribe` の有無で STT を切り替えます。`listen_media` は侵入不要のメディア再生で、必要なら `record_episode(kind="media_listen")` で記憶に残せます。
 

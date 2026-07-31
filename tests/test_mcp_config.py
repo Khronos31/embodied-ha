@@ -317,7 +317,7 @@ class McpConfigFormatTests(unittest.TestCase):
 
 
 class ServerSpecsTests(unittest.TestCase):
-    def load_module(self, tmp, prefs_content=None):
+    def load_module(self, tmp, prefs_content=None, harness=None):
         prefs_file = Path(tmp) / "preferences.json"
         prefs_file.write_text(json.dumps(prefs_content or {}, ensure_ascii=False), encoding="utf-8")
         env = {
@@ -329,6 +329,8 @@ class ServerSpecsTests(unittest.TestCase):
             "EHA_GITHUB_APP_PEM": str(Path(tmp) / "data" / "github_app.pem"),
             "EHA_LOG_DIR": str(Path(tmp) / "log"),
         }
+        if harness:
+            env["EHA_AGENT_HARNESS"] = harness
         Path(env["EHA_DATA_DIR"]).mkdir()
         Path(env["EHA_LOG_DIR"]).mkdir()
         spec = importlib.util.spec_from_file_location("mcp_config_for_test", SCRIPT)
@@ -347,6 +349,22 @@ class ServerSpecsTests(unittest.TestCase):
                 server["env"]["EHA_GITHUB_APP_PEM"],
                 env["EHA_GITHUB_APP_PEM"],
             )
+
+    def test_audio_server_exposes_concentrate_hearing_only_to_antigravity(self):
+        for harness in ("claude", "codex", "agy"):
+            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as tmp:
+                module, env = self.load_module(tmp, harness=harness)
+                with mock.patch.dict(os.environ, env, clear=False):
+                    spec = module.SERVER_SPECS["audio"]
+                    server = spec.build()
+                tools = self.list_runtime_tools(server, env)
+                self.assertEqual(server["env"].get("EHA_AGENT_HARNESS"), harness)
+                if harness == "agy":
+                    self.assertIn("concentrate_hearing", tools)
+                    self.assertIn("concentrate_hearing", spec.active_tools())
+                else:
+                    self.assertNotIn("concentrate_hearing", tools)
+                    self.assertNotIn("concentrate_hearing", spec.active_tools())
 
     def list_runtime_tools(self, server, env):
         proc = subprocess.Popen(

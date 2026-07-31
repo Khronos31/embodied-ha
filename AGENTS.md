@@ -39,10 +39,8 @@ embodied_ha/
   memory_state.py / scene_state.py / counterfactual_state.py
 
   # --- sensory / body-location model ---
-  sensory_origin.py       # per-event attenuation_db / sensory_origin / move_cost classification
   body-context.py         # hearing_attenuation() + ambient "距離減衰" prompt block
   auditory_context.py     # recent auditory events prompt block + source_filter by current_entity
-  listen_queue.py         # concentrate_hearing queued-listen request/consume lifecycle
   embodied_action.py      # applies action effects (move/speak/etc.) to body_state
   state_utils.py          # shared helpers incl. get_device_capabilities() (mic/speaker/camera lookup)
   boundary.py             # autonomous action / interruption boundary checks
@@ -50,6 +48,7 @@ embodied_ha/
   # --- audio ---
   audio_daemon.py     # always-on background listening daemon
   audio_stt.py        # speech-to-text transcription helpers
+  concentrate_hearing_files.py  # temporary deep-listen audio-file lifecycle + stale cleanup
 
   # --- misc / support ---
   antigravity_setup.py    # agy (Antigravity CLI) install/auth state helpers

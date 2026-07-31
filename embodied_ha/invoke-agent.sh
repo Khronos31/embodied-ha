@@ -8,7 +8,6 @@ usage: invoke-agent.sh [options] [prompt]
 Options:
   --model default|lite        Logical model tier (default: default)
   --json-schema JSON         Structured output schema JSON
-  --sound-file PATH          Force Antigravity audio fallback and inject PATH into the prompt
   --system-prompt TXT        Replace the harness's main system instruction (Claude native
                              --system-prompt; Codex via model_instructions_file; Antigravity
                              via prompt prefix approximation)
@@ -34,7 +33,7 @@ Options:
                              instead of stderr (best effort)
   -h, --help                 Show this help
 
-Harness selection comes from EHA_AGENT_HARNESS unless --sound-file is present.
+Harness selection comes from EHA_AGENT_HARNESS.
 Removed: --allowed-tools / --allowedTools. Use --allowed-builtins and
 --allowed-mcp-tools separately.
 EOF
@@ -78,7 +77,6 @@ append_csv() {
 
 json_schema=""
 logical_model="default"
-sound_file=""
 system_prompt=""
 system_prompt_replace=""
 allowed_builtins=""
@@ -104,11 +102,6 @@ while (($#)); do
     --json-schema)
       (($# >= 2)) || die "--json-schema requires a value"
       json_schema="$2"
-      shift 2
-      ;;
-    --sound-file)
-      (($# >= 2)) || die "--sound-file requires a value"
-      sound_file="$2"
       shift 2
       ;;
     --system-prompt)
@@ -204,33 +197,7 @@ else
   prompt="$(cat)"
 fi
 
-if [[ -n "$sound_file" ]]; then
-  [[ -f "$sound_file" ]] || die "--sound-file not found: $sound_file"
-  # Antigravity(agy)側のGo content-sniffがWAV/MP3/FLACのMIMEを誤判定し(WAV->audio/wave,
-  # MP3->audio/mpeg, FLAC->application/octet-stream)、いずれもGemini APIに拒否される
-  # (実機検証済み、2026-07-17)。音声のみのWebM(opus)だけがクライアント/サーバー双方に
-  # 受理されるため、ここで変換する。これはAntigravity側のバグに対する暫定ワークアラウンドで
-  # あり、Antigravity側でWAV等のMIME判定が修正されたら不要になる。詳細:
-  # embodied_ha_agy_audio_mime_investigation_2026-07-17 メモリ参照。
-  sound_file_webm="$(mktemp "${TMPDIR:-/tmp}/eha-agy-sound.XXXXXX.webm")"
-  TEMP_FILES+=("$sound_file_webm")
-  ffmpeg -y -loglevel error -i "$sound_file" -vn -c:a libopus "$sound_file_webm" \
-    || die "failed to convert --sound-file to webm for Antigravity: $sound_file"
-  # ツール/スクリプト利用を明示的に禁止する指示。実機検証(2026-07-17)により、この指示が
-  # あれば--dangerously-skip-permissions無しでも安全にview_fileへ直行できることを確認済み
-  # (指示が無いと、モデルがls/file等のcommand権限ツールを試みてheadlessモードで自動拒否
-  # されるか、Pythonスクリプトを自前で書いて外部STT APIへ投げる誤動作を起こす)。
-  prompt="${prompt}"$'\n\n'"【いま聞こえた音】"$'\n'"view_fileで下記の音声ファイルを読み込んで内容を理解してください"$'\n'"command/shell/Pythonなどの実行ツールや外部スクリプトによる解析は禁止です"$'\n'"@${sound_file_webm}"
-fi
-
 selected_harness="${EHA_AGENT_HARNESS:-claude}"
-harness_was_agy="false"
-case "$(lower "$selected_harness")" in
-  agy|antigravity|gemini) harness_was_agy="true" ;;
-esac
-if [[ -n "$sound_file" ]]; then
-  selected_harness="agy"
-fi
 
 case "$(lower "$selected_harness")" in
   claude|claude-code) harness="claude" ;;
@@ -265,19 +232,6 @@ case "$harness:$logical_model" in
     model="${EHA_AGY_MODEL_LITE:-Gemini 3.5 Flash (Low)}"
     ;;
 esac
-if [[ "$harness" == "agy" && -n "$sound_file" ]]; then
-  # 音声モデルの優先順位(sol Med3): (1)明示された EHA_SESSION_MODEL を最優先。深聴き音声
-  # セッション(listen_queue)はこれを音声既定Highに設定するため、選択ハーネスが agy で default
-  # ティア prefs(EHA_AGY_MODEL_DEFAULT)を Low にしても STT には波及しない。(2)EHA_SESSION_MODEL
-  # 未設定かつ元々 agy 選択でない(claude 等の非 agy 個体)なら音声専用既定へ。(3)元々 agy 選択かつ session
-  # モデル未指定なら default ティアのまま(既存の意図的挙動を保持)。
-  if [[ -n "${EHA_SESSION_MODEL:-}" ]]; then
-    model="$EHA_SESSION_MODEL"
-  elif [[ "$harness_was_agy" != "true" ]]; then
-    model="${EHA_AGY_AUDIO_MODEL:-Gemini 3.5 Flash (High)}"
-  fi
-fi
-
 extract_result_json() {
   python3 -c '
 import json, re, sys

@@ -16,6 +16,49 @@ import chat_invoke  # type: ignore  # noqa: E402
 
 
 class BuildChatPromptContractTests(unittest.TestCase):
+    def _minimal_prompt(self):
+        return chat_invoke.build_chat_prompt(
+            character="test",
+            resident="resident",
+            projected_camera_source="",
+            recent_activity="none",
+            current_mood="calm",
+            inner_voice="none",
+            body_narrative="body",
+            body_location_context="location",
+            turn_taking_state="{}",
+            sensors="sensors",
+            long_memory="memory",
+            open_loops="none",
+            recent_chat_context="",
+            chat_hist="none",
+            entity_table="",
+            pending="none",
+            features_md="",
+            features_presented="",
+            extra_context="",
+            policies_raw="",
+            chat_source="chat",
+            user_room="",
+            user_room_speaker="",
+            recent_auditory_input="",
+            user_msg="hello",
+        )
+
+    def test_prompt_mentions_concentrate_hearing_only_for_antigravity(self):
+        for harness in ("claude", "codex", "agy"):
+            with self.subTest(harness=harness), patch.dict(
+                os.environ,
+                {"EHA_AGENT_HARNESS": harness},
+                clear=False,
+            ):
+                prompt = self._minimal_prompt()
+            if harness == "agy":
+                self.assertIn("concentrate_hearing", prompt)
+                self.assertIn("音声そのもの", prompt)
+            else:
+                self.assertNotIn("concentrate_hearing", prompt)
+
     def test_prompt_contains_identity_context_memory_tools_and_user_message(self):
         prompt = chat_invoke.build_chat_prompt(
             character="私はテスト人格。",
@@ -151,6 +194,24 @@ def _arg_after(cmd, flag):
 
 
 class InvokeAgentChatPathTests(unittest.TestCase):
+    def test_command_allows_concentrate_hearing_only_for_antigravity(self):
+        for harness in ("claude", "codex", "agy"):
+            with self.subTest(harness=harness), patch.dict(
+                os.environ,
+                {"EHA_AGENT_HARNESS": harness},
+                clear=False,
+            ):
+                cmd = chat_invoke.build_invoke_agent_chat_command(
+                    chat_source="chat",
+                    script_dir=str(EMBODIED_HA_DIR),
+                    user_prompt="hello",
+                )
+            allowed = set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
+            if harness == "agy":
+                self.assertIn("mcp__audio__concentrate_hearing", allowed)
+            else:
+                self.assertNotIn("mcp__audio__concentrate_hearing", allowed)
+
     def test_command_splits_builtin_and_mcp_tools_for_chat(self):
         # 既定(claude)は files MCP を付けない(決定2: claude native Read 維持)。
         with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}):
@@ -197,59 +258,7 @@ class InvokeAgentChatPathTests(unittest.TestCase):
             )
         self.assertNotIn("files", _arg_after(cmd, "--mcp-servers").split(" "))
 
-    def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
-        # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで
-        # invoke-agent.sh経由に移行した。ただしsound_fileを渡さない場合は
-        # 通常のinvoke-agent.sh呼び出しとして--allowed-builtins/--allowed-mcp-toolsを
-        # 使い、--sound-fileは付かないことを確認する。
-        calls = []
-
-        class Result:
-            def __init__(self, stdout="", stderr="", returncode=0):
-                self.stdout = stdout
-                self.stderr = stderr
-                self.returncode = returncode
-
-        def fake_run(cmd, **kwargs):
-            calls.append((cmd, kwargs))
-            payload = {"reply": "queued reply"}
-            return Result(stdout=json.dumps(payload, ensure_ascii=False))
-
-        response = chat_invoke.invoke_chat_claude(
-            chat_source="chat",
-            prompt="こんにちは",
-            prefix_blocks=None,
-            script_dir=str(EMBODIED_HA_DIR),
-            claude_env={},
-            cwd="/tmp",
-            claude_bin="/bin/claude",
-            is_queued_listen=True,
-            run=fake_run,
-        )
-
-        self.assertEqual(json.loads(response)["reply"], "queued reply")
-        self.assertEqual(len(calls), 1)
-        cmd, kwargs = calls[0]
-        self.assertEqual(cmd[:2], ["bash", str(EMBODIED_HA_DIR / "invoke-agent.sh")])
-        self.assertEqual(_arg_after(cmd, "--allowed-builtins"), "Read")
-        self.assertNotIn("--sound-file", cmd)
-        self.assertNotIn("input", kwargs)
-
-    def test_command_for_sound_file_uses_agy_compatible_flags(self):
-        cmd = chat_invoke.build_invoke_agent_chat_command(
-            chat_source="chat",
-            script_dir=str(EMBODIED_HA_DIR),
-            user_prompt="こんにちは",
-            sound_file="/tmp/queued.wav",
-        )
-
-        self.assertEqual(_arg_after(cmd, "--sound-file"), "/tmp/queued.wav")
-        self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
-        self.assertNotIn("--allowed-builtins", cmd)
-        self.assertIn("--allowed-mcp-tools", cmd)
-        self.assertIn("--mcp-servers", cmd)
-
-    def test_command_without_sound_file_still_sets_agent_site_chat(self):
+    def test_command_sets_agent_site_chat(self):
         # 案A: chat は --mcp-servers を常に付けるため、通常ターンでも --agent-site chat を
         # 付ける(agy選択時に invoke-agent.sh run_agy が --agent-site 必須で落ちないように)。
         cmd = chat_invoke.build_invoke_agent_chat_command(
@@ -258,22 +267,8 @@ class InvokeAgentChatPathTests(unittest.TestCase):
             user_prompt="こんにちは",
         )
 
-        self.assertNotIn("--sound-file", cmd)
         self.assertEqual(_arg_after(cmd, "--agent-site"), "chat")
         self.assertIn("--mcp-servers", cmd)
-
-    def test_command_rejects_sound_file_with_content_json(self):
-        # sol reviewの指摘(2026-07-17): run_agy()は--content-jsonで即死するため、
-        # 呼び出し側の不備でsound_file/content_json_pathが両方渡っても
-        # ビルダー自身が防御的にfail-loudすることを確認する。
-        with self.assertRaises(ValueError):
-            chat_invoke.build_invoke_agent_chat_command(
-                chat_source="chat",
-                script_dir=str(EMBODIED_HA_DIR),
-                user_prompt="こんにちは",
-                sound_file="/tmp/queued.wav",
-                content_json_path="/tmp/content.json",
-            )
 
     def test_command_adds_voice_speaker_tool(self):
         cmd = chat_invoke.build_invoke_agent_chat_command(
@@ -320,38 +315,6 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         self.assertNotIn("input", captured["kwargs"])
         self.assertEqual(captured["kwargs"]["env"]["EHA_ACTOR"], "chat")
         self.assertTrue(_arg_after(captured["cmd"], "--content-json").startswith("@"))
-
-    def test_sound_file_with_prefix_blocks_omits_content_json(self):
-        captured = {}
-        image_block = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AAAA"}}
-
-        class Result:
-            stdout = '{"reply":"ok"}'
-            stderr = ""
-            returncode = 0
-
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
-            captured["kwargs"] = kwargs
-            return Result()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            response = chat_invoke.invoke_chat_claude(
-                chat_source="chat",
-                prompt="こんにちは",
-                prefix_blocks=[image_block],
-                script_dir=str(EMBODIED_HA_DIR),
-                claude_env={"EHA_TMP_DIR": tmp},
-                cwd="/tmp",
-                sound_file="/tmp/queued.wav",
-                run=fake_run,
-            )
-            self.assertEqual(list(Path(tmp).iterdir()), [])
-
-        self.assertEqual(response, '{"reply":"ok"}')
-        self.assertIn("--sound-file", captured["cmd"])
-        self.assertNotIn("--content-json", captured["cmd"])
-        self.assertNotIn("--allowed-builtins", captured["cmd"])
 
     def test_without_prefix_blocks_omits_content_json(self):
         captured = {}

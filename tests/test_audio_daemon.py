@@ -530,6 +530,30 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(result, 1)
         load_mock.assert_not_called()
 
+    def test_main_starts_concentrate_hearing_cleanup_before_waiting_for_mics(self):
+        thread = mock.Mock()
+        with mock.patch.object(
+            self.audio_daemon,
+            "acquire_audio_daemon_lock",
+            return_value=mock.Mock(),
+        ), mock.patch.object(
+            self.audio_daemon.threading,
+            "Thread",
+            return_value=thread,
+        ) as thread_cls, mock.patch.object(
+            self.audio_daemon,
+            "wait_for_enabled_mics",
+            side_effect=RuntimeError("stop after cleanup start"),
+        ), self.assertRaisesRegex(RuntimeError, "stop after cleanup start"):
+            self.audio_daemon.main()
+
+        thread_cls.assert_called_once_with(
+            target=self.audio_daemon.concentrate_hearing_files.cleanup_forever,
+            daemon=True,
+            name="concentrate-hearing-cleanup",
+        )
+        thread.start.assert_called_once_with()
+
     def test_invalid_or_missing_mics_wait_without_process_exit_and_recover(self):
         config = self.audio_daemon.AudioSourceConfig(
             "alsa://default", "Desk", 24, False, room="study"

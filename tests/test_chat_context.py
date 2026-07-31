@@ -268,16 +268,5 @@ class RecentAuditoryInputTests(unittest.TestCase):
                     "voice", "さっきの音は何？", None, str(bl_file)
                 )
             self.assertIn("ピンポン", result)
-
-
-class QueuedListenContextTests(unittest.TestCase):
-    def test_no_pending_request_returns_empty_dict(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            request_file = Path(tmp) / "next_listen_request.json"  # 存在しない = 予約無し
-            with patch.dict("os.environ", {"EHA_NEXT_LISTEN_REQUEST_FILE": str(request_file)}):
-                result = chat_context.resolve_queued_listen_context("chat")
-            self.assertEqual(result, {})
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,7 @@ from enum import Enum
 from pathlib import Path
 
 from auditory_context import append_auditory_event
+import concentrate_hearing_files
 from spatial_context import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
 from speak import play_pcm_file
 from state_utils import clean, now, parse_ts, read_json
@@ -2564,6 +2565,13 @@ def main() -> int:
     if lock_handle is None:
         log("another audio daemon instance already holds the lock; exiting")
         return 1
+
+    cleanup_thread = threading.Thread(
+        target=concentrate_hearing_files.cleanup_forever,
+        daemon=True,
+        name="concentrate-hearing-cleanup",
+    )
+    cleanup_thread.start()
 
     preferences, sources = wait_for_enabled_mics()
 
