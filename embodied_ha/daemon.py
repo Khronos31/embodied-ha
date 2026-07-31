@@ -310,13 +310,15 @@ def _save_desire_state(state, catalog=None):
     desire_state.save_state(DESIRE_STATE_FILE, state, catalog=catalog)
 
 
-def tick_body_state(loop_name, trigger_reason="", active_desires=None):
+def tick_body_state(loop_name, trigger_reason="", active_desires=None, *, trigger_kind):
+    kind = body_state.TriggerKind(trigger_kind)
     with _body_lock:
         updated = body_state.update_state(
             _BODY_STATE_FILE,
             lambda current: body_state.advance_tick(
                 current,
                 loop_name=loop_name,
+                trigger_kind=kind,
                 trigger_reason=trigger_reason,
                 active_desires=active_desires,
             ),
@@ -324,6 +326,7 @@ def tick_body_state(loop_name, trigger_reason="", active_desires=None):
     _log_body_state(
         f"tick/{loop_name}",
         updated,
+        trigger_kind=kind.value,
         reason=trigger_reason,
         active_desires=len(active_desires or []),
     )
@@ -396,7 +399,15 @@ def tick_desires(body_state_snapshot=None, loop_name="loop", trigger_reason="", 
         print(f"[daemon] tick_desires error: {e}", flush=True)
         return [], 0.0
 
-def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snapshot=None, anomaly_state_snapshot=None, mode=None):
+def run_loop(
+    trigger_reason="定期実行",
+    active_desires=None,
+    body_state_snapshot=None,
+    anomaly_state_snapshot=None,
+    mode=None,
+    *,
+    trigger_kind,
+):
     if not _loop_lock.acquire(blocking=False):
         print(f"[daemon] loop already running, skip: {trigger_reason}", flush=True)
         return
@@ -405,7 +416,12 @@ def run_loop(trigger_reason="定期実行", active_desires=None, body_state_snap
     try:
         if body_state_snapshot is None:
             try:
-                body_state_snapshot = tick_body_state("loop", trigger_reason, active_desires)
+                body_state_snapshot = tick_body_state(
+                    "loop",
+                    trigger_reason,
+                    active_desires,
+                    trigger_kind=trigger_kind,
+                )
             except Exception as e:
                 print(f"[daemon] body state tick error (loop): {e}", flush=True)
                 body_state_snapshot = _load_body_state()
@@ -459,7 +475,13 @@ def on_loop_trigger(payload):
     reason = (payload or "").strip()
     if not reason or reason.upper() == "LOOP":
         reason = "手動実行"
-    run_loop(reason, mode="observe")
+        trigger_kind = body_state.TriggerKind.MANUAL
+    else:
+        # Legacy custom text is the documented HA-automation contract.  The
+        # payload carries no reliable manual/sensor provenance, so preserve
+        # its existing unexpected-trigger behavior.
+        trigger_kind = body_state.TriggerKind.EXTERNAL
+    run_loop(reason, mode="observe", trigger_kind=trigger_kind)
 
 
 def run_chat(message, source="chat"):
@@ -476,7 +498,12 @@ def run_chat(message, source="chat"):
         try:
             body_before = _load_body_state()
             active_desires, _ = tick_desires(body_before, "chat", f"会話:{message[:40]}", emit_active=True)
-            body_state_snapshot = tick_body_state("chat", f"会話:{message[:40]}", active_desires)
+            body_state_snapshot = tick_body_state(
+                "chat",
+                f"会話:{message[:40]}",
+                active_desires,
+                trigger_kind=body_state.TriggerKind.USER,
+            )
         except Exception as e:
             print(f"[daemon] body state tick error (chat): {e}", flush=True)
             body_state_snapshot = _load_body_state()
@@ -657,7 +684,12 @@ def loop_scheduler():
                 anomaly_before = anomaly_state.normalize_state(None)
             active_desires, desire_pressure = tick_desires(body_before, "loop", reason, emit_active=True)
             try:
-                body_snapshot = tick_body_state("loop", reason, active_desires)
+                body_snapshot = tick_body_state(
+                    "loop",
+                    reason,
+                    active_desires,
+                    trigger_kind=body_state.TriggerKind.SCHEDULED,
+                )
             except Exception as e:
                 print(f"[daemon] body state tick error (loop scheduler): {e}", flush=True)
                 body_snapshot = body_before
@@ -670,6 +702,7 @@ def loop_scheduler():
                         "body_state_snapshot": body_snapshot,
                         "anomaly_state_snapshot": anomaly_before,
                         "active_desires": active_desires,
+                        "trigger_kind": body_state.TriggerKind.SCHEDULED,
                     },
                     daemon=True,
                 ).start()
