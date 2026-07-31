@@ -284,57 +284,71 @@ validate_allowed_builtins() {
 validate_allowed_builtins
 
 # agy 1.1.4以降のheadless(-p)モードはsettings.jsonのpermissionsを反映する。
-# 未承認のnative command/write_fileは確認画面を出せず空応答で終了するため、
-# EHA専用identityでは両方を明示的にdenyする。deny後のエラーはモデルへ返るので、MCP/read_file等への
-# フォールバックと最終応答を継続できる(agy 1.1.7実機確認、2026-07-26)。
-ensure_agy_native_mutations_denied() {
+# native command/write_file は恒久denyする。native read_file は原則 files MCP に寄せるが、
+# agy 1.1.6+ が標準許可する system temp の view_file は concentrate_hearing の同一ターン
+# 音声確認に必要なため残す。MCP config/認証/環境変数を守る /config・/data・/proc 等は
+# 明示denyし、その他のnon-workspace readはheadlessで確認不能→自動拒否に戻す。
+# 2.0.14が追加した read_file(*) deny と、それ以前にEHAが自動配布した同名allowは
+# v1 marker以前の一回だけ安全な順序で除去する(F-141 live canary、2026-07-31)。
+ensure_agy_native_safety_policy() {
   local agy_home="$1"
   local settings_dir="$agy_home/.gemini/antigravity-cli"
-  mkdir -p "$settings_dir"
-  local lock_file="$settings_dir/.eha-permissions.lock"
+  local config_dir="$agy_home/.gemini/config"
+  mkdir -p "$settings_dir" "$config_dir"
+  local lock_file="$agy_home/.gemini/.eha-native-safety-policy.lock"
   (
     flock -x 200
-    AGY_SETTINGS_JSON="$settings_dir/settings.json" python3 - <<'PY'
+    AGY_SETTINGS_JSON="$settings_dir/settings.json" \
+      AGY_CONFIG_JSON="$config_dir/config.json" \
+      AGY_POLICY_MARKER="$settings_dir/.eha-native-read-policy-v1" \
+      python3 - <<'PY'
 import json
 import os
 import sys
 import tempfile
 
-path = os.environ["AGY_SETTINGS_JSON"]
+settings_path = os.environ["AGY_SETTINGS_JSON"]
+config_path = os.environ["AGY_CONFIG_JSON"]
+marker_path = os.environ["AGY_POLICY_MARKER"]
+legacy_rule = "read_file(*)"
+required_denies = (
+    "command(*)",
+    "write_file(*)",
+    "read_file(/config)",
+    "read_file(/data)",
+    "read_file(/proc)",
+    "read_file(/root)",
+    "read_file(/run/secrets)",
+)
 
 
-def fail(message):
-    print(f"invoke-agent.sh: agy settings.json permissions merge failed: {message} ({path})", file=sys.stderr)
+def fail(message, path):
+    print(
+        f"invoke-agent.sh: agy native safety policy failed: {message} ({path})",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 
-file_existed = os.path.exists(path)
-settings = {}
-if file_existed:
+def load_object(path, label):
+    if not os.path.exists(path):
+        return {}, False
     try:
         with open(path, encoding="utf-8") as f:
-            settings = json.load(f)
+            value = json.load(f)
     except ValueError as e:
-        fail(f"existing file is not valid JSON: {e}")
-    if not isinstance(settings, dict):
-        fail("existing JSON root is not an object")
-permissions = settings.setdefault("permissions", {})
-if not isinstance(permissions, dict):
-    fail("permissions is not an object")
-deny = permissions.setdefault("deny", [])
-if not isinstance(deny, list):
-    fail("permissions.deny is not a list")
-changed = False
-for rule in ("command(*)", "write_file(*)", "read_file(*)"):
-    if rule not in deny:
-        deny.append(rule)
-        changed = True
-if changed:
-    mode = os.stat(path).st_mode & 0o777 if file_existed else 0o600
-    fd, tmp = tempfile.mkstemp(prefix=".settings.json.", dir=os.path.dirname(path))
+        fail(f"existing {label} is not valid JSON: {e}", path)
+    if not isinstance(value, dict):
+        fail(f"existing {label} root is not an object", path)
+    return value, True
+
+
+def write_json_atomic(path, value, existed, default_mode=0o600):
+    mode = os.stat(path).st_mode & 0o777 if existed else default_mode
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=os.path.dirname(path))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+            json.dump(value, f, ensure_ascii=False, indent=2)
         os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
@@ -343,6 +357,70 @@ if changed:
         except OSError:
             pass
         raise
+
+
+settings, settings_existed = load_object(settings_path, "settings.json")
+permissions = settings.setdefault("permissions", {})
+if not isinstance(permissions, dict):
+    fail("permissions is not an object", settings_path)
+deny = permissions.setdefault("deny", [])
+if not isinstance(deny, list):
+    fail("permissions.deny is not a list", settings_path)
+
+first_migration = not os.path.exists(marker_path)
+config = None
+config_existed = False
+config_changed = False
+if first_migration:
+    # 両ファイルを検証し終えるまで一切書かない。config側の旧allowを先に消し、
+    # settings側の旧denyを最後に消すので、途中終了しても unrestricted read にならない。
+    config, config_existed = load_object(config_path, "config.json")
+    user_settings = config.get("userSettings")
+    if user_settings is not None and not isinstance(user_settings, dict):
+        fail("userSettings is not an object", config_path)
+    grants = user_settings.get("globalPermissionGrants") if user_settings else None
+    if grants is not None and not isinstance(grants, dict):
+        fail("userSettings.globalPermissionGrants is not an object", config_path)
+    config_allow = grants.get("allow") if grants else None
+    if config_allow is not None and not isinstance(config_allow, list):
+        fail("userSettings.globalPermissionGrants.allow is not a list", config_path)
+    settings_allow = permissions.get("allow")
+    if settings_allow is not None and not isinstance(settings_allow, list):
+        fail("permissions.allow is not a list", settings_path)
+    if config_allow is not None and legacy_rule in config_allow:
+        grants["allow"] = [rule for rule in config_allow if rule != legacy_rule]
+        config_changed = True
+
+changed = False
+if first_migration:
+    settings_allow = permissions.get("allow")
+    if settings_allow is not None and legacy_rule in settings_allow:
+        permissions["allow"] = [rule for rule in settings_allow if rule != legacy_rule]
+        changed = True
+    if legacy_rule in deny:
+        deny[:] = [rule for rule in deny if rule != legacy_rule]
+        changed = True
+if settings.get("allowNonWorkspaceAccess") is not False:
+    settings["allowNonWorkspaceAccess"] = False
+    changed = True
+for rule in required_denies:
+    if rule not in deny:
+        deny.append(rule)
+        changed = True
+
+if config_changed:
+    write_json_atomic(config_path, config, config_existed)
+if changed:
+    write_json_atomic(settings_path, settings, settings_existed)
+if first_migration:
+    write_json_atomic(
+        marker_path,
+        {
+            "version": 1,
+            "reason": "F-141 scoped native read policy",
+        },
+        False,
+    )
 PY
   ) 200>"$lock_file"
 }
@@ -667,7 +745,7 @@ run_agy() {
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
-  ensure_agy_native_mutations_denied "$agy_home"
+  ensure_agy_native_safety_policy "$agy_home"
   local site_dir=""
   local project_arg=()
   if [[ -n "$mcp_servers" && -z "$agent_site" ]]; then
