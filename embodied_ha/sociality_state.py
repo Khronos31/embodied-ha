@@ -57,9 +57,13 @@ def _load_json(path: str, default: Any) -> Any:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except FileNotFoundError:
         return default
-    return data if isinstance(data, type(default)) else default
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("既存の社会性データを読めないため更新を中止しました") from exc
+    if not isinstance(data, type(default)):
+        raise RuntimeError("既存の社会性データの形式が不正なため更新を中止しました")
+    return data
 
 
 def default_quiet_window() -> dict[str, Any]:
@@ -341,7 +345,6 @@ def record_consent(
     if not person_name:
         return default_person_model("", load_shared_focus(log_dir))
 
-    consent = dict(get_person_model(log_dir, person_name)["boundary"]["consent"])
     granted_bool = _truthy(granted)
     kind_norm = _compact(kind)
 
@@ -357,10 +360,11 @@ def record_consent(
     else:
         targets = ["speak", "action"]
 
-    for target in targets:
-        if target in consent:
-            consent[target] = granted_bool
-
+    consent = {
+        target: granted_bool
+        for target in targets
+        if target in {"speak", "action"}
+    }
     consent["updated_at"] = _now().isoformat(timespec="seconds")
     if note:
         consent["note"] = _clean(note)

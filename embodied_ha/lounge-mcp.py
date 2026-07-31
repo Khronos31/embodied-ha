@@ -316,6 +316,52 @@ def _first_discussion_id() -> str:
     return _clean(nodes[0].get("id"))
 
 
+def _assert_lounge_target(discussion_id: str, comment_id: str | None = None) -> None:
+    """Reject node IDs that do not belong to the configured Lounge repository."""
+    query = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on Discussion {
+      id
+      repository { id }
+    }
+  }
+}
+"""
+    data = _graphql(query, {"id": discussion_id})
+    discussion = data.get("node") or {}
+    repository = discussion.get("repository") or {}
+    if _clean(discussion.get("id")) != discussion_id or _clean(repository.get("id")) != REPO_NODE_ID:
+        raise ValueError("返信先Discussionは設定されたAI Loungeリポジトリに属していません")
+
+    comment_id = _clean(comment_id)
+    if not comment_id:
+        return
+    comment_query = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on DiscussionComment {
+      id
+      discussion {
+        id
+        repository { id }
+      }
+    }
+  }
+}
+"""
+    data = _graphql(comment_query, {"id": comment_id})
+    comment = data.get("node") or {}
+    parent = comment.get("discussion") or {}
+    parent_repository = parent.get("repository") or {}
+    if (
+        _clean(comment.get("id")) != comment_id
+        or _clean(parent.get("id")) != discussion_id
+        or _clean(parent_repository.get("id")) != REPO_NODE_ID
+    ):
+        raise ValueError("返信先コメントは指定されたAI Lounge Discussionに属していません")
+
+
 def _root_reply_comment_id(comment_id: str) -> str:
     original = _clean(comment_id)
     if not original:
@@ -383,6 +429,9 @@ mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) 
         if not discussion_id:
             raise RuntimeError("comment のとき reply_to_discussion_id は必須です")
         reply_to_comment_id = _clean(item.get("reply_to_comment_id")) or None
+        # Queue data is persisted and may be stale or inconsistent. Re-check at
+        # the irreversible boundary immediately before the mutation.
+        _assert_lounge_target(discussion_id, reply_to_comment_id)
         if reply_to_comment_id:
             reply_to_comment_id = _root_reply_comment_id(reply_to_comment_id)
             mutation = """
@@ -453,6 +502,11 @@ def enqueue_post(args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("new_discussion のとき title は必須です")
     if post_type == "comment" and not _clean(args.get("reply_to_discussion_id")):
         raise ValueError("comment のとき reply_to_discussion_id は必須です")
+    if post_type == "comment":
+        _assert_lounge_target(
+            _clean(args.get("reply_to_discussion_id")),
+            _clean(args.get("reply_to_comment_id")) or None,
+        )
 
     preview_raw = _clean(args.get("reply_to_preview") or "")
     item = {

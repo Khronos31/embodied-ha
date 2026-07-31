@@ -32,8 +32,9 @@ def ha_get(args):
         return [text(reason)], True
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "15",
-         "-H", f"Authorization: Bearer {_token()}",
+         "-H", "@-",
          f"{HA_URL}/{path}"],
+        input=f"Authorization: Bearer {_token()}\n",
         capture_output=True, text=True
     )
     if r.returncode != 0:

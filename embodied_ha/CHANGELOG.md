@@ -6,6 +6,24 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.14] - 2026-07-31
+
+### Security / セキュリティ
+
+- 外部サービスへ渡す入力と、エージェントが読み取れるファイルの検証を強化しました。
+  Strengthened input validation for external services and boundaries around files available to agents.
+- Home Assistantとの認証通信で、認証情報を子プロセスのコマンドラインへ含めないようにしました。
+  Prevented Home Assistant credentials from being included in child-process command lines.
+
+### Fixed / 修正
+
+- 設定・記憶・関係性データの更新中に、同時保存や読み取り失敗によって既存内容が失われる問題を修正しました。
+  Fixed existing settings, memories, and relationship data being lost during concurrent saves or read failures.
+- 利用者固有の音声機器を前提とする既定値を撤去し、有効なマイクがない場合は理由を記録して
+  待機し、設定後に回復するようにしました。
+  Removed user-specific audio defaults; when no valid microphone is available, hearing now reports the
+  reason, waits without repeatedly restarting, and recovers after configuration.
+
 ## [2.0.13] - 2026-07-30
 
 ### Fixed / 修正

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from state_utils import clean
 
-DEFAULT_SOURCE = "rtsp://localhost:8554/capture_tv"
+DEFAULT_SOURCE = ""
 
 
 def _is_tcp_source(value: str) -> bool:

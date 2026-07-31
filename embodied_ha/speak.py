@@ -24,9 +24,10 @@ def get_ha_token():
 def curl_post(url, payload, ha_token):
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "5", "-X", "POST",
-         "-H", f"Authorization: Bearer {ha_token}",
+         "-H", "@-",
          "-H", "Content-Type: application/json",
          "-d", payload, url],
+        input=f"Authorization: Bearer {ha_token}\n".encode(),
         capture_output=True
     )
     return r.returncode == 0

@@ -143,7 +143,7 @@ SERVER_SPECS = {
     "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
     # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を
-    # シェルなしで最小権限提供する(2026-07-22)。claude は native Read を使うので通常は不要だが
+    # シェルなしで最小権限提供する(2026-07-22)。claude は policy deny 付き native Read を使うので通常は不要だが
     # ハーネス非依存で持たせておく。
     "files": ServerSpec(lambda: _server("files-mcp.py", base_env=MINIMAL_ENV), ("read_file",)),  # ファイル読み取り(read-anything+secure-read・最小env)
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が

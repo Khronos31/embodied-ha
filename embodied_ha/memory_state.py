@@ -8,6 +8,7 @@ small pure helpers, normalization, and atomic writes.
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -33,6 +34,28 @@ _CAUSAL_CHAINS_DIR = "causal_chains"
 _CONSOLIDATIONS_DIR = "consolidations"
 _WORKING_MEMORY_FILE = "working_memory.json"
 WORKING_MEMORY_MAX = 5
+
+
+def _safe_component(value: Any, field: str) -> str:
+    text = _clean(value)
+    if (
+        not text
+        or text in {".", ".."}
+        or len(text) > 200
+        or "/" in text
+        or "\\" in text
+        or any(ord(char) < 32 for char in text)
+    ):
+        raise ValueError(f"{field} にファイル名として使えない値が含まれています")
+    return text
+
+
+def _safe_date(value: Any) -> str:
+    text = _safe_component(value, "date")
+    try:
+        return _dt.date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError("date は YYYY-MM-DD 形式で指定してください") from exc
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
@@ -137,7 +160,7 @@ def working_memory_path(log_dir: str | None = None) -> str:
 
 
 def episode_path(log_dir: str | None, episode_id: str) -> str:
-    return _path(log_dir, _EPISODES_DIR, f"{_clean(episode_id)}.json")
+    return _path(log_dir, _EPISODES_DIR, f"{_safe_component(episode_id, 'episode_id')}.json")
 
 
 def fts_index_path(log_dir: str | None = None) -> str:
@@ -145,11 +168,11 @@ def fts_index_path(log_dir: str | None = None) -> str:
 
 
 def daybook_path(log_dir: str | None, date: str) -> str:
-    return _path(log_dir, _DAYBOOKS_DIR, f"{_clean(date)}.json")
+    return _path(log_dir, _DAYBOOKS_DIR, f"{_safe_date(date)}.json")
 
 
 def causal_chain_path(log_dir: str | None, chain_id: str) -> str:
-    return _path(log_dir, _CAUSAL_CHAINS_DIR, f"{_clean(chain_id)}.json")
+    return _path(log_dir, _CAUSAL_CHAINS_DIR, f"{_safe_component(chain_id, 'chain_id')}.json")
 
 
 def consolidation_report_path(log_dir: str | None, scope: str) -> str:

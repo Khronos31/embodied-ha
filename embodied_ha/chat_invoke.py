@@ -367,8 +367,7 @@ _CHAT_MCP_SERVERS = (
 
 # ハーネスごとの届け方の違いは file_read_capability に集約した(loop 側と共有するため)。
 # codex は本環境の bwrap 制約でシェル経由 Read が不可なので files MCP で Read を提供する。
-# claude は native Read、agy は native read_file(config.json の read_file(*) grant で headless でも通る・
-# 2026-07-23 実機確認)を使うため files MCP は付けない。→ files MCP は codex 限定。
+# claude は deny rule を設定した native Read、agy は native read_file を deny して files MCP を使う。
 _FILES_MCP_HARNESSES = file_read_capability.FILES_MCP_HARNESSES
 
 

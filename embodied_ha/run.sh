@@ -215,7 +215,7 @@ echo "[run] CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR}"
 # 空の場合は EHA_DATA_DIR/workdir（永続・監査可能・ハーネス非依存の既定パス）。
 # cwdの祖先ディレクトリにあたる /config/CLAUDE.md（SCS運用者向け・無関係な内容）が
 # Claude Codeのプロジェクトメモリとして誤って読み込まれないよう、直下に
-# .claude/settings.local.json（claudeMdExcludes）を配置する。既存ファイルは上書きしない。
+# .claude/settings.local.jsonへ除外・Read拒否規則をadd-onlyでマージする。
 _OPT_CWD=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('claude_cwd',''))" 2>/dev/null || echo "")
 export EHA_CLAUDE_CWD="${_OPT_CWD:-$EHA_DATA_DIR/workdir}"
 # EHA_AGENT_CWDは3ハーネス共通の正式変数。daybook_rollup.pyは後方互換のため
@@ -229,14 +229,9 @@ for _eha_agent_site in observe explore reflect web social chat game; do
     mkdir -p "$EHA_CLAUDE_CWD/$_eha_agent_site"
 done
 unset _eha_agent_site
-if [ ! -f "$EHA_CLAUDE_CWD/.claude/settings.local.json" ]; then
-    cat > "$EHA_CLAUDE_CWD/.claude/settings.local.json" << 'JSONEOF'
-{
-  "claudeMdExcludes": ["/config/CLAUDE.md", "/config/CLAUDE.local.md"]
-}
-JSONEOF
-    echo "[run] ${EHA_CLAUDE_CWD}/.claude/settings.local.json を初期化（/config/CLAUDE.md除外設定）"
-fi
+python3 "$SCRIPT_DIR/read_policy.py" merge-claude-settings \
+    "$EHA_CLAUDE_CWD/.claude/settings.local.json" \
+    || { echo "[run] Claude Read安全設定を適用できないため起動を中止します" >&2; exit 1; }
 
 # --- preferences.json ---
 # 会話で育てる設定（スピーカー・カメラ・在宅判定・センサー（おもなデバイス）等）。
@@ -349,8 +344,8 @@ fi
 python3 "$SCRIPT_DIR/migrate_source_schema.py" --apply "$EHA_PREFS_FILE" 2>&1 | sed 's/^/[run][migrate] /' || true
 
 # --- MQTT discovery（HA にエンティティを生やす）---
-MQTT=$(curl -sf -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
-    http://supervisor/services/mqtt 2>/dev/null || echo "")
+MQTT=$(printf 'Authorization: Bearer %s\n' "$SUPERVISOR_TOKEN" \
+    | curl -sf -H @- http://supervisor/services/mqtt 2>/dev/null || echo "")
 
 if [ -n "$MQTT" ]; then
     read -r MQTT_HOST MQTT_PORT MQTT_USER MQTT_PASS < <(echo "$MQTT" | python3 -c '

@@ -68,6 +68,12 @@ class KeyPreservationTests(unittest.TestCase):
 
 
 class DeletionStillWorksTests(unittest.TestCase):
+    def test_missing_ui_managed_camera_field_is_removed(self):
+        existing = {"cameras": [{"source": "a", "note": "remove", "ptz": {"left": "x"}}]}
+        merged = prefs_merge.merge_preferences(existing, {"cameras": [{"source": "a"}]})
+        self.assertNotIn("note", merged["cameras"][0])
+        self.assertEqual(merged["cameras"][0]["ptz"], {"left": "x"})
+
     def test_removing_a_list_item_removes_it(self):
         existing = {"mics": [{"source": "a", "note": "keep"}, {"source": "b", "note": "gone"}]}
         incoming = {"mics": [{"source": "a"}]}

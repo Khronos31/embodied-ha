@@ -10,12 +10,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_sensory_origin_module():
+def load_spatial_context_module():
     import sys
 
-    path = ROOT / "embodied_ha" / "sensory_origin.py"
+    path = ROOT / "embodied_ha" / "spatial_context.py"
     sys.path.insert(0, str(ROOT / "embodied_ha"))
-    spec = importlib.util.spec_from_file_location("sensory_origin_test", path)
+    spec = importlib.util.spec_from_file_location("spatial_context_test", path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     sys.modules[spec.name] = module
@@ -25,7 +25,7 @@ def load_sensory_origin_module():
 
 class SensoryOriginTests(unittest.TestCase):
     def setUp(self):
-        self.sensory_origin = load_sensory_origin_module()
+        self.sensory_origin = load_spatial_context_module()
 
     def _write_graph(self, tmpdir):
         graph = {
@@ -112,10 +112,11 @@ class SensoryOriginTests(unittest.TestCase):
                 "EHA_BODY_LOCATION_FILE": str(state_path),
                 "SUPERVISOR_TOKEN": "dummy-token",
             }
-            mocked = mock.Mock(returncode=0, stdout="リビング")
+            mocked = mock.MagicMock()
+            mocked.__enter__.return_value.read.return_value = "リビング".encode()
             with mock.patch.dict(os.environ, env, clear=False):
                 self.sensory_origin._AREA_CACHE.clear()
-                with mock.patch.object(self.sensory_origin.subprocess, "run", return_value=mocked) as run_mock:
+                with mock.patch.object(self.sensory_origin.urllib.request, "urlopen", return_value=mocked) as run_mock:
                     payload = self.sensory_origin.classify_sensory_origin(
                         source="camera.living_room",
                         label="名前だけでは部屋不明",

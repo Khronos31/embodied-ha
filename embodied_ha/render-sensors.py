@@ -64,10 +64,11 @@ def build_template(groups, context):
 def render(template, ha_url, token):
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "10", "-X", "POST",
-         "-H", f"Authorization: Bearer {token}",
+         "-H", "@-",
          "-H", "Content-Type: application/json",
          "-d", json.dumps({"template": template}, ensure_ascii=False),
          f"{ha_url.rstrip('/')}/template"],
+        input=f"Authorization: Bearer {token}\n",
         capture_output=True, text=True
     )
     if r.returncode != 0:

@@ -371,7 +371,7 @@ deny = permissions.setdefault("deny", [])
 if not isinstance(deny, list):
     fail("permissions.deny is not a list")
 changed = False
-for rule in ("command(*)", "write_file(*)"):
+for rule in ("command(*)", "write_file(*)", "read_file(*)"):
     if rule not in deny:
         deny.append(rule)
         changed = True
@@ -707,8 +707,8 @@ run_codex() {
 }
 
 run_agy() {
-  # --allowed-builtins(Read/WebSearch)は agy では: Read は agy native の read_file を使う
-  # (config.json globalPermissionGrants の read_file(*) grant で headless でも通る・実機確認2026-07-23)。
+  # --allowed-builtins Read は呼び出し側で files MCP に写像する。agy native read_file は
+  # settings.json で deny し、機密パス policy を迂回させない。
   # WebSearch(agy native)の headless 許可形式は未確定(§8)で 2.1.0。ここでは die せず受理する。
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
@@ -753,15 +753,6 @@ run_agy() {
     for server in "${server_args[@]}"; do
       grants+="mcp(${server}/*)"$'\n'
     done
-    # Read 意図(--allowed-builtins Read)がある時は agy native read_file を config.json grant で許可する
-    # (agy 1.1.3+ の headless は settings.json permissions.allow を無視し config.json globalPermissionGrants
-    # だけが効く=実機確認。read-anything は既定 posture。claude の Read と同精度に intent で gate)。
-    if [[ "$allowed_builtins_set" == "true" ]]; then
-      local _agy_ab_norm="${allowed_builtins//[[:space:]]/}"
-      if [[ ",$_agy_ab_norm," == *",Read,"* ]]; then
-        grants+="read_file(*)"$'\n'
-      fi
-    fi
     ensure_agy_permission_grants "$agy_home" "$grants"
   fi
   local full_prompt="$prompt"

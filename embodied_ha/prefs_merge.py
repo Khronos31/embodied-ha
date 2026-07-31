@@ -9,10 +9,11 @@ UI がフォームに持っていないキーは送られないので、**保存
 同じ失敗の型は [[feedback_never_clobber_addon_options]] でアドオンoptionsでも起きている。
 **UI側だけ直しても、次にUIへ項目を足し忘れたときにまた起きる**ので、サーバー側で構造的に止める。
 
-## 方針: 「UIが言及しなかったキーは残す」
+## 方針: UIが扱うキーを明示し、それ以外を残す
 
-「UIが扱うキーのallowlist」を持つ案もあったが、**allowlist を正しく保つ責任が増える**うえ、
-書き忘れれば同じ事故が再発する。ここでは逆に、
+特に欠損が起きた `cameras` / `speakers` は、UIが編集する項目キーを明示する。
+UI管理キーが送られなければ削除の意図として扱い、UI非管理キーは既存値を残す。
+それ以外の構造では従来どおり、
 
 - **incoming に**無い**キー → existing から引き継ぐ**
 - incoming に**ある**キー → incoming が正（空文字も「クリアした」として尊重する）
@@ -34,6 +35,15 @@ from typing import Any
 # 同一性の判定に使うキー。前にあるものほど優先。
 _IDENTITY_KEYS = ("id", "source", "entity_id", "entity", "label")
 
+# The form reconstructs these two item types from the listed fields. Anything
+# else is an extension field that the server must preserve.
+_UI_ITEM_KEYS = {
+    "cameras": frozenset({"source", "room", "entity", "label", "note"}),
+    "speakers": frozenset({
+        "room", "type", "label", "entity", "note", "host", "port", "sink",
+    }),
+}
+
 
 def _identity(item: Any) -> tuple[str, str] | None:
     """リスト項目の同一性キーを返す。決められなければ None。"""
@@ -46,7 +56,22 @@ def _identity(item: Any) -> tuple[str, str] | None:
     return None
 
 
-def _merge_list(existing: list, incoming: list) -> list:
+def _merge_item(existing: dict, incoming: dict, section: str) -> dict:
+    handled = _UI_ITEM_KEYS.get(section)
+    if handled is None:
+        return merge_preferences(existing, incoming)
+    merged = dict(incoming)
+    for key, old_value in existing.items():
+        if key in handled:
+            continue
+        if key not in merged:
+            merged[key] = old_value
+        elif isinstance(old_value, dict) and isinstance(merged[key], dict):
+            merged[key] = merge_preferences(old_value, merged[key])
+    return merged
+
+
+def _merge_list(existing: list, incoming: list, section: str) -> list:
     if not incoming or not all(isinstance(item, dict) for item in incoming):
         return incoming
     incoming_ids = [_identity(item) for item in incoming]
@@ -60,7 +85,7 @@ def _merge_list(existing: list, incoming: list) -> list:
     merged = []
     for item, ident in zip(incoming, incoming_ids):
         old = existing_by_id.get(ident)
-        merged.append(merge_preferences(old, item) if isinstance(old, dict) else item)
+        merged.append(_merge_item(old, item, section) if isinstance(old, dict) else item)
     return merged
 
 
@@ -78,5 +103,5 @@ def merge_preferences(existing: Any, incoming: Any) -> Any:
         if isinstance(old_value, dict) and isinstance(new_value, dict):
             merged[key] = merge_preferences(old_value, new_value)
         elif isinstance(old_value, list) and isinstance(new_value, list):
-            merged[key] = _merge_list(old_value, new_value)
+            merged[key] = _merge_list(old_value, new_value, key)
     return merged

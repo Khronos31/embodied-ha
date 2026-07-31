@@ -13,7 +13,7 @@ import os
 from typing import Any
 
 import body_state
-from sensory_origin import classify_sensory_origin
+from spatial_context import classify_sensory_origin
 from state_utils import clean, coerce_float
 
 

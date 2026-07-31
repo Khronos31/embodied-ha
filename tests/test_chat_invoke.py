@@ -178,29 +178,24 @@ class InvokeAgentChatPathTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(_arg_after(cmd, "--json-schema")), chat_invoke.chat_schema(voice=False))
 
-    def test_codex_gets_files_mcp_but_agy_and_claude_do_not(self):
-        # codex は bwrap でシェル Read 不可のため files MCP(先頭+read_file)。agy は native read_file
-        # (read_file(*) grant)、claude は native Read を使うため files MCP は付けない(2026-07-23)。
-        with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "codex"}):
-            cmd = chat_invoke.build_invoke_agent_chat_command(
-                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), user_prompt="こんにちは",
-            )
-        servers = _arg_after(cmd, "--mcp-servers").split(" ")
-        self.assertIn("files", servers)
-        self.assertEqual(servers[0], "files")
-        self.assertIn("mcp__files__read_file", set(_arg_after(cmd, "--allowed-mcp-tools").split(",")))
-
-        for harness in ("agy", "claude"):
+    def test_codex_and_agy_get_files_mcp_but_claude_does_not(self):
+        for harness in ("codex", "agy"):
             with self.subTest(harness=harness):
                 with patch.dict(os.environ, {"EHA_AGENT_HARNESS": harness}):
                     cmd = chat_invoke.build_invoke_agent_chat_command(
                         chat_source="chat", script_dir=str(EMBODIED_HA_DIR), user_prompt="こんにちは",
                     )
                 servers = _arg_after(cmd, "--mcp-servers").split(" ")
-                self.assertNotIn("files", servers)
-                self.assertNotIn(
-                    "mcp__files__read_file", set(_arg_after(cmd, "--allowed-mcp-tools").split(",")),
+                self.assertEqual(servers[0], "files")
+                self.assertIn(
+                    "mcp__files__read_file", set(_arg_after(cmd, "--allowed-mcp-tools").split(","))
                 )
+
+        with patch.dict(os.environ, {"EHA_AGENT_HARNESS": "claude"}):
+            cmd = chat_invoke.build_invoke_agent_chat_command(
+                chat_source="chat", script_dir=str(EMBODIED_HA_DIR), user_prompt="こんにちは",
+            )
+        self.assertNotIn("files", _arg_after(cmd, "--mcp-servers").split(" "))
 
     def test_queued_listen_turn_migrates_by_default_when_no_sound_file(self):
         # 仕様変更(2026-07-17、#14増分5): queued listenはデフォルトで

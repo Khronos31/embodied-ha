@@ -36,7 +36,8 @@ class MediaCaptureTests(unittest.TestCase):
         cmd = run_mock.call_args.args[0]
         self.assertEqual(cmd[:4], ["curl", "-sf", "--max-time", "8"])
         self.assertIn("-H", cmd)
-        self.assertIn("Authorization: Bearer token123", cmd)
+        self.assertNotIn("token123", " ".join(cmd))
+        self.assertEqual(run_mock.call_args.kwargs["input"], b"Authorization: Bearer token123\n")
         self.assertIn("http://supervisor/core/api/camera_proxy/camera.kitchen", cmd)
 
     def test_fetch_frame_uses_go2rtc_for_stream_names(self):

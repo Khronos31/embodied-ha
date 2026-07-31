@@ -115,22 +115,28 @@ def _load_json(path: str, default: Any) -> Any:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except FileNotFoundError:
         return default
-    return data if isinstance(data, type(default)) else default
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("既存データを読めないため更新を中止しました") from exc
+    if not isinstance(data, type(default)):
+        raise RuntimeError("既存データの形式が不正なため更新を中止しました")
+    return data
 
 
 def _read_text(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
-    except Exception:
+    except FileNotFoundError:
         return ""
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("既存データを読めないため更新を中止しました") from exc
 
 
 def _write_json(path: str, data: Any) -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
@@ -138,7 +144,7 @@ def _write_json(path: str, data: Any) -> None:
 
 def _write_text(path: str, content: str) -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
-    tmp = f"{path}.tmp"
+    tmp = f"{path}.{uuid.uuid4().hex}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
@@ -299,17 +305,22 @@ def update_relationship(args: dict[str, Any]):
         _log_invalid_args("update_relationship", args, "missing_note")
         return [text("note が空です")], True
 
-    data = _load_relationships()
-    profile = _normalize_relationship(person, data.get(person))
-    profile["notes"].append(note)
-    profile["last_seen"] = _now_ts()
-    profile["interaction_count"] = int(profile.get("interaction_count", 0)) + 1
-    data[person] = {
-        "notes": profile["notes"],
-        "last_seen": profile["last_seen"],
-        "interaction_count": profile["interaction_count"],
-    }
-    _write_json(_relationships_path(), data)
+    path = _relationships_path()
+    try:
+        with file_lock(path):
+            data = _load_relationships()
+            profile = _normalize_relationship(person, data.get(person))
+            profile["notes"].append(note)
+            profile["last_seen"] = _now_ts()
+            profile["interaction_count"] = int(profile.get("interaction_count", 0)) + 1
+            data[person] = {
+                "notes": profile["notes"],
+                "last_seen": profile["last_seen"],
+                "interaction_count": profile["interaction_count"],
+            }
+            _write_json(path, data)
+    except RuntimeError as exc:
+        return [text(str(exc))], True
     log(f"[sociality-mcp] relationship update: {person} (+1)")
     return _json_text(profile)
 
@@ -324,10 +335,14 @@ def append_narrative(args: dict[str, Any]):
         return [text("text が空です")], True
 
     path = _narrative_path()
-    content = _read_text(path).rstrip()
-    line = f"- {_now_ts()} | {narrative_text}"
-    content = f"{content}\n{line}\n" if content else f"{line}\n"
-    _write_text(path, content)
+    try:
+        with file_lock(path):
+            content = _read_text(path).rstrip()
+            line = f"- {_now_ts()} | {narrative_text}"
+            content = f"{content}\n{line}\n" if content else f"{line}\n"
+            _write_text(path, content)
+    except RuntimeError as exc:
+        return [text(str(exc))], True
     log(f"[sociality-mcp] narrative append: {narrative_text[:60]}")
     return [text("self_narrative に追記しました")]
 
@@ -342,14 +357,19 @@ def update_social_state(args: dict[str, Any]):
         _log_invalid_args("update_social_state", args, "missing_event")
         return [text("event が空です")], True
 
-    state = _load_social_state()
-    now = _now_ts()
-    state["last_event"] = event
-    state["last_event_ts"] = now
-    state["last_interaction_ts"] = now
-    if not _clean(state.get("mode")):
-        state["mode"] = "idle"
-    _write_json(_social_state_path(), state)
+    path = _social_state_path()
+    try:
+        with file_lock(path):
+            state = _load_social_state()
+            now = _now_ts()
+            state["last_event"] = event
+            state["last_event_ts"] = now
+            state["last_interaction_ts"] = now
+            if not _clean(state.get("mode")):
+                state["mode"] = "idle"
+            _write_json(path, state)
+    except RuntimeError as exc:
+        return [text(str(exc))], True
     log(f"[sociality-mcp] social state event: {event[:60]}")
     return _json_text(_state_with_elapsed(state))
 
@@ -438,7 +458,9 @@ def set_shared_focus(args: dict[str, Any]):
         "last_seen_at": _clean(args.get("last_seen_at")),
         "updated_at": _now_ts(),
     }
-    _write_json(_shared_focus_path(), focus)
+    path = _shared_focus_path()
+    with file_lock(path):
+        _write_json(path, focus)
     log(f"[sociality-mcp] shared focus: {topic[:60]}")
     return _json_text(focus)
 

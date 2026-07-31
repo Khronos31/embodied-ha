@@ -16,7 +16,7 @@ import sys
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from media_capture import fetch_frame
 from media_registry import resolve_media_item
-from sensory_origin import classify_sensory_origin
+from spatial_context import classify_sensory_origin
 from state_utils import clean, get_device_capabilities, load_prefs
 
 TOOL_USE_DEVICE_CAMERA = {
@@ -163,9 +163,10 @@ def press_button(entity_id, ha_url):
     token = get_ha_token()
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "5", "-X", "POST",
-         "-H", f"Authorization: Bearer {token}",
+         "-H", "@-",
          "-H", "Content-Type: application/json",
          "-d", json.dumps({"entity_id": entity_id}), url],
+        input=f"Authorization: Bearer {token}\n".encode(),
         capture_output=True,
     )
     return r.returncode == 0

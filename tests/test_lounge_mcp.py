@@ -62,6 +62,13 @@ class LoungeReplyRootTests(unittest.TestCase):
 
         def fake_graphql(query, variables):
             calls.append(variables)
+            if "on Discussion {" in query:
+                return {"node": {"id": "discussion", "repository": {"id": self.mcp.REPO_NODE_ID}}}
+            if "on DiscussionComment {" in query and "discussion {" in query:
+                return {"node": {
+                    "id": "nested",
+                    "discussion": {"id": "discussion", "repository": {"id": self.mcp.REPO_NODE_ID}},
+                }}
             if "query($c: ID!)" in query:
                 parent = {"nested": "root", "root": None}[variables["c"]]
                 return {"node": {"replyTo": {"id": parent} if parent else None}}
@@ -84,6 +91,8 @@ class LoungeReplyRootTests(unittest.TestCase):
 
         def fake_graphql(query, variables):
             calls.append((query, variables))
+            if "on Discussion {" in query:
+                return {"node": {"id": "discussion", "repository": {"id": self.mcp.REPO_NODE_ID}}}
             return {"addDiscussionComment": {"comment": {"id": "new-comment", "url": "https://example.test/comment"}}}
 
         item = {
@@ -96,8 +105,23 @@ class LoungeReplyRootTests(unittest.TestCase):
             result = self.mcp._post_to_lounge(item)
 
         self.assertEqual(result["comment_id"], "new-comment")
-        self.assertEqual(len(calls), 1)
-        self.assertNotIn("replyToId", calls[0][1])
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("replyToId", calls[-1][1])
+
+    def test_foreign_repository_discussion_is_rejected_before_post(self):
+        item = {
+            "type": "comment",
+            "body": "hello",
+            "reply_to_discussion_id": "foreign",
+        }
+        with mock.patch.object(
+            self.mcp,
+            "_graphql",
+            return_value={"node": {"id": "foreign", "repository": {"id": "another-repo"}}},
+        ) as graphql_mock:
+            with self.assertRaises(ValueError):
+                self.mcp._post_to_lounge(item)
+        self.assertEqual(graphql_mock.call_count, 1)
 
 
 class LoungePemPathTests(unittest.TestCase):

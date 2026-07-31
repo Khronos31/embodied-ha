@@ -1,7 +1,7 @@
 """files-mcp.py の read_file ツールのテスト。
 
-read-anything + secure-read の契約(2026-07-23・F4/ゆの案):
-  - 通常ファイルはそのまま読む(パス制限なし=Claude native Read パリティ)。
+policy-read + secure-read の契約:
+  - 通常ファイルはそのまま読み、認証・機密パスは共通 policy で拒否。
   - symlink / ディレクトリ / fifo・デバイス(非通常ファイル)は拒否。
   - size cap 超過は切り詰めて注記。非 UTF-8 は内容を出さず要約のみ。
 """
@@ -51,6 +51,38 @@ class FilesMcpReadFileTests(unittest.TestCase):
     def test_empty_path_is_error(self):
         _text, err = self._call("")
         self.assertTrue(err)
+
+    def test_relative_path_is_rejected(self):
+        text, err = self._call("relative.txt")
+        self.assertTrue(err)
+        self.assertIn("絶対パス", text)
+
+    def test_well_known_sensitive_paths_are_rejected(self):
+        for path in (
+            "/config/secrets.yaml",
+            "/config/.storage/auth",
+            "/config/.ssh/id_ed25519",
+            "/data/options.json",
+            "/data/claude-home/.credentials.json",
+            "/data/codex-home/auth.json",
+            "/data/.gemini/antigravity-cli/token",
+            "/config/embodied-ha/github_app.pem",
+        ):
+            with self.subTest(path=path):
+                _text, err = self._call(path)
+                self.assertTrue(err)
+
+    def test_intermediate_symlink_cannot_alias_sensitive_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret_dir = root / ".ssh"
+            secret_dir.mkdir()
+            (secret_dir / "key").write_text("secret", encoding="utf-8")
+            alias = root / "alias"
+            alias.symlink_to(secret_dir, target_is_directory=True)
+            text, err = self._call(str(alias / "key"))
+            self.assertTrue(err)
+            self.assertIn("認証・機密", text)
 
     def test_not_found_is_error(self):
         with tempfile.TemporaryDirectory() as tmp:

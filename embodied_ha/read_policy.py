@@ -1,0 +1,126 @@
+"""Shared sensitive-path policy for every agent file-reading route."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import PurePosixPath
+
+from state_utils import file_lock
+
+_DENIED_COMPONENTS = frozenset({
+    ".storage",
+    ".ssh",
+    ".claude",
+    ".gemini",
+    ".codex",
+    "claude-home",
+    "codex-home",
+})
+
+CLAUDE_DENY_RULES = (
+    "Read(**/secrets.yaml)",
+    "Read(**/.storage/**)",
+    "Read(**/.ssh/**)",
+    "Read(**/.gemini/**)",
+    "Read(/data/options.json)",
+    "Read(**/claude-home/**)",
+    "Read(**/codex-home/**)",
+    "Read(**/.claude/**)",
+    "Read(**/.codex/**)",
+    "Read(**/*.pem)",
+    "Read(**/eha-mcp-*.config.toml)",
+)
+
+
+def read_deny_reason(path: str) -> str:
+    normalized = os.path.normpath(path)
+    pure = PurePosixPath(normalized)
+    name = pure.name.casefold()
+    components = {part.casefold() for part in pure.parts}
+    if normalized == "/data/options.json":
+        return "アドオン設定ファイルは読めません"
+    if name == "secrets.yaml":
+        return "機密設定ファイルは読めません"
+    if name.endswith(".pem"):
+        return "秘密鍵ファイルは読めません"
+    if name.startswith("eha-mcp-") and name.endswith(".config.toml"):
+        return "一時的なエージェント設定は読めません"
+    if components & _DENIED_COMPONENTS:
+        return "認証・機密設定ディレクトリ内のファイルは読めません"
+    return ""
+
+
+def _write_settings(path: str, settings: dict, mode: int) -> None:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(
+        dir=directory,
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
+def merge_claude_settings(path: str) -> None:
+    """Add deny rules without replacing unrelated user settings."""
+    with file_lock(path):
+        existed = os.path.exists(path)
+        settings = {}
+        if existed:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    settings = json.load(f)
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("既存のClaude設定を読めないため安全設定を適用できません") from exc
+            if not isinstance(settings, dict):
+                raise TypeError("既存のClaude設定がJSONオブジェクトではありません")
+
+        excludes = settings.setdefault("claudeMdExcludes", [])
+        if not isinstance(excludes, list):
+            raise TypeError("claudeMdExcludes が配列ではありません")
+        for item in ("/config/CLAUDE.md", "/config/CLAUDE.local.md"):
+            if item not in excludes:
+                excludes.append(item)
+
+        permissions = settings.setdefault("permissions", {})
+        if not isinstance(permissions, dict):
+            raise TypeError("permissions がオブジェクトではありません")
+        deny = permissions.setdefault("deny", [])
+        if not isinstance(deny, list):
+            raise TypeError("permissions.deny が配列ではありません")
+        for rule in CLAUDE_DENY_RULES:
+            if rule not in deny:
+                deny.append(rule)
+
+        mode = os.stat(path).st_mode & 0o777 if existed else 0o600
+        _write_settings(path, settings, mode)
+
+
+def main() -> int:
+    if len(sys.argv) != 3 or sys.argv[1] != "merge-claude-settings":
+        print("usage: read_policy.py merge-claude-settings PATH", file=sys.stderr)
+        return 2
+    try:
+        merge_claude_settings(sys.argv[2])
+    except (OSError, UnicodeError, ValueError, TypeError, RuntimeError) as exc:
+        print(f"[read-policy] {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
