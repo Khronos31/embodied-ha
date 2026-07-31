@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
+import enum
 import fcntl
 import json
 import os
@@ -63,6 +64,18 @@ DEFAULT_STATE: dict[str, Any] = {
     "last_event": "",
     "last_result": "",
 }
+
+
+class TriggerKind(enum.StrEnum):
+    """Machine-readable origin of a body-state tick."""
+
+    SCHEDULED = "scheduled"
+    MANUAL = "manual"
+    USER = "user"
+    EXTERNAL = "external"
+
+
+_UNEXPECTED_TRIGGER_KINDS = frozenset({TriggerKind.USER, TriggerKind.EXTERNAL})
 
 
 def normalize_state(raw: Any) -> dict[str, Any]:
@@ -221,6 +234,7 @@ def advance_tick(
     state: Mapping[str, Any],
     *,
     loop_name: str,
+    trigger_kind: TriggerKind | str,
     trigger_reason: str = "",
     active_desires: list[str] | None = None,
     now: _dt.datetime | None = None,
@@ -238,6 +252,7 @@ def advance_tick(
     elapsed_hours = _elapsed_hours(current, current_now)
     desire_count = len(active_desires or [])
     reason = _clean(trigger_reason)
+    kind = TriggerKind(trigger_kind)
 
     curiosity = current["curiosity"]
     energy = current["energy"]
@@ -273,7 +288,7 @@ def advance_tick(
         embodiment_tension += remote_drift
         return_to_body_pressure += remote_drift * 0.8
 
-    if reason and reason not in ("定期実行", "手動実行"):
+    if kind in _UNEXPECTED_TRIGGER_KINDS:
         curiosity += 0.015
         stress += 0.010
 

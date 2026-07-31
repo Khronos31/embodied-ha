@@ -63,6 +63,7 @@ class BodyStateTests(unittest.TestCase):
         state = body_state.advance_tick(
             body_state.normalize_state(None),
             loop_name="loop",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行（20分間隔）",
             active_desires=["気になること"],
         )
@@ -82,6 +83,43 @@ class BodyStateTests(unittest.TestCase):
         self.assertLess(after["curiosity"], state["curiosity"])
         self.assertEqual(after["last_result"], "success")
         self.assertEqual(after["session_count"], state["session_count"] + 1)
+
+    def test_trigger_kind_controls_unexpected_bonus_independently_of_reason(self):
+        now = datetime.datetime(2026, 7, 31, 12, 0, tzinfo=datetime.timezone.utc)
+        initial = body_state.normalize_state({
+            "curiosity": 0.4,
+            "stress": 0.4,
+            "updated_at": now.isoformat(),
+        })
+
+        def tick(kind, reason):
+            return body_state.advance_tick(
+                initial,
+                loop_name="watch",
+                trigger_kind=kind,
+                trigger_reason=reason,
+                now=now,
+            )
+
+        scheduled = tick(body_state.TriggerKind.SCHEDULED, "定期実行（30分間隔）")
+        manual = tick(body_state.TriggerKind.MANUAL, "玄関を確認して")
+        user = tick(body_state.TriggerKind.USER, "会話:確認して")
+        external = tick(body_state.TriggerKind.EXTERNAL, "玄関のドアが開いた")
+
+        self.assertEqual(scheduled["curiosity"], manual["curiosity"])
+        self.assertEqual(scheduled["stress"], manual["stress"])
+        self.assertAlmostEqual(user["curiosity"] - scheduled["curiosity"], 0.015)
+        self.assertAlmostEqual(user["stress"] - scheduled["stress"], 0.010)
+        self.assertEqual(user["curiosity"], external["curiosity"])
+        self.assertEqual(user["stress"], external["stress"])
+
+    def test_advance_tick_rejects_unknown_trigger_kind(self):
+        with self.assertRaises(ValueError):
+            body_state.advance_tick(
+                body_state.normalize_state(None),
+                loop_name="watch",
+                trigger_kind="unknown",
+            )
 
     def test_audio_session_cost_updates_energy_and_stress(self):
         state = body_state.normalize_state({"energy": 0.9, "stress": 0.5})
@@ -146,6 +184,7 @@ class BodyStateTests(unittest.TestCase):
         drifted = body_state.advance_tick(
             after_action,
             loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行",
             now=body_state._now() + datetime.timedelta(minutes=30),
         )
@@ -188,6 +227,7 @@ class BodyStateTests(unittest.TestCase):
             state = body_state.advance_tick(
                 state,
                 loop_name="watch",
+                trigger_kind=body_state.TriggerKind.SCHEDULED,
                 trigger_reason="定期実行",
                 now=base + datetime.timedelta(minutes=5 * tick),
             )
@@ -206,6 +246,7 @@ class BodyStateTests(unittest.TestCase):
             state = body_state.advance_tick(
                 state,
                 loop_name="watch",
+                trigger_kind=body_state.TriggerKind.SCHEDULED,
                 trigger_reason="定期実行",
                 now=base + datetime.timedelta(minutes=5 * tick),
             )
@@ -223,6 +264,7 @@ class BodyStateTests(unittest.TestCase):
         state = body_state.advance_tick(
             state,
             loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行",
             now=base + datetime.timedelta(minutes=5),
         )
@@ -231,6 +273,7 @@ class BodyStateTests(unittest.TestCase):
         recovered = body_state.advance_tick(
             state,
             loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行",
             now=base + datetime.timedelta(minutes=10),
         )
@@ -243,12 +286,14 @@ class BodyStateTests(unittest.TestCase):
         projected = body_state.advance_tick(
             body_state.normalize_state({**common, "remote_avatar_host": "camera.living"}),
             loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行",
             now=base + datetime.timedelta(minutes=5),
         )
         non_projected = body_state.advance_tick(
             body_state.normalize_state({**common, "remote_avatar_host": ""}),
             loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
             trigger_reason="定期実行",
             now=base + datetime.timedelta(minutes=5),
         )
