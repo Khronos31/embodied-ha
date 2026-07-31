@@ -6,6 +6,17 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.1] - 2026-07-31
+
+### Fixed / 修正
+
+- 定期実行が「予期しないトリガー」と誤判定され、実行間隔ごとに好奇心とストレスが
+  余分に増えていた問題を修正しました。表示用の起動理由とは別にトリガーの由来を判定し、
+  定期実行・手動実行と、会話・外部イベントを区別します。
+  Fixed scheduled runs being misclassified as unexpected triggers, which added extra curiosity and
+  stress on every interval. Trigger origin is now classified separately from the human-readable reason,
+  distinguishing scheduled and manual runs from conversations and external events.
+
 ## [2.1.0] - 2026-07-31
 
 ### Changed / 変更
