@@ -6,6 +6,26 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.0] - 2026-07-31
+
+### Changed / 変更
+
+- Antigravityで音そのものを確認する「深聴き」を、次回セッションの予約ではなく、現在のターンで
+  1〜30秒録音して確認する同期ツールへ変更しました。
+  Changed Antigravity deep listening from a next-session queue into a same-turn tool that records
+  for 1–30 seconds and returns the audio for immediate inspection.
+- 選択中のAIがAntigravityではない個体では、使われなくなったAntigravity本体と認証情報を
+  起動時に削除するようにしました。キャラクターのデータや記憶は削除しません。
+  Instances that do not use Antigravity now remove the obsolete Antigravity binary and credentials
+  at startup. Character data and memories are not removed.
+
+### Removed / 削除
+
+- Claude Code / Codexから一時的にAntigravityへ切り替えて音声を処理するフォールバックと、
+  そのための聴取キュー・実験中機能UIを削除しました。
+  Removed the queued-listening fallback that temporarily switched Claude Code or Codex sessions to
+  Antigravity, together with its experimental UI.
+
 ## [2.0.14] - 2026-07-31
 
 ### Security / セキュリティ
