@@ -214,7 +214,7 @@ _HIGHLIGHT_ITEM = {
 
 
 def daybook_schema():
-    """daybook_rollup.py の _summarize_with_claude() 用スキーマを返す。"""
+    """daybook_rollup.py の _summarize_with_agent() 用スキーマを返す。"""
     return {
         "type": "object",
         "properties": {
