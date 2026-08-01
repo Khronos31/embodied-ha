@@ -1,3 +1,5 @@
+import io
+import json
 import os
 import sys
 import tempfile
@@ -11,7 +13,43 @@ sys.path.insert(0, str(ROOT / "embodied_ha"))
 import migrate_remove_unused_antigravity as migration
 
 
+def write_legacy_global_mcp_config(home: Path) -> tuple[Path, dict]:
+    config_path = home / ".gemini" / "config" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    common_env = {
+        "HA_URL": "http://supervisor/core/api",
+        "SUPERVISOR_TOKEN": "old-token-canary",
+        "EHA_DATA_DIR": "/config/embodied-ha-test",
+        "PATH": "/usr/bin:/bin",
+    }
+    data = {
+        "mcpServers": {
+            name: {
+                "command": "python3",
+                "args": [script_path],
+                "env": dict(common_env),
+            }
+            for name, script_path in migration._LEGACY_GLOBAL_MCP_SERVERS.items()
+        }
+    }
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    return config_path, data
+
+
 class F141AntigravityMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self._agy_home = tempfile.TemporaryDirectory()
+        self._agy_home_env = mock.patch.dict(
+            os.environ,
+            {"EHA_ANTIGRAVITY_HOME": self._agy_home.name},
+            clear=False,
+        )
+        self._agy_home_env.start()
+
+    def tearDown(self):
+        self._agy_home_env.stop()
+        self._agy_home.cleanup()
+
     def test_valid_non_antigravity_selection_uninstalls_and_unfreezes(self):
         for selected in ("claude", "codex"):
             with self.subTest(selected=selected), \
@@ -38,6 +76,104 @@ class F141AntigravityMigrationTests(unittest.TestCase):
         self.assertEqual(result, {"status": "skipped", "reason": "antigravity_selected"})
         uninstall.assert_not_called()
         unfreeze.assert_not_called()
+
+    def test_antigravity_selection_quarantines_eha_legacy_global_mcp_config(self):
+        home = Path(self._agy_home.name)
+        config_path, original = write_legacy_global_mcp_config(home)
+
+        with mock.patch.object(
+            migration.harness_state,
+            "read_selection",
+            return_value=("valid", "agy"),
+        ), mock.patch.object(migration.antigravity_setup, "uninstall") as uninstall, \
+             mock.patch.object(migration.agy_update_freeze, "remove_hosts_redirect") as unfreeze:
+            result = migration.migrate()
+
+        backup_path = Path(result["legacy_mcp_backup"])
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["reason"], "antigravity_selected")
+        self.assertFalse(config_path.exists())
+        self.assertTrue(backup_path.exists())
+        self.assertEqual(json.loads(backup_path.read_text(encoding="utf-8")), original)
+        self.assertEqual(backup_path.parent, config_path.parent)
+        self.assertTrue(backup_path.name.startswith("mcp_config.json.eha-f141-legacy-"))
+        uninstall.assert_not_called()
+        unfreeze.assert_not_called()
+
+    def test_quarantine_is_idempotent(self):
+        home = Path(self._agy_home.name)
+        _, original = write_legacy_global_mcp_config(home)
+
+        first = migration.quarantine_legacy_global_mcp_config()
+        second = migration.quarantine_legacy_global_mcp_config()
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        backups = list((home / ".gemini" / "config").glob("mcp_config.json.eha-f141-legacy-*.bak"))
+        self.assertEqual(backups, [Path(first)])
+        self.assertEqual(json.loads(backups[0].read_text(encoding="utf-8")), original)
+
+    def test_user_modified_global_mcp_config_is_preserved(self):
+        home = Path(self._agy_home.name)
+        config_path, original = write_legacy_global_mcp_config(home)
+        original["mcpServers"]["ha"]["includeTools"] = ["ha_get"]
+        config_path.write_text(json.dumps(original), encoding="utf-8")
+
+        result = migration.quarantine_legacy_global_mcp_config()
+
+        self.assertIsNone(result)
+        self.assertEqual(json.loads(config_path.read_text(encoding="utf-8")), original)
+        self.assertEqual(
+            list(config_path.parent.glob("mcp_config.json.eha-f141-legacy-*.bak")),
+            [],
+        )
+
+    def test_malformed_global_mcp_config_is_preserved(self):
+        home = Path(self._agy_home.name)
+        config_path = home / ".gemini" / "config" / "mcp_config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text('{"mcpServers":', encoding="utf-8")
+
+        result = migration.quarantine_legacy_global_mcp_config()
+
+        self.assertIsNone(result)
+        self.assertEqual(config_path.read_text(encoding="utf-8"), '{"mcpServers":')
+
+    def test_replace_failure_retains_original_and_removes_reserved_backup(self):
+        home = Path(self._agy_home.name)
+        config_path, original = write_legacy_global_mcp_config(home)
+
+        with mock.patch.object(migration.os, "replace", side_effect=OSError("read-only")), \
+             self.assertRaises(OSError):
+            migration.quarantine_legacy_global_mcp_config()
+
+        self.assertEqual(json.loads(config_path.read_text(encoding="utf-8")), original)
+        self.assertEqual(
+            list(config_path.parent.glob("mcp_config.json.eha-f141-legacy-*.bak")),
+            [],
+        )
+
+    def test_main_logs_quarantined_backup_in_english(self):
+        backup = "/data/.gemini/config/mcp_config.json.eha-f141-legacy-test.bak"
+        stdout = io.StringIO()
+        with mock.patch.object(
+            migration,
+            "migrate",
+            return_value={
+                "status": "skipped",
+                "reason": "antigravity_selected",
+                "legacy_mcp_backup": backup,
+            },
+        ), mock.patch("sys.stdout", stdout):
+            result = migration.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            "[f141-agy-cleanup] quarantined legacy global MCP config: "
+            f"backup={backup}\n"
+            "[f141-agy-cleanup] skipped: antigravity_selected\n",
+        )
 
     def test_missing_and_invalid_selection_are_untouched(self):
         for state in ("missing", "invalid"):
