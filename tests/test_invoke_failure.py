@@ -78,6 +78,36 @@ class RecordFailureTests(unittest.TestCase):
         # 書けない場所を渡しても呼び出し元を巻き込まない
         invoke_failure.record_failure("/proc/nonexistent-dir", source="loop", stderr="x")
 
+    def test_latest_failure_skips_malformed_rows_and_filters_source(self):
+        invoke_failure.record_failure(
+            self.log_dir, source="chat", mode="text", returncode=2, harness="agy",
+        )
+        invoke_failure.record_failure(
+            self.log_dir, source="loop", mode="reflect", returncode=1,
+            stdout_empty=True, stderr="private diagnostic", harness="codex",
+        )
+        path = Path(self.log_dir) / invoke_failure.FAILURES_FILE
+        with path.open("a", encoding="utf-8") as f:
+            f.write("not-json\n")
+
+        latest = invoke_failure.read_latest_failure(self.log_dir, source="loop")
+        self.assertEqual(latest["mode"], "reflect")
+        self.assertEqual(latest["harness"], "codex")
+        self.assertEqual(
+            invoke_failure.read_latest_failure(self.log_dir, source="chat")["mode"],
+            "text",
+        )
+        self.assertEqual(invoke_failure.read_latest_failure(self.log_dir, source="missing"), {})
+        self.assertEqual(
+            invoke_failure.read_latest_failure(
+                self.log_dir,
+                source="loop",
+                since="2999-01-01T00:00:00+09:00",
+            ),
+            {},
+            "以前の失敗ストリークを通知へ再利用している",
+        )
+
 
 class ConsecutiveCountTests(unittest.TestCase):
     def setUp(self):
@@ -127,11 +157,35 @@ class ConsecutiveCountTests(unittest.TestCase):
             invoke_failure.DEFAULT_ALERT_THRESHOLD,
         )
 
-    def test_alert_message_mentions_relogin(self):
-        state = invoke_failure.mark_failure(self.log_dir, source="loop", detail="定期実行")
-        message = invoke_failure.alert_message(state)
+    def test_alert_message_uses_safe_failure_summary(self):
+        state = invoke_failure.mark_failure(
+            self.log_dir,
+            source="loop",
+            detail="定期実行（15分間隔）\n二行目",
+        )
+        message = invoke_failure.alert_message(state, failure={
+            "harness": "codex",
+            "mode": "explore",
+            "returncode": 1,
+            "stdout_empty": True,
+            "stderr": "Invalid refresh token: secret-value",
+        })
         self.assertIn("再ログイン", message)
         self.assertIn("1回", message)
+        self.assertIn("ハーネス=codex", message)
+        self.assertIn("モード=explore", message)
+        self.assertIn("終了コード=1", message)
+        self.assertIn("標準出力=空", message)
+        self.assertIn("起動理由: 定期実行（15分間隔） 二行目", message)
+        self.assertNotIn("直近のエラー", message)
+        self.assertNotIn("secret-value", message)
+
+    def test_alert_message_works_without_failure_record(self):
+        state = invoke_failure.mark_failure(self.log_dir, source="loop")
+        message = invoke_failure.alert_message(state)
+        self.assertIn("実行基盤", message)
+        self.assertNotIn("直近の失敗:", message)
+        self.assertNotIn("起動理由:", message)
 
 
 
