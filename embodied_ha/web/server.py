@@ -2047,8 +2047,8 @@ class Handler(BaseHTTPRequestHandler):
                     break
             if not wav_path:
                 wav_path = os.path.join(WAV_DIR, f"{event_id}.wav")
-            wav_path = os.path.normpath(wav_path)
-            expected_prefix = os.path.normpath(WAV_DIR)
+            wav_path = os.path.realpath(wav_path)
+            expected_prefix = os.path.realpath(WAV_DIR)
             if not wav_path.startswith(expected_prefix + os.sep) and wav_path != expected_prefix:
                 self.send_error(403, "Forbidden")
                 return
