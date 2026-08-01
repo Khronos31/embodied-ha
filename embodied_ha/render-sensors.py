@@ -85,7 +85,8 @@ def main():
     ha_url = os.environ["HA_URL"]
 
     try:
-        prefs = json.load(open(prefs_file, encoding="utf-8"))
+        with open(prefs_file, encoding="utf-8") as f:
+            prefs = json.load(f)
     except Exception:
         prefs = {}
 
