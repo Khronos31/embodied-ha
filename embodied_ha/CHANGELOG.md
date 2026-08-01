@@ -6,6 +6,17 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.2] - 2026-08-01
+
+### Fixed / 修正
+
+- 以前のバージョンからAntigravity個体を更新したとき、古いHome Assistant認証情報を含む
+  グローバルMCP設定が残り、現在の設定より優先されてHAへ接続できなくなる問題を修正しました。
+  EHAが生成した旧形式と確認できる設定だけを、復元可能なバックアップ名へ退避します。
+  Fixed upgraded Antigravity instances being unable to reach Home Assistant because a legacy global
+  MCP configuration with an outdated token remained and took precedence over the current site config.
+  Only files matching EHA's legacy generated format are moved to a recoverable backup name.
+
 ## [2.1.1] - 2026-07-31
 
 ### Fixed / 修正
