@@ -297,17 +297,34 @@ class CodexSetupEndpointTests(unittest.TestCase):
         self.setup_guard_env.stop()
 
     def _with_server(self, fake, assertion, expect_lock_released=True):
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        request_state = threading.Condition()
+        active_requests = [0]
+
+        class RequestTrackingHandler(server.Handler):
+            def do_POST(self):
+                with request_state:
+                    active_requests[0] += 1
+                try:
+                    return super().do_POST()
+                finally:
+                    with request_state:
+                        active_requests[0] -= 1
+                        request_state.notify_all()
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), RequestTrackingHandler)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         with mock.patch.object(server, "codex_setup", fake):
             thread.start()
             try:
                 assertion(f"http://127.0.0.1:{httpd.server_address[1]}")
                 if expect_lock_released:
-                    for _ in range(50):
-                        if not server._CODEX_INSTALL_LOCK.locked():
-                            break
-                        time.sleep(0.01)
+                    with request_state:
+                        self.assertTrue(
+                            request_state.wait_for(
+                                lambda: active_requests[0] == 0, timeout=5
+                            ),
+                            "timed out waiting for setup request handlers",
+                        )
                     self.assertFalse(server._CODEX_INSTALL_LOCK.locked())
             finally:
                 httpd.shutdown()
