@@ -302,6 +302,9 @@ def _write_codex_profile(path, servers, allowed_tools):
     # red-team・[[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]] F11-A1)。これは tool の
     # 接続契約なので user prompt ではなく developer instruction に置く(F6 の files 限定・read_file
     # 中心を全 MCP へ一般化)。model_instructions_file は built-in base instructions を置換するため使わない。
+    # 以下を英語にした当初の理由は履歴から確認できない。70ツール隔離実験の0/70→70/70は
+    # この英語文で得た結果で、日本語版は未検証。
+    # TODO(F-111): developer_instructions を日本語化し、同等のツール解決効果を再検証する。
     instructions = []
     if servers:
         instructions.append(
