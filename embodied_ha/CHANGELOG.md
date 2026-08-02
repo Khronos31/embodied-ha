@@ -6,6 +6,16 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.4] - 2026-08-02
+
+### Fixed / 修正
+
+- Antigravityの日誌生成が終了コード0の空応答を返し、完了markerを進められない問題を修正しました。
+  対応CLIでは日誌に限ってnative JSON Schema出力を併用し、失敗statusをエラーとして扱います。
+  Fixed Antigravity daybook generation returning an empty response with exit code zero and leaving the
+  completion marker stalled. Supported CLIs now use native JSON Schema output for daybooks only and
+  propagate unsuccessful status envelopes as errors.
+
 ## [2.1.3] - 2026-08-02
 
 ### Fixed / 修正
