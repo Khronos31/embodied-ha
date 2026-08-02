@@ -191,10 +191,15 @@ def notify_loop_failing(state: dict) -> bool:
     翌日の人間の日次チェックまで誰も気づかなかった。その穴をここで塞ぐ。
     送信できたら True。
     """
+    latest_failure = invoke_failure.read_latest_failure(
+        _LOG_DIR,
+        source=(state.get("last_source") or "loop").strip(),
+        since=state.get("first_failed_at") or "",
+    )
     payload = json.dumps({
         "notification_id": _LOOP_FAILURE_NOTIFICATION_ID,
         "title": "Embodied HA の自律ループが止まっています",
-        "message": invoke_failure.alert_message(state),
+        "message": invoke_failure.alert_message(state, failure=latest_failure),
     }, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         f"{HA_URL.rstrip('/')}/services/persistent_notification/create",

@@ -3,6 +3,7 @@
 `invoke_failure` の単体テストは `tests/test_invoke_failure.py`。ここは
 **daemon がループの成否をそこへ流しているか**と、**同じ連続失敗で通知を繰り返さないか**を見る。
 """
+import json
 import os
 import sys
 import tempfile
@@ -78,6 +79,36 @@ class TrackLoopOutcomeTests(unittest.TestCase):
     def test_tracking_error_does_not_propagate(self):
         with mock.patch.object(self.daemon.invoke_failure, "mark_failure", side_effect=OSError("disk full")):
             self.daemon.track_loop_outcome(False, trigger_reason="定期実行")  # 例外を投げない
+
+    def test_notification_uses_latest_structured_failure_without_stderr(self):
+        invoke_failure.record_failure(
+            self.log_dir,
+            source="loop",
+            mode="observe",
+            returncode=1,
+            stdout_empty=True,
+            stderr="Invalid refresh token: secret-value",
+            harness="claude",
+        )
+        state = invoke_failure.mark_failure(
+            self.log_dir,
+            source="loop",
+            detail="定期実行（15分間隔）",
+        )
+
+        with mock.patch.object(self.daemon.urllib.request, "urlopen") as urlopen:
+            self.assertTrue(self.daemon.notify_loop_failing(state))
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        message = payload["message"]
+        self.assertIn("ハーネス=claude", message)
+        self.assertIn("モード=observe", message)
+        self.assertIn("終了コード=1", message)
+        self.assertIn("標準出力=空", message)
+        self.assertIn("起動理由: 定期実行（15分間隔）", message)
+        self.assertNotIn("secret-value", message)
+        self.assertNotIn("直近のエラー", message)
 
 
 if __name__ == "__main__":

@@ -16,9 +16,9 @@
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from state_utils import file_lock, read_json
+from state_utils import file_lock, parse_ts, read_json
 
 FAILURES_FILE = "invoke_failures.jsonl"
 STATE_FILE = "invoke_failure_state.json"
@@ -34,6 +34,11 @@ STDERR_TAIL_CHARS = 2000
 
 # 何回続けて落ちたら人間へ上げるか。30分間隔のループなら 3 回 ≒ 1.5 時間。
 DEFAULT_ALERT_THRESHOLD = 3
+
+# HA通知は診断の入口に留める。MQTTの任意trigger_reasonや将来追加される識別子が
+# そのまま長文・複数行で通知へ入らないよう、構造化フィールドだけを短く整形する。
+NOTIFICATION_FIELD_CHARS = 120
+NOTIFICATION_REASON_CHARS = 240
 
 
 def _path(log_dir: str, name: str) -> str:
@@ -109,6 +114,43 @@ def read_state(log_dir: str) -> dict:
     return state
 
 
+def read_latest_failure(log_dir: str, *, source: str = "", since: str = "") -> dict:
+    """現在の失敗ストリークに属する最新行を返す。stderrを表示してよい、という意味ではない。"""
+    try:
+        path = _path(log_dir, FAILURES_FILE)
+    except ValueError:
+        return {}
+    if not os.path.exists(path):
+        return {}
+    try:
+        with file_lock(path):
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+    except OSError:
+        return {}
+
+    wanted_source = (source or "").strip()
+    since_ts = parse_ts(since)
+    # record_failure()の直後にmark_failure()する際、秒境界を跨ぐことがある。
+    # 同じ失敗を落とさず、以前のストリークを拾いにくい小さな許容幅だけ持たせる。
+    earliest_ts = since_ts - timedelta(seconds=5) if since_ts else None
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        if wanted_source and str(row.get("source") or "").strip() != wanted_source:
+            continue
+        if earliest_ts is not None:
+            row_ts = parse_ts(row.get("timestamp"))
+            if row_ts is None or row_ts < earliest_ts:
+                continue
+        return row
+    return {}
+
+
 def mark_failure(log_dir: str, *, source: str, detail: str = "") -> dict:
     """連続失敗を1つ進めて、更新後の状態を返す。"""
     path = _path(log_dir, STATE_FILE)
@@ -177,14 +219,42 @@ def should_alert(state: dict, *, threshold: int) -> bool:
     return not (state.get("alerted_at") or "")
 
 
-def alert_message(state: dict) -> str:
+def _notification_field(value, *, max_chars: int = NOTIFICATION_FIELD_CHARS) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - 1] + "…"
+
+
+def alert_message(state: dict, *, failure: dict | None = None) -> str:
     consecutive = int(state.get("consecutive") or 0)
     since = state.get("first_failed_at") or "不明"
-    detail = (state.get("last_detail") or "").strip()
+    trigger_reason = _notification_field(
+        state.get("last_detail"),
+        max_chars=NOTIFICATION_REASON_CHARS,
+    )
     text = (
         f"自律ループの起動に{consecutive}回続けて失敗しています（最初の失敗: {since}）。"
-        "ハーネスの認証が切れている可能性があります。Web UI で再ログインしてください。"
+        "実行基盤、ハーネス認証、またはCLI設定に問題がある可能性があります。"
+        "Web UIでハーネスの状態と設定を確認し、必要に応じて再ログインしてください。"
     )
-    if detail:
-        text += f"\n直近のエラー: {detail}"
+
+    failure = failure if isinstance(failure, dict) else {}
+    summary = []
+    harness = _notification_field(failure.get("harness"))
+    mode = _notification_field(failure.get("mode"))
+    if harness:
+        summary.append(f"ハーネス={harness}")
+    if mode:
+        summary.append(f"モード={mode}")
+    if failure.get("returncode") is not None:
+        summary.append(f"終了コード={_notification_field(failure.get('returncode'))}")
+    if failure.get("stdout_empty") is True:
+        summary.append("標準出力=空")
+    elif failure.get("stdout_empty") is False:
+        summary.append("標準出力=あり")
+    if summary:
+        text += "\n直近の失敗: " + " / ".join(summary)
+    if trigger_reason:
+        text += f"\n起動理由: {trigger_reason}"
     return text
