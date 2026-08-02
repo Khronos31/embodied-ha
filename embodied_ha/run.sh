@@ -174,6 +174,13 @@ echo "[run] Antigravity bin: ${EHA_ANTIGRAVITY_BIN}"
 python3 "$SCRIPT_DIR/migrate_remove_unused_antigravity.py" 2>&1 | sed 's/^/[run] /' \
     || echo "[run] F-141 Antigravity cleanup failed（削除を完了できず続行）"
 
+# --- F-157: selected Antigravity CLI native structured output migration ---
+# EHA freezes automatic agy updates, so existing instances can remain on a CLI older than the
+# daybook native schema flags. Only selected agy instances are updated through the existing
+# official installer. The migration backs up the binary, preserves auth, and restores the freeze.
+python3 "$SCRIPT_DIR/migrate_antigravity_structured_output.py" 2>&1 | sed 's/^/[run] /' \
+    || echo "[run] F-157 Antigravity CLI upgrade failed; continuing with the previous CLI"
+
 # --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
 # agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
 # （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
