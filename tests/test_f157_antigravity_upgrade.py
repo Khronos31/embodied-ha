@@ -233,6 +233,46 @@ class F157AntigravityUpgradeTests(unittest.TestCase):
         self.assertLess(cleanup, upgrade)
         self.assertLess(upgrade, freeze)
 
+    def test_install_contract_rejects_changed_installer_before_manifest_fetch(self):
+        with mock.patch.object(
+            migration.antigravity_setup,
+            "fetch_install_script",
+            return_value="changed installer",
+        ), mock.patch.object(migration, "_fetch_manifest") as fetch_manifest:
+            with self.assertRaisesRegex(RuntimeError, "pinned SHA-256"):
+                migration._pinned_install_contract()
+        fetch_manifest.assert_not_called()
+
+    def test_install_contract_rejects_changed_manifest(self):
+        script = "pinned installer"
+        installer_hash = migration.hashlib.sha256(script.encode()).hexdigest()
+        with mock.patch.object(migration, "INSTALLER_SHA256", installer_hash), \
+             mock.patch.object(
+                 migration.antigravity_setup,
+                 "fetch_install_script",
+                 return_value=script,
+             ), mock.patch.object(migration, "_release_platform", return_value="linux_amd64"), \
+             mock.patch.object(migration, "_fetch_manifest", return_value=b"{}"):
+            with self.assertRaisesRegex(RuntimeError, "manifest does not match"):
+                migration._pinned_install_contract()
+
+    def test_official_installer_rejects_wrong_installed_binary_digest(self):
+        pinned = {
+            "version": "1.1.9",
+            "binary_sha512": "expected",
+        }
+        proc = mock.Mock(returncode=0, stdout="installed")
+        with mock.patch.object(
+            migration,
+            "_pinned_install_contract",
+            return_value=("exit 0\n", pinned),
+        ), mock.patch.object(migration.subprocess, "run", return_value=proc), \
+             mock.patch.object(migration, "_supports_structured_output", return_value=True), \
+             mock.patch.object(migration, "_cli_version", return_value="1.1.9"), \
+             mock.patch.object(migration, "_binary_sha512", return_value="different"), \
+             self.assertRaisesRegex(RuntimeError, "pinned SHA-512"):
+            migration._run_official_installer()
+
 
 if __name__ == "__main__":
     unittest.main()
