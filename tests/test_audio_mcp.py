@@ -81,6 +81,17 @@ class AudioMcpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.audio_mcp.build_record_command("tcp://192.168.1.100:3333", 5)
 
+    def test_speaker_file_path_contract_names_raw_format_and_conversion(self):
+        for tool in (
+            self.audio_mcp.TOOL_SPEAK,
+            self.audio_mcp.TOOL_USE_DEVICE_SPEAKER,
+        ):
+            description = tool["inputSchema"]["properties"]["file_path"]["description"]
+            self.assertIn(".pcm", description)
+            self.assertIn("mono s16le/16kHz", description)
+            self.assertIn("ffmpeg", description)
+            self.assertIn("最長10分", description)
+
     def test_concentrate_hearing_spec_requires_view_file_without_execution_tools(self):
         description = self.audio_mcp.TOOL_CONCENTRATE_HEARING["description"]
         self.assertIn("view_file", description)

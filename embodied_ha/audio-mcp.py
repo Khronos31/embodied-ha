@@ -787,7 +787,7 @@ TOOL_SPEAK = {
         "type": "object",
         "properties": {
             "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
-            "file_path": {"type": "string", "description": "再生するraw PCMまたはWAVファイルパス。messageとは排他"},
+            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。.pcmはmono s16le/16kHz、それ以外はffmpegで変換する。messageとは排他"},
         },
         "required": [],
     },
@@ -803,7 +803,7 @@ TOOL_USE_DEVICE_SPEAKER = {
         "type": "object",
         "properties": {
             "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
-            "file_path": {"type": "string", "description": "再生するraw PCMまたはWAVファイルパス。messageとは排他"},
+            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。.pcmはmono s16le/16kHz、それ以外はffmpegで変換する。messageとは排他"},
         },
         "required": [],
     },

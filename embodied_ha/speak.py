@@ -3,9 +3,11 @@
 環境変数: EHA_PREFS_FILE, HA_URL, SUPERVISOR_TOKEN
 """
 import sys
+import errno
 import json
 import os
 import socket
+import stat
 import subprocess
 import urllib.request
 import urllib.error
@@ -15,6 +17,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from tts_options import is_voicevox_provider, normalize_tts_options  # noqa: E402
+
+PCM_SAMPLE_RATE = 16000
+PCM_CHANNELS = 1
+PCM_SAMPLE_WIDTH_BYTES = 2
+MAX_PLAYBACK_SECONDS = 600
+MAX_PCM_BYTES = (
+    PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH_BYTES * MAX_PLAYBACK_SECONDS
+)
+MAX_AUDIO_INPUT_BYTES = 128 * 1024 * 1024
 
 
 def get_ha_token():
@@ -184,9 +195,10 @@ def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
     """WAV等のヘッダ付き音声ファイルを raw mono s16le 16kHz PCM に変換する。"""
     proc = subprocess.Popen(
         [
-            "ffmpeg", "-loglevel", "error",
+            "ffmpeg", "-loglevel", "error", "-xerror", "-err_detect", "explode",
             "-i", audio_path,
-            "-ar", "16000", "-ac", "1", "-f", "s16le",
+            "-t", str(MAX_PLAYBACK_SECONDS + 1),
+            "-ar", str(PCM_SAMPLE_RATE), "-ac", str(PCM_CHANNELS), "-f", "s16le",
             "pipe:1",
         ],
         stdout=subprocess.PIPE,
@@ -204,23 +216,46 @@ def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
         )
     if not pcm_bytes:
         raise RuntimeError("ffmpeg produced empty PCM output")
+    if len(pcm_bytes) > MAX_PCM_BYTES:
+        raise OSError(errno.EFBIG, os.strerror(errno.EFBIG), audio_path)
     return pcm_bytes
 
 
 def _pcm_bytes_from_file(audio_path: str) -> bytes:
-    """raw PCMはそのまま、WAV等はffmpegで再生用PCMへ正規化して返す。"""
+    """明示的なraw PCMはそのまま、通常音声はffmpegで再生用PCMへ正規化する。"""
     try:
-        with open(audio_path, "rb") as f:
-            head = f.read(16)
-            f.seek(0)
-            raw_bytes = f.read()
+        file_stat = os.stat(audio_path)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), audio_path)
+        if file_stat.st_size <= 0:
+            raise OSError(errno.ENODATA, os.strerror(errno.ENODATA), audio_path)
+        if file_stat.st_size > MAX_AUDIO_INPUT_BYTES:
+            raise OSError(errno.EFBIG, os.strerror(errno.EFBIG), audio_path)
     except Exception as exc:
         raise RuntimeError(f"audio file read failed ({audio_path}): {exc}") from exc
 
-    if not raw_bytes:
-        raise RuntimeError(f"audio file is empty ({audio_path})")
-    if head.startswith(b"RIFF") and b"WAVE" in head:
+    if os.path.splitext(audio_path)[1].lower() != ".pcm":
         return _convert_audio_file_to_pcm(audio_path)
+
+    # raw PCMには形式を自己記述するヘッダがない。.pcmは呼び出し側が
+    # mono s16le/16kHzを保証する明示契約とし、最低限の長さと上限だけ検証する。
+    if file_stat.st_size > MAX_PCM_BYTES:
+        raise OSError(errno.EFBIG, os.strerror(errno.EFBIG), audio_path)
+    if file_stat.st_size % PCM_SAMPLE_WIDTH_BYTES:
+        raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), audio_path)
+    try:
+        with open(audio_path, "rb") as f:
+            raw_bytes = f.read(MAX_PCM_BYTES + 1)
+    except Exception as exc:
+        raise RuntimeError(f"audio file read failed ({audio_path}): {exc}") from exc
+    if not raw_bytes:
+        raise OSError(errno.ENODATA, os.strerror(errno.ENODATA), audio_path)
+    if len(raw_bytes) != file_stat.st_size:
+        raise OSError(errno.EIO, os.strerror(errno.EIO), audio_path)
+    if len(raw_bytes) > MAX_PCM_BYTES:
+        raise OSError(errno.EFBIG, os.strerror(errno.EFBIG), audio_path)
+    if len(raw_bytes) % PCM_SAMPLE_WIDTH_BYTES:
+        raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), audio_path)
     return raw_bytes
 
 
@@ -505,7 +540,11 @@ if __name__ == "__main__":
     parser.add_argument("room")
     parser.add_argument("message", nargs="?", default="")
     parser.add_argument("--host", default="", help="TCP スピーカーをホストで直接指定（電脳体モード用）")
-    parser.add_argument("--file-path", default="", help="raw PCMまたはWAVファイルを再生する")
+    parser.add_argument(
+        "--file-path",
+        default="",
+        help="最長10分の音声ファイルを再生する（.pcmはmono s16le/16kHz、それ以外はffmpegで変換）",
+    )
     a = parser.parse_args()
     if a.file_path:
         ok = play_pcm_file(a.room, a.file_path, host=a.host)
