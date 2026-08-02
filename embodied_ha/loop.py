@@ -949,7 +949,7 @@ def ingest_observe_scene(parsed: dict[str, Any], log_dir: str) -> None:
             pass
 
 
-def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=subprocess.run) -> None:
+def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=subprocess.run) -> bool:
     marker = Path(paths.daybook_marker)
     last = _read_text(marker).strip() if marker.exists() else ""
     # マーカーは「日誌を作った最後の日」。昨日まで済んでいれば今日やることは無い。
@@ -962,7 +962,7 @@ def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=
     if (yesterday and last >= yesterday) or not (
         Path(paths.observation_log).exists() and Path(paths.observation_log).stat().st_size > 0
     ):
-        return
+        return True
     print("[DAYBOOK] 前日分を要約中...")
     env = {
         **cfg,
@@ -977,9 +977,45 @@ def maybe_run_daybook(paths: LoopPaths, cfg: dict[str, str], today: str, *, run=
         "SCRIPT_DIR": SCRIPT_DIR,
     }
     try:
-        run(["python3", os.path.join(SCRIPT_DIR, "daybook_rollup.py")], env=env, check=False)
-    except Exception:
-        pass
+        result = run(
+            ["python3", os.path.join(SCRIPT_DIR, "daybook_rollup.py")],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if (result.stdout or "").strip():
+            print((result.stdout or "").rstrip())
+        if result.returncode == 0:
+            if (result.stderr or "").strip():
+                print((result.stderr or "").rstrip(), file=sys.stderr)
+            return True
+        stderr = (result.stderr or "").strip()
+        print(f"[DAYBOOK] 生成失敗 returncode={result.returncode}", file=sys.stderr)
+        if stderr:
+            print(f"[DAYBOOK][stderr] {stderr[-800:]}", file=sys.stderr)
+        invoke_failure.record_failure(
+            paths.log_dir,
+            source="daybook",
+            mode="rollup",
+            returncode=result.returncode,
+            stdout_empty=not bool((result.stdout or "").strip()),
+            stderr=stderr,
+            harness=_selected_harness(),
+        )
+        return False
+    except Exception as e:
+        print(f"[DAYBOOK] 起動失敗: {e}", file=sys.stderr)
+        invoke_failure.record_failure(
+            paths.log_dir,
+            source="daybook",
+            mode="rollup",
+            returncode=None,
+            stdout_empty=True,
+            stderr=str(e),
+            harness=_selected_harness(),
+        )
+        return False
 
 
 def postprocess_loop_response(parsed: dict[str, Any], response: str, context: dict[str, Any], paths: LoopPaths, timestamp: str, *, run=subprocess.run) -> None:
