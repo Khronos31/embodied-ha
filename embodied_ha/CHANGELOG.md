@@ -6,6 +6,19 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.5] - 2026-08-02
+
+### Fixed / 修正
+
+- Antigravityで日誌を生成すると、CLIが正常終了しても空の応答になり、同じ日の日誌を繰り返し
+  試してしまう問題を修正しました。日誌ではCLIの構造化出力を使い、対応前のCLIが選ばれている
+  既存個体は、認証を保持したまま起動時に対応版へ更新します。更新に失敗した場合は旧CLIへ戻し、
+  不完全な日誌や完了markerを保存しません。
+  Fixed Antigravity daybook generation repeatedly retrying the same day after the CLI exited successfully
+  with an empty response. Daybooks now use the CLI's structured output, and existing instances with an
+  older selected CLI update to a compatible version at startup without changing authentication. Failed
+  updates restore the previous CLI and do not save partial daybooks or advance the completion marker.
+
 ## [2.1.3] - 2026-08-02
 
 ### Fixed / 修正
