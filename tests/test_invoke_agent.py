@@ -382,6 +382,65 @@ class InvokeAgentTests(unittest.TestCase):
                 from pathlib import Path
 
                 args = sys.argv[1:]
+                if "--help" in args:
+                    print("--output-format text|json|stream-json")
+                    print("--json-schema JSON")
+                    raise SystemExit(0)
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": args}}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{
+                    "status": "SUCCESS",
+                    "response": "ignored text",
+                    "structured_output": {{"ok": True}},
+                }}))
+                """,
+            )
+            schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}'
+
+            result = self.run_wrapper(
+                [
+                    "--model", "default", "--json-schema", schema,
+                    "--append-system-prompt", "SYS", "--agent-site", "daybook", "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {"ok": True})
+            payload = json.loads(record.read_text(encoding="utf-8"))
+            args = payload["args"]
+            self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (Medium)")
+            self.assertEqual(args[args.index("--output-format") + 1], "json")
+            self.assertEqual(args[args.index("--json-schema") + 1], schema)
+            prompt = args[args.index("-p") + 1]
+            self.assertIn("あなたへの指示:\nSYS", prompt)
+            self.assertIn(schema, prompt)
+            self.assertTrue(prompt.endswith("JSON:\n"))
+
+    def test_agy_legacy_cli_keeps_prompt_schema_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                if "--help" in args:
+                    print("legacy help")
+                    raise SystemExit(0)
                 Path({record.as_posix()!r}).write_text(
                     json.dumps({{"args": args}}, ensure_ascii=False),
                     encoding="utf-8",
@@ -393,22 +452,139 @@ class InvokeAgentTests(unittest.TestCase):
             schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}'
 
             result = self.run_wrapper(
-                ["--model", "default", "--json-schema", schema, "--append-system-prompt", "SYS", "hello"],
+                ["--json-schema", schema, "--agent-site", "daybook", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
                 },
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), {"ok": True})
-            payload = json.loads(record.read_text(encoding="utf-8"))
-            args = payload["args"]
-            self.assertEqual(args[args.index("--model") + 1], "Gemini 3.5 Flash (Medium)")
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertNotIn("--output-format", args)
+            self.assertNotIn("--json-schema", args)
             prompt = args[args.index("-p") + 1]
-            self.assertIn("あなたへの指示:\nSYS", prompt)
             self.assertIn(schema, prompt)
-            self.assertTrue(prompt.endswith("JSON:\n"))
+
+    def test_agy_native_empty_response_does_not_expose_metadata_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                import sys
+
+                if "--help" in sys.argv[1:]:
+                    print("--output-format --json-schema")
+                    raise SystemExit(0)
+                print(json.dumps({
+                    "conversation_id": "test",
+                    "status": "SUCCESS",
+                    "response": "",
+                    "structured_output": None,
+                }))
+                """,
+            )
+
+            result = self.run_wrapper(
+                [
+                    "--json-schema", '{"type":"object"}',
+                    "--agent-site", "daybook", "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+
+    def test_agy_native_error_envelope_returns_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                """
+                #!/usr/bin/env python3
+                import json
+                import sys
+
+                if "--help" in sys.argv[1:]:
+                    print("--output-format --json-schema")
+                    raise SystemExit(0)
+                print(json.dumps({
+                    "conversation_id": "test",
+                    "status": "ERROR",
+                    "error": "schema rejected",
+                    "response": "",
+                }))
+                """,
+            )
+
+            result = self.run_wrapper(
+                [
+                    "--json-schema", '{"type":"object"}',
+                    "--agent-site", "daybook", "hello",
+                ],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("agy structured output failed: schema rejected", result.stderr)
+
+    def test_agy_non_daybook_schema_keeps_prompt_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                if "--help" in args:
+                    print("--output-format --json-schema")
+                    raise SystemExit(0)
+                Path({record.as_posix()!r}).write_text(json.dumps(args), encoding="utf-8")
+                print('{{"ok":true}}')
+                """,
+            )
+            schema = '{"type":"object"}'
+
+            result = self.run_wrapper(
+                ["--json-schema", schema, "--agent-site", "observe", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))
+            self.assertNotIn("--output-format", args)
+            self.assertNotIn("--json-schema", args)
 
     def test_claude_no_tools_uses_empty_builtin_set_and_strict_empty_mcp(self):
         with tempfile.TemporaryDirectory() as tmp:
