@@ -17,6 +17,9 @@ Options:
                              WebSearch). claude=native --allowed-builtins; codex=WebSearch
                              gates native web_search, Read is served by the files MCP;
                              agy=Read via files MCP, WebSearch grant is 2.1.0 (§8).
+  --no-tools                 Disable all built-in and MCP tool execution. Mutually
+                             exclusive with capability/MCP options. Antigravity
+                             requires a dedicated --agent-site for project policy.
   --allowed-mcp-tools CSV    MCP tools as mcp__server__tool; must cover every
                              selected MCP server. Per-server partial allowlists
                              are allowed: Claude blocks unlisted tool execution,
@@ -81,6 +84,7 @@ system_prompt=""
 system_prompt_replace=""
 allowed_builtins=""
 allowed_builtins_set="false"
+no_tools="false"
 allowed_mcp_tools=""
 allowed_mcp_tools_set="false"
 mcp_config=""
@@ -119,6 +123,10 @@ while (($#)); do
       allowed_builtins="$2"
       allowed_builtins_set="true"
       shift 2
+      ;;
+    --no-tools)
+      no_tools="true"
+      shift
       ;;
     --allowed-mcp-tools)
       (($# >= 2)) || die "--allowed-mcp-tools requires a value"
@@ -178,6 +186,9 @@ done
 
 if [[ -n "$mcp_config" && -n "$mcp_servers" ]]; then
   die "--mcp-config and --mcp-servers cannot be used together"
+fi
+if [[ "$no_tools" == "true" && ( "$allowed_builtins_set" == "true" || "$allowed_mcp_tools_set" == "true" || -n "$mcp_config" || -n "$mcp_servers" ) ]]; then
+  die "--no-tools cannot be combined with capability or MCP options"
 fi
 if [[ -n "$mcp_config" && ( "$allowed_mcp_tools_set" == "true" || "$allowed_builtins_set" == "true" ) ]]; then
   die "--mcp-config cannot be used with --allowed-builtins or --allowed-mcp-tools; use --mcp-servers"
@@ -425,6 +436,71 @@ PY
   ) 200>"$lock_file"
 }
 
+# no-tools呼び出しは通常siteの権限を狭めない。専用siteのproject policyだけへ
+# denyをadd-onlyで置き、global grantが残っていてもdaybook等の純粋な生成処理から
+# native/MCP操作を実行できないようにする。
+ensure_agy_no_tools_policy() {
+  local settings_path="$1"
+  mkdir -p "$(dirname "$settings_path")"
+  local lock_file="${settings_path}.lock"
+  (
+    flock -x 200
+    AGY_SITE_SETTINGS_JSON="$settings_path" python3 - <<'PY'
+import json
+import os
+import tempfile
+
+path = os.environ["AGY_SITE_SETTINGS_JSON"]
+if os.path.exists(path):
+    with open(path, encoding="utf-8") as f:
+        settings = json.load(f)
+    if not isinstance(settings, dict):
+        raise SystemExit(f"invoke-agent.sh: agy site settings root is not an object ({path})")
+else:
+    settings = {}
+
+permissions = settings.setdefault("permissions", {})
+if not isinstance(permissions, dict):
+    raise SystemExit(f"invoke-agent.sh: agy site permissions is not an object ({path})")
+deny = permissions.setdefault("deny", [])
+if not isinstance(deny, list):
+    raise SystemExit(f"invoke-agent.sh: agy site permissions.deny is not a list ({path})")
+
+required = (
+    "command(*)",
+    "write_file(*)",
+    "read_file(*)",
+    "read_url(*)",
+    "execute_url(*)",
+    "browser(*)",
+    "mcp(*)",
+    "unsandboxed(*)",
+    "escalate_admin(*)",
+)
+changed = False
+for rule in required:
+    if rule not in deny:
+        deny.append(rule)
+        changed = True
+
+if changed or not os.path.exists(path):
+    mode = os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+PY
+  ) 200>"$lock_file"
+}
+
 # agy 1.1.3のheadless(-p)モードは、MCPツール実行の確認をsettings.jsonの
 # permissions.allowではなく、config.jsonのuserSettings.globalPermissionGrants
 # (grant store)で判定する(settings.json側はエラーメッセージの案内に反して
@@ -616,6 +692,13 @@ run_claude() {
   local cmd=("$bin" "-p" "--model" "$model" "--effort" "$effort"
              "--input-format" "stream-json" "--output-format" "stream-json" "--verbose"
              "--disallowedTools" "Bash")
+  if [[ "$no_tools" == "true" ]]; then
+    local empty_mcp_config
+    empty_mcp_config="$(mktemp "${TMPDIR:-/tmp}/eha-claude-no-tools.XXXXXX.json")"
+    TEMP_FILES+=("$empty_mcp_config")
+    printf '%s\n' '{"mcpServers":{}}' >"$empty_mcp_config"
+    cmd+=("--tools" "" "--strict-mcp-config" "--mcp-config" "$empty_mcp_config")
+  fi
   if [[ -n "$system_prompt_replace" ]]; then
     cmd+=("--system-prompt" "$system_prompt_replace")
   fi
@@ -691,11 +774,21 @@ run_codex() {
         "--disable" "apps" "--disable" "shell_tool"
         "--disable" "image_generation" "--disable" "goals"
         "--disable" "multi_agent" "--disable" "tool_suggest")
+  if [[ "$no_tools" == "true" ]]; then
+    # no-tools経路にはMCP profileが無いので、通常経路では使えない
+    # --ignore-user-configを安全に使える。built-in実行・閲覧系もfeature単位で落とす。
+    cmd+=("--ignore-user-config"
+          "--disable" "unified_exec" "--disable" "code_mode_host"
+          "--disable" "computer_use" "--disable" "browser_use"
+          "--disable" "browser_use_external" "--disable" "browser_use_full_cdp_access")
+  fi
   # WebSearch 意図があれば codex native の live web_search を有効化、無ければ無効化して
   # claude chat(WebSearch 非許可)とのパリティを取る。--allowed-builtins 未指定時は codex 既定に任せる。
   # validate_allowed_builtins が要素を trim して受理する("Read, WebSearch"等)ため、判定前に空白を除去して
   # 正規化する(生CSV部分一致だと空白付き要素を取りこぼす・sol Med)。
-  if [[ "$allowed_builtins_set" == "true" ]]; then
+  if [[ "$no_tools" == "true" ]]; then
+    cmd+=("--config" "web_search=disabled")
+  elif [[ "$allowed_builtins_set" == "true" ]]; then
     local _ab_norm="${allowed_builtins//[[:space:]]/}"
     if [[ ",$_ab_norm," == *",WebSearch,"* ]]; then
       cmd+=("--config" "web_search=live")
@@ -753,12 +846,16 @@ run_agy() {
   fi
   if [[ -n "$agent_site" ]]; then
     case "$agent_site" in
-      observe|explore|reflect|web|social|chat|game) ;;
-      *) die "--agent-site must be one of observe/explore/reflect/web/social/chat/game" ;;
+      observe|explore|reflect|web|social|chat|game|daybook) ;;
+      *) die "--agent-site must be one of observe/explore/reflect/web/social/chat/game/daybook" ;;
     esac
     local base_cwd="${EHA_AGENT_CWD:-${EHA_CLAUDE_CWD:-$PWD}}"
     site_dir="$base_cwd/$agent_site"
     mkdir -p "$site_dir/.agents"
+  fi
+  if [[ "$no_tools" == "true" ]]; then
+    [[ -n "$site_dir" ]] || die "--agent-site is required for agy --no-tools"
+    ensure_agy_no_tools_policy "$site_dir/.agents/settings.json"
   fi
   if [[ -n "$mcp_servers" ]]; then
     local server_args=()

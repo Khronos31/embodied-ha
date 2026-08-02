@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import uuid
@@ -23,6 +25,23 @@ from introspection_facts import format_facts_summary  # noqa: E402
 from json_schemas import daybook_schema  # noqa: E402
 from path_env import build_tools_path  # noqa: E402
 from state_utils import file_lock  # noqa: E402
+
+
+DAYBOOK_AGENT_TIMEOUT_SECONDS = 300
+DAYBOOK_AGENT_KILL_GRACE_SECONDS = 2
+_STAGE_FORMAT_VERSION = 1
+_STAGE_CONTEXT_ENV_KEYS = (
+    "EHA_AGENT_HARNESS",
+    "EHA_CLAUDE_MODEL_DEFAULT",
+    "EHA_CLAUDE_EFFORT_DEFAULT",
+    "EHA_CODEX_MODEL_DEFAULT",
+    "EHA_CODEX_REASONING_EFFORT_DEFAULT",
+    "EHA_AGY_MODEL_DEFAULT",
+)
+
+
+class DaybookAgentError(RuntimeError):
+    """選択ハーネスが検証済みdaybook draftを返せなかった。"""
 
 
 def _clean(value: Any) -> str:
@@ -77,6 +96,104 @@ def _write_marker(path: str, value: str) -> None:
     _write_text(path, value)
 
 
+def _draft_stage_path(log_dir: str, day: str) -> str:
+    return os.path.join(log_dir, "memory", "daybook_staging", f"{day}.json")
+
+
+def _stage_context_sha256(day: str, entries: list[dict[str, Any]]) -> str:
+    payload = {
+        "day": day,
+        "entries": entries,
+        "character": os.environ.get("CHARACTER", "").strip(),
+        "resident": os.environ.get("RESIDENT", "ユーザー"),
+        "generator": {key: os.environ.get(key, "") for key in _STAGE_CONTEXT_ENV_KEYS},
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_staged_draft(
+    log_dir: str,
+    day: str,
+    context_sha256: str,
+) -> dict[str, Any] | None:
+    path = _draft_stage_path(log_dir, day)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            stage = json.load(f)
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        raise DaybookAgentError(f"staged daybook draft is unreadable: {e}") from e
+    if not isinstance(stage, dict):
+        raise DaybookAgentError("staged daybook draft root is not an object")
+    if stage.get("version") != _STAGE_FORMAT_VERSION:
+        raise DaybookAgentError("staged daybook draft has an unsupported format")
+    write_started = stage.get("write_started")
+    if not isinstance(write_started, bool):
+        raise DaybookAgentError("staged daybook draft has no write phase")
+    staged_context = stage.get("context_sha256")
+    if not isinstance(staged_context, str) or staged_context != context_sha256:
+        if not write_started:
+            # No persistent write was allowed to begin, so this draft can be
+            # discarded and regenerated from the current snapshot without making
+            # orphaned episode IDs.
+            _clear_staged_draft(log_dir, day)
+            return None
+        # A write may be partial. Neither regenerating (duplicate episode IDs) nor
+        # reusing changed input (stale marker) is safe, so fail closed for inspection.
+        raise DaybookAgentError("staged daybook context changed; marker not advanced")
+    draft = stage.get("draft")
+    if not isinstance(draft, dict):
+        raise DaybookAgentError("staged daybook draft is not an object")
+    _validate_agent_draft(draft)
+    return draft
+
+
+def _stage_draft(
+    log_dir: str,
+    day: str,
+    context_sha256: str,
+    draft: dict[str, Any],
+) -> None:
+    _validate_agent_draft(draft)
+    stage = {
+        "version": _STAGE_FORMAT_VERSION,
+        "context_sha256": context_sha256,
+        "write_started": False,
+        "draft": draft,
+    }
+    _write_text(
+        _draft_stage_path(log_dir, day),
+        json.dumps(stage, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _mark_staged_write_started(log_dir: str, day: str) -> None:
+    path = _draft_stage_path(log_dir, day)
+    try:
+        with open(path, encoding="utf-8") as f:
+            stage = json.load(f)
+    except (OSError, UnicodeError, json.JSONDecodeError) as e:
+        raise DaybookAgentError(f"staged daybook draft is unreadable: {e}") from e
+    if not isinstance(stage, dict) or stage.get("version") != _STAGE_FORMAT_VERSION:
+        raise DaybookAgentError("staged daybook draft has an unsupported format")
+    stage["write_started"] = True
+    _write_text(path, json.dumps(stage, ensure_ascii=False, indent=2) + "\n")
+
+
+def _clear_staged_draft(log_dir: str, day: str) -> None:
+    try:
+        os.unlink(_draft_stage_path(log_dir, day))
+    except FileNotFoundError:
+        pass
+
+
 def _parse_json_payload(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"```(?:json)?\s*|```", "", text).strip()
     if not cleaned:
@@ -89,6 +206,62 @@ def _parse_json_payload(text: str) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _schema_error(value: Any, schema: dict[str, Any], path: str = "$") -> str:
+    """daybook_schemaが使うJSON Schema部分集合を依存追加なしで検証する。"""
+    expected = schema.get("type")
+    expected_types = expected if isinstance(expected, list) else [expected]
+
+    def matches_type(name: Any) -> bool:
+        if name == "null":
+            return value is None
+        if name == "object":
+            return isinstance(value, dict)
+        if name == "array":
+            return isinstance(value, list)
+        if name == "string":
+            return isinstance(value, str)
+        if name == "number":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if name == "boolean":
+            return isinstance(value, bool)
+        return False
+
+    if expected is not None and not any(matches_type(name) for name in expected_types):
+        return f"{path}: expected {expected!r}"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path}: value is not in enum"
+
+    if isinstance(value, dict):
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = schema.get("required") if isinstance(schema.get("required"), list) else []
+        for key in required:
+            if key not in value:
+                return f"{path}: missing required property {key!r}"
+        if schema.get("additionalProperties") is False:
+            extras = sorted(set(value) - set(properties))
+            if extras:
+                return f"{path}: additional property {extras[0]!r} is not allowed"
+        for key, child in value.items():
+            child_schema = properties.get(key)
+            if isinstance(child_schema, dict):
+                error = _schema_error(child, child_schema, f"{path}.{key}")
+                if error:
+                    return error
+
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, item in enumerate(value):
+            error = _schema_error(item, schema["items"], f"{path}[{index}]")
+            if error:
+                return error
+    return ""
+
+
+def _validate_agent_draft(draft: dict[str, Any]) -> None:
+    error = _schema_error(draft, daybook_schema())
+    if error:
+        raise DaybookAgentError(f"daybook response schema mismatch: {error}")
 
 
 def _truthy(value: Any) -> bool:
@@ -214,7 +387,52 @@ def _fallback_draft(day: str, entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _run_agent_process(
+    cmd: list[str],
+    *,
+    input: str,
+    capture_output: bool,
+    text: bool,
+    cwd: str,
+    env: dict[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess:
+    """Run one harness in its own process group and bound the marker lock time."""
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.communicate(timeout=DAYBOOK_AGENT_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+        raise DaybookAgentError(f"invoke-agent timed out after {timeout:g}s") from e
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+def _summarize_with_agent(
+    day: str,
+    entries: list[dict[str, Any]],
+    *,
+    run=None,
+) -> dict[str, Any]:
     character = os.environ.get("CHARACTER", "").strip()
     resident = os.environ.get("RESIDENT", "ユーザー")
 
@@ -256,51 +474,50 @@ def _summarize_with_claude(day: str, entries: list[dict[str, Any]]) -> dict[str,
     prompt += "- 可能なら episodes は 1〜8 件程度に圧縮する\n\n"
     prompt += "観察ログ:\n" + "\n".join(lines)
 
-    claude = os.environ.get("CLAUDE_BIN", "/config/.tools/npm-global/bin/claude")
     env = {
         **os.environ,
-        "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR", "/config/.tools/claude-home"),
         "PATH": build_tools_path(),
     }
-    msg = json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}})
-    proc = subprocess.run(
-        [
-            claude,
-            "-p",
-            "--model",
-            "sonnet",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--json-schema",
-            json.dumps(daybook_schema(), ensure_ascii=False),
-        ],
-        input=msg,
-        capture_output=True,
-        text=True,
-        cwd=os.environ.get("EHA_CLAUDE_CWD") or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir"),
-        env=env,
-    )
-    raw = ""
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except Exception:
-            continue
-        if data.get("type") == "result":
-            structured = data.get("structured_output")
-            raw = (
-                json.dumps(structured, ensure_ascii=False)
-                if structured is not None
-                else data.get("result", "")
-            ).strip()
-            break
-    return _parse_json_payload(raw)
+    runner = run or _run_agent_process
+    try:
+        proc = runner(
+            [
+                "bash",
+                os.path.join(SCRIPT_DIR, "invoke-agent.sh"),
+                "--model",
+                "default",
+                "--no-tools",
+                "--agent-site",
+                "daybook",
+                "--json-schema",
+                json.dumps(daybook_schema(), ensure_ascii=False),
+            ],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            cwd=(
+                os.environ.get("EHA_AGENT_CWD")
+                or os.environ.get("EHA_CLAUDE_CWD")
+                or os.path.join(os.environ.get("EHA_DATA_DIR", "/config/embodied-ha"), "workdir")
+            ),
+            env=env,
+            timeout=DAYBOOK_AGENT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise DaybookAgentError(
+            f"invoke-agent timed out after {DAYBOOK_AGENT_TIMEOUT_SECONDS}s"
+        ) from e
+    if proc.returncode != 0:
+        stderr = " ".join((proc.stderr or "").split())[:800]
+        raise DaybookAgentError(
+            f"invoke-agent failed: returncode={proc.returncode}"
+            + (f" stderr={stderr}" if stderr else "")
+        )
+    draft = _parse_json_payload(proc.stdout)
+    if not draft:
+        raise DaybookAgentError("invoke-agent returned no JSON object")
+    _validate_agent_draft(draft)
+    return draft
 
 
 def _normalize_draft(day: str, entries: list[dict[str, Any]], draft: dict[str, Any]) -> dict[str, Any]:
@@ -402,7 +619,7 @@ def _maybe_consolidate(log_dir: str, scope: str, day: str | None = None) -> None
     )
 
 
-def main() -> None:
+def _run_locked() -> None:
     log_file = os.environ["LOG_FILE"]
     memory_file = os.environ["MEMORY_FILE"]
     today = os.environ["TODAY"]
@@ -502,22 +719,36 @@ def main() -> None:
             else:
                 print(f"[DAYBOOK] 既存の structured daybook を再利用: {target_day}")
             _maybe_consolidate(log_dir, target_day, target_day)
+            _clear_staged_draft(log_dir, target_day)
             # マーカーは「日誌を作った最後の日」。ここで today を書くと、その日自身が
             # 二度と要約されない（翌日は start_d = today+1 > yesterday で即スキップ）。
             new_marker = target_day
         else:
-            draft = _summarize_with_claude(target_day, entries_by_day[target_day])
-            if not draft:
-                draft = _fallback_draft(target_day, entries_by_day[target_day])
+            context_sha256 = _stage_context_sha256(target_day, entries_by_day[target_day])
+            draft = _load_staged_draft(log_dir, target_day, context_sha256)
+            if draft is None:
+                draft = _summarize_with_agent(target_day, entries_by_day[target_day])
+                # ここから先は複数ファイルへの永続化。途中停止しても同じ生成結果で
+                # 再開し、異なるepisode IDが重複しないよう入力fingerprintとdraftを固定する。
+                _stage_draft(log_dir, target_day, context_sha256, draft)
+            _mark_staged_write_started(log_dir, target_day)
             normalized = _normalize_draft(target_day, entries_by_day[target_day], draft)
             _write_daybook(log_dir, memory_file, target_day, normalized, entries_by_day[target_day])
             _maybe_consolidate(log_dir, target_day, target_day)
+            _clear_staged_draft(log_dir, target_day)
             # マーカーは「日誌を作った最後の日」。ここで today を書くと、その日自身が
             # 二度と要約されない（翌日は start_d = today+1 > yesterday で即スキップ）。
             new_marker = target_day
 
     if new_marker:
         _write_marker(daybook_marker, new_marker)
+
+
+def main() -> None:
+    # loop側にも排他はあるが、手動起動や将来の別callerを含めてdaybook全体を直列化する。
+    # markerと同じロックを使うことで、同じ日を並行生成して複数draftを作らない。
+    with file_lock(os.environ["DAYBOOK_MARKER"]):
+        _run_locked()
 
 
 if __name__ == "__main__":

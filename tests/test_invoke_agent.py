@@ -410,6 +410,141 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn(schema, prompt)
             self.assertTrue(prompt.endswith("JSON:\n"))
 
+    def test_claude_no_tools_uses_empty_builtin_set_and_strict_empty_mcp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "claude.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                sys.stdin.read()
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"args": sys.argv[1:]}}), encoding="utf-8"
+                )
+                print(json.dumps({{"type": "result", "result": "ok"}}))
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--no-tools", "hello"],
+                {"EHA_AGENT_HARNESS": "claude", "EHA_CLAUDE_BIN": fake.as_posix()},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertEqual(args[args.index("--tools") + 1], "")
+            self.assertIn("--strict-mcp-config", args)
+            mcp_path = Path(args[args.index("--mcp-config") + 1])
+            # wrapper終了時に一時ファイルは消えるため、引数と命名契約を確認する。
+            self.assertTrue(mcp_path.name.startswith("eha-claude-no-tools."))
+            self.assertNotIn("--allowedTools", args)
+
+    def test_codex_no_tools_ignores_user_config_and_disables_execution_surfaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "codex.json"
+            fake = tmpdir / "codex"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                out_path = args[args.index("-o") + 1]
+                Path({record.as_posix()!r}).write_text(json.dumps({{"args": args}}), encoding="utf-8")
+                Path(out_path).write_text('{{"ok":true}}', encoding="utf-8")
+                """,
+            )
+
+            result = self.run_wrapper(
+                ["--no-tools", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "codex",
+                    "EHA_CODEX_BIN": fake.as_posix(),
+                    "EHA_AGENT_CWD": tmpdir.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))["args"]
+            self.assertIn("--ignore-user-config", args)
+            disabled = [args[i + 1] for i, arg in enumerate(args) if arg == "--disable"]
+            for feature in (
+                "apps",
+                "shell_tool",
+                "unified_exec",
+                "code_mode_host",
+                "computer_use",
+                "browser_use",
+                "browser_use_external",
+                "browser_use_full_cdp_access",
+            ):
+                self.assertIn(feature, disabled)
+            configs = [args[i + 1] for i, arg in enumerate(args) if arg == "--config"]
+            self.assertIn("web_search=disabled", configs)
+            self.assertNotIn("--profile", args)
+
+    def test_agy_no_tools_uses_dedicated_site_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            agy_home = tmpdir / "agy-home"
+            workdir = tmpdir / "workdir"
+            fake = self.write_project_fake_agy(tmpdir)
+
+            result = self.run_wrapper(
+                ["--no-tools", "--agent-site", "daybook", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),
+                    "EHA_AGENT_CWD": workdir.as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings = json.loads(
+                (workdir / "daybook" / ".agents" / "settings.json").read_text(encoding="utf-8")
+            )
+            deny = settings["permissions"]["deny"]
+            for rule in (
+                "command(*)",
+                "write_file(*)",
+                "read_file(*)",
+                "read_url(*)",
+                "execute_url(*)",
+                "browser(*)",
+                "mcp(*)",
+                "unsandboxed(*)",
+                "escalate_admin(*)",
+            ):
+                self.assertIn(rule, deny)
+            records = self.read_agy_records(tmpdir)
+            self.assertEqual(records[0]["cwd"], str(workdir / "daybook"))
+
+    def test_no_tools_rejects_capabilities_and_agy_requires_site(self):
+        conflicting = self.run_wrapper(
+            ["--no-tools", "--allowed-builtins", "Read", "hello"],
+            {"EHA_AGENT_HARNESS": "claude"},
+        )
+        self.assertEqual(conflicting.returncode, 2)
+        self.assertIn("cannot be combined", conflicting.stderr)
+
+        missing_site = self.run_wrapper(
+            ["--no-tools", "hello"],
+            {"EHA_AGENT_HARNESS": "agy", "EHA_ANTIGRAVITY_BIN": "/bin/true"},
+        )
+        self.assertEqual(missing_site.returncode, 2)
+        self.assertIn("--agent-site is required for agy --no-tools", missing_site.stderr)
+
     def test_claude_content_json_at_prefix_reads_from_file(self):
         # 2026-07-16発見: --content-jsonのinline JSONはLinuxの単一argv要素128KB上限
         # (MAX_ARG_STRLEN)に引っかかる(observeモードの実カメラ画像で確認)。
