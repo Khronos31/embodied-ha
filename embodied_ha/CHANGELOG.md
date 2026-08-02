@@ -6,6 +6,17 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.3] - 2026-08-02
+
+### Fixed / 修正
+
+- 日誌生成がClaude Codeに固定され、CodexやAntigravityを選んだ個体でも選択が無視される問題を
+  修正しました。日誌は個体が選択したハーネスと既定モデルを使い、ツールを無効にしたまま
+  共通schemaで検証します。空応答・不正出力・timeout時は日誌も完了markerも進めません。
+  Fixed daybook generation ignoring the instance's selected harness and always invoking Claude Code.
+  Daybooks now use the selected harness and default model with tools disabled and shared schema validation;
+  empty, invalid, or timed-out responses leave both daybook state and the completion marker unchanged.
+
 ## [2.1.2] - 2026-08-01
 
 ### Fixed / 修正
