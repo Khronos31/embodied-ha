@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -108,6 +109,7 @@ class DaybookHarnessTests(unittest.TestCase):
         self.assertNotIn("--mcp-servers", cmd)
         self.assertNotIn("--allowed-builtins", cmd)
         self.assertEqual(kwargs["cwd"], "/tmp")
+        self.assertEqual(kwargs["timeout"], daybook.DAYBOOK_AGENT_TIMEOUT_SECONDS)
         self.assertIn("2026-07-30 の観察ログ", kwargs["input"])
         self.assertIn("対象の一日は 住人 さん", kwargs["input"])
         self.assertIn("12:00 [calm] 明るい。", kwargs["input"])
@@ -135,6 +137,21 @@ class DaybookHarnessTests(unittest.TestCase):
                 daybook._summarize_with_agent(
                     "2026-07-30", entries, run=lambda *args, _result=result, **kwargs: _result
                 )
+
+    def test_hanging_harness_process_group_is_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            started = time.monotonic()
+            with self.assertRaisesRegex(daybook.DaybookAgentError, "timed out after"):
+                daybook._run_agent_process(
+                    ["bash", "-c", "sleep 30 & wait"],
+                    input="",
+                    capture_output=True,
+                    text=True,
+                    cwd=tmp,
+                    env=dict(os.environ),
+                    timeout=0.05,
+                )
+            self.assertLess(time.monotonic() - started, 2.0)
 
     def test_agent_failure_writes_no_daybook_state_or_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,6 +288,127 @@ class DaybookHarnessTests(unittest.TestCase):
             self.assertFalse(stage.exists())
             self.assertTrue(daybook.ms.daybook_exists(str(log_dir), "2026-07-30"))
             self.assertEqual(marker.read_text(encoding="utf-8"), "2026-07-30")
+
+    def test_changed_stage_context_fails_closed_without_advancing_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "log"
+            log_dir.mkdir()
+            observations = log_dir / "observations.jsonl"
+            observations.write_text(
+                json.dumps(
+                    {"timestamp": "2026-07-30T12:00:00+09:00", "private": "明るい。"},
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            marker = log_dir / ".last_daybook"
+            marker.write_text("2026-07-29", encoding="utf-8")
+            env = self.rollup_env(log_dir, today="2026-07-31", last="2026-07-29")
+
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(daybook, "_summarize_with_agent", return_value=valid_draft()),
+                mock.patch.object(daybook, "_write_daybook", side_effect=OSError("before write")),
+                self.assertRaises(OSError),
+            ):
+                daybook.main()
+
+            stage = Path(daybook._draft_stage_path(str(log_dir), "2026-07-30"))
+            stage_payload = json.loads(stage.read_text(encoding="utf-8"))
+            self.assertEqual(stage_payload["version"], daybook._STAGE_FORMAT_VERSION)
+            self.assertEqual(len(stage_payload["context_sha256"]), 64)
+
+            with observations.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {"timestamp": "2026-07-30T13:00:00+09:00", "private": "追記。"},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(
+                    daybook,
+                    "_summarize_with_agent",
+                    side_effect=AssertionError("changed stage must not regenerate silently"),
+                ),
+                self.assertRaisesRegex(daybook.DaybookAgentError, "context changed"),
+            ):
+                daybook.main()
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), "2026-07-29")
+            self.assertTrue(stage.exists())
+            self.assertFalse(daybook.ms.daybook_exists(str(log_dir), "2026-07-30"))
+
+    def test_prepared_stage_with_changed_context_is_regenerated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "log"
+            log_dir.mkdir()
+            first_entry = {
+                "timestamp": "2026-07-30T12:00:00+09:00",
+                "emotion": "",
+                "private": "明るい。",
+                "speak": "",
+            }
+            observations = log_dir / "observations.jsonl"
+            observations.write_text(
+                json.dumps(first_entry, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            marker = log_dir / ".last_daybook"
+            marker.write_text("2026-07-29", encoding="utf-8")
+            env = self.rollup_env(log_dir, today="2026-07-31", last="2026-07-29")
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                first_context = daybook._stage_context_sha256("2026-07-30", [first_entry])
+                daybook._stage_draft(
+                    str(log_dir),
+                    "2026-07-30",
+                    first_context,
+                    valid_draft(),
+                )
+
+            with observations.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {"timestamp": "2026-07-30T13:00:00+09:00", "private": "追記。"},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch.object(
+                    daybook,
+                    "_summarize_with_agent",
+                    return_value=valid_draft(),
+                ) as summarize,
+            ):
+                daybook.main()
+
+            summarize.assert_called_once()
+            self.assertEqual(marker.read_text(encoding="utf-8"), "2026-07-30")
+            self.assertFalse(Path(daybook._draft_stage_path(str(log_dir), "2026-07-30")).exists())
+
+    def test_stage_context_tracks_selected_generator_settings(self):
+        entries = [{"timestamp": "2026-07-30T12:00:00+09:00", "private": "明るい。"}]
+        with mock.patch.dict(
+            os.environ,
+            {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_MODEL_DEFAULT": "model-a"},
+            clear=False,
+        ):
+            first = daybook._stage_context_sha256("2026-07-30", entries)
+        with mock.patch.dict(
+            os.environ,
+            {"EHA_AGENT_HARNESS": "codex", "EHA_CODEX_MODEL_DEFAULT": "model-b"},
+            clear=False,
+        ):
+            second = daybook._stage_context_sha256("2026-07-30", entries)
+        self.assertNotEqual(first, second)
 
     def test_loop_records_daybook_failure_without_marking_artifact_success(self):
         with tempfile.TemporaryDirectory() as tmp:
