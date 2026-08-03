@@ -54,6 +54,27 @@ class ObserveContextTests(unittest.TestCase):
         self.assertNotIn("（camera.unknown）", blocks[0]["text"])
         self.assertEqual(blocks[1]["type"], "image")
 
+    def test_configured_go2rtc_stream_is_a_projected_camera(self):
+        seen = []
+        prefs = {
+            "cameras": [
+                {"source": "front_door_stream", "ha_entity": "camera.front_door", "label": "玄関"}
+            ]
+        }
+
+        blocks = observe_context.build_projected_camera_blocks(
+            "front_door_stream",
+            prefs,
+            fetch_frame=lambda source, **_kwargs: seen.append(source) or b"jpeg-bytes" * 20,
+            ha_url="http://ha",
+            go2rtc_url="http://go2rtc",
+            token="token",
+        )
+
+        self.assertEqual(seen, ["camera.front_door"])
+        self.assertIn("front_door_stream", blocks[0]["text"])
+        self.assertEqual(blocks[1]["type"], "image")
+
 
 if __name__ == "__main__":
     unittest.main()

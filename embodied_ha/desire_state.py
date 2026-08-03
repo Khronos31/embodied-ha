@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from state_utils import clamp as _clamp
 from state_utils import clean as _clean
 from state_utils import coerce_float as _coerce_float
+from state_utils import get_device_capabilities as _get_device_capabilities
 from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
 from state_utils import read_json as _read_json
@@ -401,6 +402,7 @@ def decay_tick(
     *,
     catalog: Mapping[str, Any] | None = None,
     body_state: Mapping[str, Any] | None = None,
+    prefs: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
     loop_name: str = "",
     trigger_reason: str = "",
@@ -478,7 +480,7 @@ def decay_tick(
 
         if is_camera_view:
             remote_host = _clean((body_state or {}).get("remote_avatar_host", ""))
-            if remote_host.startswith("camera."):
+            if _get_device_capabilities(remote_host, prefs or {}).get("is_camera"):
                 growth += 0.06 * tick_factor
             elif record["state"] in {"active", "dormant"} and record["charge"] > 0.1:
                 record["state"] = "satisfied"

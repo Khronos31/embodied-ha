@@ -44,7 +44,7 @@ from auditory_context import format_recent_auditory_prompt, resolve_source_filte
 from introspection_facts import extract_facts_from_stream_text, write_facts_file  # noqa: E402
 from json_schemas import loop_schema  # noqa: E402
 from media_capture import fetch_frame  # noqa: E402
-from observe_context import build_projected_camera_blocks  # noqa: E402
+from observe_context import build_projected_camera_blocks, projected_camera_caption  # noqa: E402
 from path_env import build_tools_path  # noqa: E402
 from response_parse import loop_extract  # noqa: E402
 
@@ -424,6 +424,7 @@ def persist_loop_introspection(
     explore_log: str | os.PathLike[str],
     facts_file: str | os.PathLike[str] | None = None,
     projected_camera_source: str = "",
+    projected_camera_prefs: dict[str, Any] | None = None,
 ) -> bool:
     """loop.sh の observations/explore 保存分岐を移植する。
 
@@ -468,6 +469,7 @@ def persist_loop_introspection(
         speak=parsed.get("speak", "") or "",
         facts=facts,
         current_entity=projected_camera_source,
+        prefs=projected_camera_prefs,
     ):
         row["ungrounded_visual_claim"] = True
 
@@ -726,8 +728,8 @@ def build_recent_auditory_input(prefs_file: str, body_location_file: str) -> str
     return ""
 
 
-def detect_projected_camera(body_location_file: str) -> str:
-    return chat_context.resolve_projected_camera_entity(body_location_file)
+def detect_projected_camera(body_location_file: str, prefs: dict[str, Any] | None = None) -> str:
+    return chat_context.resolve_projected_camera_entity(body_location_file, prefs=prefs or {})
 
 
 def update_anomaly_context(cfg: dict[str, str], paths: LoopPaths, sensors: str, open_loops_json: str) -> tuple[str, str]:
@@ -833,7 +835,10 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     home_policy = _read_text(cfg.get("EHA_HOME_POLICY_FILE") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "home_policy.md"))
     features_md = _read_text(os.path.join(SCRIPT_DIR, "features.md"))
     features_presented = _run_text(["python3", os.path.join(SCRIPT_DIR, "feature-flags.py"), "get"], fallback="", run=run)
-    projected_camera_source = detect_projected_camera(body_location_file)
+    prefs_snapshot = _read_json(cfg.get("EHA_PREFS_FILE", ""))
+    if not isinstance(prefs_snapshot, dict):
+        prefs_snapshot = {}
+    projected_camera_source = detect_projected_camera(body_location_file, prefs_snapshot)
     recent_auditory_input = build_recent_auditory_input(cfg.get("EHA_PREFS_FILE", ""), body_location_file)
     projected_camera_note = f"【現在の視界】電脳体が {projected_camera_source} に投射中です。" if projected_camera_source else ""
     presented_note = f"既に伝えた機能: {features_presented}（繰り返し紹介しなくてよい）\n" if features_presented else ""
@@ -861,6 +866,7 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
         "mcp_servers": list(mcp_servers),
         "unread_autonomous_chat_count": unread_chat_count,
         "projected_camera_source": projected_camera_source,
+        "projected_camera_prefs": prefs_snapshot,
     }
 
 
@@ -868,9 +874,50 @@ WATCH_REPORT_SYSTEM = "あなたは家の見守りカメラの要約システム
 WATCH_REPORT_HEADING = "# 見守りシステムからの報告（カメラ映像そのものではなく、システムによる要約です）"
 
 
+def build_projected_turn_blocks(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build the passive visual input captured from the turn-start projection.
+
+    The source and camera manifest are snapshotted by
+    :func:`build_loop_prompt_context`, so a concurrent body move cannot make
+    the caption and frame refer to different locations.
+    """
+
+    cfg = context["cfg"]
+    current_entity = str(context.get("projected_camera_source") or "").strip()
+    prefs = context.get("projected_camera_prefs")
+    if not isinstance(prefs, dict):
+        prefs = _read_json(cfg.get("EHA_PREFS_FILE", ""))
+        if not isinstance(prefs, dict):
+            prefs = {}
+    try:
+        return build_projected_camera_blocks(
+            current_entity,
+            prefs,
+            fetch_frame=fetch_frame,
+            ha_url=cfg.get("HA_URL", ""),
+            go2rtc_url=cfg.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
+            token=cfg.get("SUPERVISOR_TOKEN", ""),
+        )
+    except Exception as exc:
+        print(f"[loop] projected camera fetch failed: {exc}", file=sys.stderr)
+        caption = projected_camera_caption(current_entity, prefs, frame_available=False)
+        return [{"type": "text", "text": caption}] if caption else []
+
+
+def build_non_observe_content_blocks(context: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Inject projected vision without invoking observe's watch summarizer."""
+
+    projected = build_projected_turn_blocks(context)
+    if not projected:
+        return None
+    return [*projected, {"type": "text", "text": context["user_prompt"]}]
+
+
 def build_observe_content_blocks(context: dict[str, Any], paths: LoopPaths, *, run=subprocess.run) -> list[dict[str, Any]]:
     cfg = context["cfg"]
-    prefs = _read_json(cfg.get("EHA_PREFS_FILE", ""))
+    prefs = context.get("projected_camera_prefs")
+    if not isinstance(prefs, dict):
+        prefs = _read_json(cfg.get("EHA_PREFS_FILE", ""))
     if not isinstance(prefs, dict):
         prefs = {}
     content: list[dict[str, Any]] = []
@@ -915,13 +962,7 @@ def build_observe_content_blocks(context: dict[str, Any], paths: LoopPaths, *, r
             content.append({"type": "text", "text": WATCH_REPORT_HEADING + "\n" + summary})
     elif failure_lines:
         content.append({"type": "text", "text": WATCH_REPORT_HEADING + "\n" + "\n".join(failure_lines)})
-    try:
-        content.extend(build_projected_camera_blocks(
-            context.get("projected_camera_source", ""), prefs, fetch_frame=fetch_frame,
-            ha_url=cfg.get("HA_URL", ""), go2rtc_url=cfg.get("GO2RTC_BASE", "http://homeassistant.local:1984"), token=cfg.get("SUPERVISOR_TOKEN", ""),
-        ))
-    except Exception as e:
-        print(f"[loop][observe] projected camera fetch failed: {e}", file=sys.stderr)
+    content.extend(build_projected_turn_blocks(context))
     content.append({"type": "text", "text": context["user_prompt"]})
     return content
 
@@ -1032,6 +1073,7 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
         explore_log=paths.explore_log,
         facts_file=os.path.join(paths.tmp_dir, f"{mode}_facts.json"),
         projected_camera_source=context.get("projected_camera_source", ""),
+        projected_camera_prefs=context.get("projected_camera_prefs"),
     )
     pending = pending_proposal_payload(parsed, timestamp=timestamp)
     write_pending_proposal(paths.pending_file, pending)
@@ -1067,7 +1109,11 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             os.remove(facts_file)
         except OSError:
             pass
-        content_blocks = build_observe_content_blocks(context, paths, run=run_subprocess) if context["mode"] == "observe" else None
+        content_blocks = (
+            build_observe_content_blocks(context, paths, run=run_subprocess)
+            if context["mode"] == "observe"
+            else build_non_observe_content_blocks(context)
+        )
         response = invoke_loop_claude(
             user_prompt=context["user_prompt"],
             system_prompt=context["sys_prompt"],

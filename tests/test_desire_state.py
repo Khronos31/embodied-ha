@@ -181,6 +181,27 @@ class DesireStateTests(unittest.TestCase):
         self.assertEqual(state["desires"]["return_to_body"]["state"], "active")
         self.assertGreater(desire_state.compute_pressure(state, catalog=catalog, body_state={"return_to_body_pressure": 0.9}), 0.0)
 
+    def test_camera_desire_recognizes_configured_go2rtc_stream(self):
+        catalog = {
+            "keep_looking": {
+                "growth_rate": 0.0,
+                "prompt": "もう少し見ていたい。",
+                "tags": ["camera"],
+            }
+        }
+        state = desire_state.normalize_state(None, catalog)
+        state["desires"]["keep_looking"]["charge"] = 0.2
+        projected = desire_state.decay_tick(
+            state,
+            catalog=catalog,
+            body_state={"remote_avatar_host": "living_stream"},
+            prefs={"cameras": [{"source": "living_stream"}]},
+            now=datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertNotEqual(projected["desires"]["keep_looking"]["state"], "satisfied")
+        self.assertGreater(projected["desires"]["keep_looking"]["charge"], 0.2)
+
     def test_physical_stretch_prefers_direct_presence(self):
         catalog = self._catalog()
         base = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)

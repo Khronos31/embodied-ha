@@ -206,7 +206,7 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     # 一時失われた経緯あり)。loop.shのobserveモードがv1.26.4で正式復活させた
     # observe_context.build_projected_camera_blocksと同じ仕組みをchat.pyで
     # 正しく実装する(chat.sh 本体の修正は別スコープ)。
-    projected_camera_source = chat_context.resolve_projected_camera_entity(body_location_file)
+    projected_camera_source = chat_context.resolve_projected_camera_entity(body_location_file, prefs_file)
     projected_camera_blocks = _build_projected_camera_blocks(cfg, prefs_file, projected_camera_source)
 
     features_md_path = os.path.join(SCRIPT_DIR, "features.md")

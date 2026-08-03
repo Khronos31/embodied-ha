@@ -170,6 +170,33 @@ class ChatRunIntegrationTests(unittest.TestCase):
             self.assertEqual(len(image_blocks), 1)
             self.assertEqual(image_blocks[0]["source"]["data"], __import__("base64").b64encode(b"FAKE_JPEG_BYTES").decode("ascii"))
 
+    def test_projected_go2rtc_stream_injects_image_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, _log_dir, prefs_file = _make_isolated_env(tmp)
+            prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+            prefs["cameras"] = [{"source": "living_stream", "label": "リビング"}]
+            prefs_file.write_text(json.dumps(prefs), encoding="utf-8")
+            Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
+                json.dumps({"current_entity": "living_stream"}), encoding="utf-8"
+            )
+            captured_calls = []
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=lambda **kwargs: captured_calls.append(kwargs) or _fake_chat_response()), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""), \
+                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"):
+                chat.run(env)
+
+            self.assertEqual(
+                len([b for b in captured_calls[0]["prefix_blocks"] if b.get("type") == "image"]),
+                1,
+            )
+
     def test_camera_fetch_failure_does_not_crash_and_omits_image(self):
         with tempfile.TemporaryDirectory() as tmp:
             env, log_dir, prefs_file = _make_isolated_env(tmp)

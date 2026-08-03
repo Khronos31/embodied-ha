@@ -94,6 +94,28 @@ class BodyContextTests(unittest.TestCase):
         self.assertIn("move_cyber", output)
         self.assertIn("return_to_body", output)
 
+    def test_format_body_context_recognizes_configured_go2rtc_stream(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            graph_path = self._write_graph(tmpdir)
+            state_path = Path(tmpdir) / "body_location.json"
+            body_state_path = Path(tmpdir) / "body_state.json"
+            prefs_path = Path(tmpdir) / "preferences.json"
+            state_path.write_text(json.dumps({
+                "current_room": "study",
+                "projected_room": "kitchen",
+                "current_entity": "kitchen_stream",
+            }), encoding="utf-8")
+            body_state_path.write_text(json.dumps({"remote_avatar_host": "kitchen_stream"}), encoding="utf-8")
+            prefs_path.write_text(json.dumps({"cameras": [{"source": "kitchen_stream"}]}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "EHA_ROOM_GRAPH_FILE": str(graph_path),
+                "EHA_BODY_LOCATION_FILE": str(state_path),
+                "EHA_BODY_STATE_FILE": str(body_state_path),
+                "EHA_PREFS_FILE": str(prefs_path),
+            }, clear=False):
+                output = self.body_context.format_body_context()
+        self.assertIn("台所 の `kitchen_stream` から見ている（電脳体）", output)
+
     def test_format_body_context_handles_missing_graph(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with mock.patch.dict(os.environ, {"EHA_ROOM_GRAPH_FILE": str(Path(tmpdir) / "missing.json")}, clear=False):

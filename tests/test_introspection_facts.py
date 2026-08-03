@@ -168,6 +168,14 @@ class IntrospectionFactsTest(unittest.TestCase):
                 current_entity="camera.living",
             )
         )
+        self.assertFalse(
+            facts.should_flag_ungrounded_visual_claim(
+                private="視界に明かりが映っている。",
+                facts={"tools_used": {}},
+                current_entity="living_stream",
+                prefs={"cameras": [{"source": "living_stream"}]},
+            )
+        )
 
 
 

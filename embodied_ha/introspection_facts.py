@@ -11,6 +11,8 @@ import tempfile
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from state_utils import get_device_capabilities
+
 SPEAK_TOOLS = {"mcp__audio__speak", "mcp__audio__use_device_speaker"}
 ACTION_TOOLS = {"mcp__hacontrol__ha_call_service"}
 CAMERA_TOOL = "mcp__camera__use_device_camera"
@@ -184,8 +186,9 @@ def should_flag_ungrounded_visual_claim(
     speak: str = "",
     facts: Mapping[str, Any] | None,
     current_entity: str = "",
+    prefs: Mapping[str, Any] | None = None,
 ) -> bool:
-    if str(current_entity or "").strip().startswith("camera."):
+    if get_device_capabilities(str(current_entity or "").strip(), prefs or {}).get("is_camera"):
         return False
     if not isinstance(facts, Mapping):
         return False

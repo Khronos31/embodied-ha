@@ -661,6 +661,51 @@ class LoopPyInvocationTests(unittest.TestCase):
 
         self.assertEqual(blocks, [{"type": "text", "text": "sensor-only observe prompt"}])
 
+    def test_non_observe_projection_uses_turn_start_source_without_watch_summary(self):
+        context = {
+            "cfg": {"HA_URL": "http://ha", "GO2RTC_BASE": "http://go2rtc"},
+            "projected_camera_source": "turn_start_stream",
+            "projected_camera_prefs": {
+                "cameras": [{"source": "turn_start_stream", "ha_entity": "camera.turn_start"}]
+            },
+            "user_prompt": "explore prompt",
+        }
+        seen = []
+        with mock.patch.object(
+            loop,
+            "fetch_frame",
+            side_effect=lambda source, **_kwargs: seen.append(source) or b"JPEGFIXTURE",
+        ), mock.patch.object(loop, "invoke_loop_claude") as watch_summary:
+            blocks = loop.build_non_observe_content_blocks(context)
+
+        self.assertEqual(seen, ["camera.turn_start"])
+        watch_summary.assert_not_called()
+        self.assertEqual(len([block for block in blocks if block.get("type") == "image"]), 1)
+        self.assertEqual(blocks[-1], {"type": "text", "text": "explore prompt"})
+
+    def test_non_observe_projection_fetch_failure_keeps_caption_and_prompt(self):
+        context = {
+            "cfg": {},
+            "projected_camera_source": "camera.living",
+            "projected_camera_prefs": {"cameras": []},
+            "user_prompt": "reflect prompt",
+        }
+        with mock.patch.object(loop, "fetch_frame", side_effect=RuntimeError("offline")):
+            blocks = loop.build_non_observe_content_blocks(context)
+
+        self.assertEqual(len(blocks), 2)
+        self.assertIn("映像取得に失敗", blocks[0]["text"])
+        self.assertEqual(blocks[-1]["text"], "reflect prompt")
+
+    def test_non_observe_without_projection_keeps_legacy_text_path(self):
+        context = {
+            "cfg": {},
+            "projected_camera_source": "",
+            "projected_camera_prefs": {},
+            "user_prompt": "web prompt",
+        }
+        self.assertIsNone(loop.build_non_observe_content_blocks(context))
+
 
 class LoopPyPostprocessTests(unittest.TestCase):
     def test_pending_proposal_requires_action_triplet(self):
@@ -919,6 +964,55 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 self.assertEqual(rows[0]["private"], "静かに確認している")
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
+
+    def test_projected_camera_is_injected_in_every_loop_mode(self):
+        for mode in ["observe", "explore", "reflect", "web", "social"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                calls = []
+                captured_content = []
+                env = self.make_env(tmp, mode)
+                Path(env["EHA_PREFS_FILE"]).write_text(
+                    json.dumps({
+                        "speakers": [{"room": "living"}],
+                        "cameras": [{"source": "living_stream", "label": "リビング"}],
+                    }),
+                    encoding="utf-8",
+                )
+                Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
+                    json.dumps({"current_entity": "living_stream"}), encoding="utf-8"
+                )
+                normal_run = self.fake_run_factory(calls)
+
+                def capture_run(cmd, **kwargs):
+                    if (
+                        len(cmd) >= 2
+                        and cmd[0] == "bash"
+                        and cmd[1].endswith("invoke-agent.sh")
+                        and "--content-json" in cmd
+                    ):
+                        value = cmd[cmd.index("--content-json") + 1]
+                        self.assertTrue(value.startswith("@"))
+                        captured_content.append(
+                            json.loads(Path(value[1:]).read_text(encoding="utf-8"))
+                        )
+                    return normal_run(cmd, **kwargs)
+
+                with mock.patch.object(loop, "fetch_frame", return_value=b"\xff\xd8\xfffixture"):
+                    result = loop.run(env, run_subprocess=capture_run)
+
+                final_content = captured_content[-1]
+                self.assertEqual(result["context"]["projected_camera_source"], "living_stream")
+                self.assertEqual(
+                    len([block for block in final_content if block.get("type") == "image"]),
+                    1,
+                )
+                self.assertEqual(final_content[-1]["text"], result["context"]["user_prompt"])
+                invoke_calls = [
+                    call for call in calls
+                    if len(call[0]) >= 2 and call[0][0] == "bash" and call[0][1].endswith("invoke-agent.sh")
+                ]
+                self.assertEqual(len(invoke_calls), 2 if mode == "observe" else 1)
 
     def test_observe_prompt_and_allowlist_expose_concentrate_hearing_only_to_antigravity(self):
         for harness in ("claude", "codex", "agy"):

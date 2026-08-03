@@ -6,6 +6,8 @@ import base64
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from state_utils import get_device_capabilities
+
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -42,7 +44,8 @@ def match_camera_device(current_entity: str, prefs: Mapping[str, Any] | None) ->
 
 def projected_camera_source(current_entity: str, prefs: Mapping[str, Any] | None) -> dict[str, str] | None:
     current_entity = _clean(current_entity)
-    if not current_entity.startswith("camera."):
+    prefs = prefs if isinstance(prefs, Mapping) else {}
+    if not get_device_capabilities(current_entity, prefs).get("is_camera"):
         return None
 
     matched = match_camera_device(current_entity, prefs)
