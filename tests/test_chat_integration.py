@@ -140,82 +140,31 @@ class ChatRunIntegrationTests(unittest.TestCase):
                 prefs = json.load(fh)
             self.assertIn("静かに", prefs["policies"])
 
-    def test_projected_camera_entity_injects_image_block(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env, log_dir, prefs_file = _make_isolated_env(tmp)
-            body_location_file = Path(env["EHA_BODY_LOCATION_FILE"])
-            body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
+    def test_projected_camera_is_not_passively_injected(self):
+        for source in ("camera.living", "living_stream"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                env, _log_dir, prefs_file = _make_isolated_env(tmp)
+                prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+                prefs["cameras"] = [{"source": source, "label": "リビング"}]
+                prefs_file.write_text(json.dumps(prefs), encoding="utf-8")
+                Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
+                    json.dumps({"current_entity": source}), encoding="utf-8"
+                )
+                captured_calls = []
 
-            captured_calls = []
+                with patch.object(chat, "_web_ui_status"), \
+                     patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=lambda **kwargs: captured_calls.append(kwargs) or _fake_chat_response()), \
+                     patch.object(chat, "_build_long_memory", return_value="なし"), \
+                     patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                     patch.object(chat, "_build_open_loops", return_value="なし"), \
+                     patch.object(chat, "_build_sensors", return_value=""), \
+                     patch.object(chat, "_build_body_location_context", return_value=""), \
+                     patch.object(chat, "_build_features_presented", return_value=""):
+                    chat.run(env)
 
-            def capture_invoke_chat(**kwargs):
-                captured_calls.append(kwargs)
-                return _fake_chat_response()
-
-            with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=capture_invoke_chat), \
-                 patch.object(chat, "_build_long_memory", return_value="なし"), \
-                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
-                 patch.object(chat, "_build_open_loops", return_value="なし"), \
-                 patch.object(chat, "_build_sensors", return_value=""), \
-                 patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"):
-                chat.run(env)
-
-            self.assertEqual(len(captured_calls), 1)
-            content = captured_calls[0]["prefix_blocks"]
-            self.assertGreater(len(content), 1)
-            image_blocks = [b for b in content if b.get("type") == "image"]
-            self.assertEqual(len(image_blocks), 1)
-            self.assertEqual(image_blocks[0]["source"]["data"], __import__("base64").b64encode(b"FAKE_JPEG_BYTES").decode("ascii"))
-
-    def test_projected_go2rtc_stream_injects_image_block(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env, _log_dir, prefs_file = _make_isolated_env(tmp)
-            prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
-            prefs["cameras"] = [{"source": "living_stream", "label": "リビング"}]
-            prefs_file.write_text(json.dumps(prefs), encoding="utf-8")
-            Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
-                json.dumps({"current_entity": "living_stream"}), encoding="utf-8"
-            )
-            captured_calls = []
-
-            with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=lambda **kwargs: captured_calls.append(kwargs) or _fake_chat_response()), \
-                 patch.object(chat, "_build_long_memory", return_value="なし"), \
-                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
-                 patch.object(chat, "_build_open_loops", return_value="なし"), \
-                 patch.object(chat, "_build_sensors", return_value=""), \
-                 patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat, "fetch_frame", return_value=b"FAKE_JPEG_BYTES"):
-                chat.run(env)
-
-            self.assertEqual(
-                len([b for b in captured_calls[0]["prefix_blocks"] if b.get("type") == "image"]),
-                1,
-            )
-
-    def test_camera_fetch_failure_does_not_crash_and_omits_image(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            env, log_dir, prefs_file = _make_isolated_env(tmp)
-            body_location_file = Path(env["EHA_BODY_LOCATION_FILE"])
-            body_location_file.write_text(json.dumps({"current_entity": "camera.living"}), encoding="utf-8")
-
-            with patch.object(chat, "_web_ui_status"), \
-                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=_fake_chat_response), \
-                 patch.object(chat, "_build_long_memory", return_value="なし"), \
-                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
-                 patch.object(chat, "_build_open_loops", return_value="なし"), \
-                 patch.object(chat, "_build_sensors", return_value=""), \
-                 patch.object(chat, "_build_body_location_context", return_value=""), \
-                 patch.object(chat, "_build_features_presented", return_value=""), \
-                 patch.object(chat, "fetch_frame", side_effect=RuntimeError("network down")):
-                chat.run(env)  # 例外を投げずに完走することの確認
-
-            chat_log = log_dir / "chat_log.jsonl"
-            self.assertTrue(chat_log.exists())
+                self.assertEqual(len(captured_calls), 1)
+                self.assertNotIn("prefix_blocks", captured_calls[0])
+                self.assertIn("画像は自動では届きません", captured_calls[0]["prompt"])
 
     def test_character_file_content_flows_into_prompt(self):
         # Codexレビューで発見: eha_config.pyはEHA_CHARACTER_FILEのパスを解決するだけで

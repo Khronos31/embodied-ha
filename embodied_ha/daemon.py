@@ -20,6 +20,7 @@ import body_state
 import anomaly_state
 import desire_state
 import antigravity_setup
+import camera_history
 import claude_setup
 import codex_setup
 import harness_state
@@ -812,6 +813,8 @@ def start_runtime_threads() -> bool:
         threading.Thread(target=loop_scheduler, daemon=True).start()
         threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
         print("[daemon] audio daemon watchdog enabled", flush=True)
+        threading.Thread(target=camera_history.run_from_environment, daemon=True).start()
+        print("[daemon] camera history worker enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)
         _runtime_started.set()
         return True

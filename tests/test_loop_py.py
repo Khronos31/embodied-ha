@@ -560,151 +560,11 @@ class LoopPyInvocationTests(unittest.TestCase):
         self.assertNotIn("input", invoke_kwargs)
         self.assertNotIn("EHA_ACTOR", invoke_kwargs["env"])
 
-    def test_watch_summary_invocation_uses_haiku_without_tools_or_schema(self):
-        calls = []
-
-        class Result:
-            def __init__(self, stdout="", stderr="", returncode=0):
-                self.stdout = stdout
-                self.stderr = stderr
-                self.returncode = returncode
-
-        def fake_run(cmd, **kwargs):
-            calls.append((cmd, kwargs))
-            if cmd[:2] == ["bash", str(ROOT / "embodied_ha" / "invoke-agent.sh")]:
-                return Result("Fixture: clear")
-            return Result()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            prefs = tmp / "preferences.json"
-            prefs.write_text(
-                json.dumps({"cameras": [{"ha_entity": "camera.fixture", "label": "Fixture"}]}),
-                encoding="utf-8",
-            )
-            context = {
-                "cfg": {
-                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
-                    "CLAUDE_BIN": "/bin/claude",
-                    "EHA_PREFS_FILE": str(prefs),
-                    "EHA_DATA_DIR": tmpdir,
-                },
-                "projected_camera_source": "",
-                "user_prompt": "observe prompt",
-            }
-            original_fetch_frame = loop.fetch_frame
-            try:
-                loop.fetch_frame = lambda *_args, **_kwargs: b"JPEGFIXTURE" * 20
-                blocks = loop.build_observe_content_blocks(
-                    context,
-                    loop.LoopPaths(
-                        log_dir=str(tmp),
-                        observation_log=str(tmp / "observations.jsonl"),
-                        explore_log=str(tmp / "explore.jsonl"),
-                        chat_log=str(tmp / "chat_log.jsonl"),
-                        memory_file=str(tmp / "memory.md"),
-                        pending_file=str(tmp / "pending_proposal.json"),
-                        daybook_marker=str(tmp / ".last_daybook"),
-                        tmp_dir=str(tmp / "tmp"),
-                    ),
-                    run=fake_run,
-                )
-            finally:
-                loop.fetch_frame = original_fetch_frame
-
-        self.assertIn("Fixture: clear", blocks[0]["text"])
-        invoke_cmd, invoke_kwargs = [call for call in calls if call[0][:2] == ["bash", str(ROOT / "embodied_ha" / "invoke-agent.sh")]][0]
-        self.assertEqual(invoke_cmd[invoke_cmd.index("--model") + 1], "lite")
-        self.assertNotIn("--allowed-builtins", invoke_cmd)
-        self.assertNotIn("--allowed-mcp-tools", invoke_cmd)
-        self.assertNotIn("--json-schema", invoke_cmd)
-        self.assertNotIn("EHA_ACTOR", invoke_kwargs["env"])
-
-    def test_watch_summary_failure_continues_with_sensor_prompt(self):
-        class Result:
-            def __init__(self, stdout="", stderr="", returncode=0):
-                self.stdout = stdout
-                self.stderr = stderr
-                self.returncode = returncode
-
-        def fake_run(cmd, **kwargs):
-            return Result(stderr="image request failed", returncode=1)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
-            prefs = tmp / "preferences.json"
-            prefs.write_text(
-                json.dumps({"cameras": [{"ha_entity": "camera.fixture", "label": "Fixture"}]}),
-                encoding="utf-8",
-            )
-            context = {
-                "cfg": {
-                    "SCRIPT_DIR": str(ROOT / "embodied_ha"),
-                    "EHA_PREFS_FILE": str(prefs),
-                    "EHA_DATA_DIR": tmpdir,
-                },
-                "projected_camera_source": "",
-                "user_prompt": "sensor-only observe prompt",
-            }
-            paths = loop.LoopPaths(
-                log_dir=str(tmp),
-                observation_log=str(tmp / "observations.jsonl"),
-                explore_log=str(tmp / "explore.jsonl"),
-                chat_log=str(tmp / "chat_log.jsonl"),
-                memory_file=str(tmp / "memory.md"),
-                pending_file=str(tmp / "pending_proposal.json"),
-                daybook_marker=str(tmp / ".last_daybook"),
-                tmp_dir=str(tmp / "tmp"),
-            )
-            with mock.patch.object(loop, "fetch_frame", return_value=b"JPEGFIXTURE" * 20):
-                blocks = loop.build_observe_content_blocks(context, paths, run=fake_run)
-
-        self.assertEqual(blocks, [{"type": "text", "text": "sensor-only observe prompt"}])
-
-    def test_non_observe_projection_uses_turn_start_source_without_watch_summary(self):
-        context = {
-            "cfg": {"HA_URL": "http://ha", "GO2RTC_BASE": "http://go2rtc"},
-            "projected_camera_source": "turn_start_stream",
-            "projected_camera_prefs": {
-                "cameras": [{"source": "turn_start_stream", "ha_entity": "camera.turn_start"}]
-            },
-            "user_prompt": "explore prompt",
-        }
-        seen = []
-        with mock.patch.object(
-            loop,
-            "fetch_frame",
-            side_effect=lambda source, **_kwargs: seen.append(source) or b"JPEGFIXTURE",
-        ), mock.patch.object(loop, "invoke_loop_claude") as watch_summary:
-            blocks = loop.build_non_observe_content_blocks(context)
-
-        self.assertEqual(seen, ["camera.turn_start"])
-        watch_summary.assert_not_called()
-        self.assertEqual(len([block for block in blocks if block.get("type") == "image"]), 1)
-        self.assertEqual(blocks[-1], {"type": "text", "text": "explore prompt"})
-
-    def test_non_observe_projection_fetch_failure_keeps_caption_and_prompt(self):
-        context = {
-            "cfg": {},
-            "projected_camera_source": "camera.living",
-            "projected_camera_prefs": {"cameras": []},
-            "user_prompt": "reflect prompt",
-        }
-        with mock.patch.object(loop, "fetch_frame", side_effect=RuntimeError("offline")):
-            blocks = loop.build_non_observe_content_blocks(context)
-
-        self.assertEqual(len(blocks), 2)
-        self.assertIn("映像取得に失敗", blocks[0]["text"])
-        self.assertEqual(blocks[-1]["text"], "reflect prompt")
-
-    def test_non_observe_without_projection_keeps_legacy_text_path(self):
-        context = {
-            "cfg": {},
-            "projected_camera_source": "",
-            "projected_camera_prefs": {},
-            "user_prompt": "web prompt",
-        }
-        self.assertIsNone(loop.build_non_observe_content_blocks(context))
+    def test_passive_camera_helpers_and_watch_summary_are_removed(self):
+        self.assertFalse(hasattr(loop, "build_observe_content_blocks"))
+        self.assertFalse(hasattr(loop, "build_non_observe_content_blocks"))
+        self.assertFalse(hasattr(loop, "fetch_frame"))
+        self.assertFalse(hasattr(loop, "WATCH_REPORT_SYSTEM"))
 
 
 class LoopPyPostprocessTests(unittest.TestCase):
@@ -965,12 +825,11 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
 
-    def test_projected_camera_is_injected_in_every_loop_mode(self):
+    def test_projected_camera_is_never_passively_injected(self):
         for mode in ["observe", "explore", "reflect", "web", "social"]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
                 tmp = Path(tmpdir)
                 calls = []
-                captured_content = []
                 env = self.make_env(tmp, mode)
                 Path(env["EHA_PREFS_FILE"]).write_text(
                     json.dumps({
@@ -982,37 +841,17 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
                     json.dumps({"current_entity": "living_stream"}), encoding="utf-8"
                 )
-                normal_run = self.fake_run_factory(calls)
-
-                def capture_run(cmd, **kwargs):
-                    if (
-                        len(cmd) >= 2
-                        and cmd[0] == "bash"
-                        and cmd[1].endswith("invoke-agent.sh")
-                        and "--content-json" in cmd
-                    ):
-                        value = cmd[cmd.index("--content-json") + 1]
-                        self.assertTrue(value.startswith("@"))
-                        captured_content.append(
-                            json.loads(Path(value[1:]).read_text(encoding="utf-8"))
-                        )
-                    return normal_run(cmd, **kwargs)
-
-                with mock.patch.object(loop, "fetch_frame", return_value=b"\xff\xd8\xfffixture"):
-                    result = loop.run(env, run_subprocess=capture_run)
-
-                final_content = captured_content[-1]
-                self.assertEqual(result["context"]["projected_camera_source"], "living_stream")
-                self.assertEqual(
-                    len([block for block in final_content if block.get("type") == "image"]),
-                    1,
+                result = loop.run(
+                    env, run_subprocess=self.fake_run_factory(calls)
                 )
-                self.assertEqual(final_content[-1]["text"], result["context"]["user_prompt"])
+                self.assertEqual(result["context"]["projected_camera_source"], "living_stream")
+                self.assertIn("画像は自動では届きません", result["context"]["sys_prompt"])
                 invoke_calls = [
                     call for call in calls
                     if len(call[0]) >= 2 and call[0][0] == "bash" and call[0][1].endswith("invoke-agent.sh")
                 ]
-                self.assertEqual(len(invoke_calls), 2 if mode == "observe" else 1)
+                self.assertEqual(len(invoke_calls), 1)
+                self.assertNotIn("--content-json", invoke_calls[0][0])
 
     def test_observe_prompt_and_allowlist_expose_concentrate_hearing_only_to_antigravity(self):
         for harness in ("claude", "codex", "agy"):
@@ -1034,6 +873,33 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 else:
                     self.assertNotIn("mcp__audio__concentrate_hearing", allowed)
                     self.assertNotIn("concentrate_hearing", system_prompt)
+
+    def test_camera_history_tool_is_opt_in_for_camera_loop_modes(self):
+        for mode in ("observe", "explore", "reflect"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                env = self.make_env(tmp, mode)
+                prefs = {
+                    "speakers": [{"room": "living"}],
+                    "cameras": [{"source": "living_stream"}],
+                    "camera_history_enabled": True,
+                    "camera_history_minutes": 14,
+                }
+                Path(env["EHA_PREFS_FILE"]).write_text(
+                    json.dumps(prefs), encoding="utf-8"
+                )
+                Path(env["EHA_BODY_LOCATION_FILE"]).write_text(
+                    json.dumps({"current_entity": "living_stream"}), encoding="utf-8"
+                )
+                result = loop.run(
+                    env, run_subprocess=self.fake_run_factory([])
+                )
+                allowed = set(result["context"]["allowed_tools"].split(","))
+                if mode in {"observe", "explore"}:
+                    self.assertIn("mcp__camera__review_camera_history", allowed)
+                    self.assertIn("直近14分", result["context"]["sys_prompt"])
+                else:
+                    self.assertNotIn("mcp__camera__review_camera_history", allowed)
 
     def test_run_injects_unread_autonomous_chat_constraint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
