@@ -1788,6 +1788,16 @@ async function renderSettingsForm() {
     const httpPostEnabledEl = document.getElementById('http-post-enabled-toggle');
     if (httpPostEnabledEl) httpPostEnabledEl.checked = !!prefsData.http_post_enabled;
 
+    const cameraHistoryEnabledEl = document.getElementById('setting-camera-history-enabled');
+    const cameraHistoryMinutesEl = document.getElementById('setting-camera-history-minutes');
+    const isCamHistEnabled = !!prefsData.camera_history_enabled;
+    if (cameraHistoryEnabledEl) cameraHistoryEnabledEl.checked = isCamHistEnabled;
+    if (cameraHistoryMinutesEl) {
+        const minVal = parseInt(prefsData.camera_history_minutes, 10);
+        cameraHistoryMinutesEl.value = isNaN(minVal) ? 10 : minVal;
+        cameraHistoryMinutesEl.disabled = !isCamHistEnabled;
+    }
+
     const policiesList = document.getElementById('policies-list');
     policiesList.innerHTML = '';
     if (prefsData.policies && Array.isArray(prefsData.policies)) {
@@ -2223,6 +2233,16 @@ function serializeFormToPrefs() {
         projection_targets,
         loop_schedule: loopSchedule
     };
+
+    const cameraHistoryEnabledEl = document.getElementById('setting-camera-history-enabled');
+    const cameraHistoryMinutesEl = document.getElementById('setting-camera-history-minutes');
+    if (cameraHistoryEnabledEl) {
+        returnObj.camera_history_enabled = cameraHistoryEnabledEl.checked;
+    }
+    if (cameraHistoryMinutesEl) {
+        const parsed = parseInt(cameraHistoryMinutesEl.value, 10);
+        returnObj.camera_history_minutes = isNaN(parsed) ? 10 : Math.min(60, Math.max(1, parsed));
+    }
 
     if (sing_speaker) {
         returnObj.sing_speaker = sing_speaker;
@@ -3724,6 +3744,19 @@ async function handleSaveSettings(e) {
         jsonEditorNeedsUpdate = true;
     }
 
+    // カメラ静止画履歴設定も専用フォームの値を適用する
+    const cameraHistoryEnabledEl = document.getElementById('setting-camera-history-enabled');
+    const cameraHistoryMinutesEl = document.getElementById('setting-camera-history-minutes');
+    if (cameraHistoryEnabledEl) {
+        nextPrefs.camera_history_enabled = cameraHistoryEnabledEl.checked;
+        jsonEditorNeedsUpdate = true;
+    }
+    if (cameraHistoryMinutesEl) {
+        const parsed = parseInt(cameraHistoryMinutesEl.value, 10);
+        nextPrefs.camera_history_minutes = isNaN(parsed) ? 10 : Math.min(60, Math.max(1, parsed));
+        jsonEditorNeedsUpdate = true;
+    }
+
     if (jsonEditorNeedsUpdate && activeSettingsTab === 'advanced' && jsonEditor) {
         jsonEditor.setValue(JSON.stringify(nextPrefs, null, 2));
     }
@@ -4244,6 +4277,8 @@ function initMockPreferences() {
     if (!prefsData) {
         prefsData = {
             enabled_features: ["ai_lounge", "non_speech_audio"],
+            camera_history_enabled: false,
+            camera_history_minutes: 10,
             ai_lounge: {
                 auto_approve: false
             },
@@ -4738,6 +4773,14 @@ async function handleToggleHttpPostEnabled(checkbox) {
         checkbox.checked = oldVal;
         prefsData.http_post_enabled = oldVal;
     }
+}
+
+function handleCameraHistoryToggle(checkbox) {
+    const minutesEl = document.getElementById('setting-camera-history-minutes');
+    if (minutesEl) {
+        minutesEl.disabled = !checkbox.checked;
+    }
+    isSettingsDirty = true;
 }
 
 function renderOtherFeaturesCatalog() {
