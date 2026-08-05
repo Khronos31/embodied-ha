@@ -11,11 +11,12 @@ import tempfile
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from state_utils import get_device_capabilities
-
 SPEAK_TOOLS = {"mcp__audio__speak", "mcp__audio__use_device_speaker"}
 ACTION_TOOLS = {"mcp__hacontrol__ha_call_service"}
-CAMERA_TOOL = "mcp__camera__use_device_camera"
+VISUAL_EVIDENCE_TOOLS = {
+    "mcp__camera__use_device_camera",
+    "mcp__camera__review_camera_history",
+}
 
 # 完了形のみマッチ。願望（〜たい）・過去願望（〜たかった）・仮定（〜たら）・並列（〜たり）は除外
 _SPEECH_CLAIM_RE = re.compile(
@@ -49,6 +50,7 @@ def _tool_name_for_result(block: Mapping[str, Any], tool_names_by_id: Mapping[st
 def extract_facts_from_stream_lines(lines: Iterable[str]) -> dict[str, Any]:
     """Extract observed tool facts from Claude stream-json lines."""
     tools_used: collections.Counter[str] = collections.Counter()
+    successful_tools: collections.Counter[str] = collections.Counter()
     error_tools: list[str] = []
     tool_names_by_id: dict[str, str] = {}
     tool_calls = 0
@@ -90,15 +92,19 @@ def extract_facts_from_stream_lines(lines: Iterable[str]) -> dict[str, Any]:
                 if is_error:
                     tool_errors += 1
                     error_tools.append(name or "unknown")
-                elif name in SPEAK_TOOLS:
-                    speak_ok += 1
-                elif name in ACTION_TOOLS:
-                    action_ok += 1
+                else:
+                    if name:
+                        successful_tools[name] += 1
+                    if name in SPEAK_TOOLS:
+                        speak_ok += 1
+                    elif name in ACTION_TOOLS:
+                        action_ok += 1
 
     return {
         "tool_calls": tool_calls,
         "tool_errors": tool_errors,
         "tools_used": dict(sorted(tools_used.items())),
+        "successful_tools": dict(sorted(successful_tools.items())),
         "error_tools": error_tools,
         "speak_ok": speak_ok,
         "action_ok": action_ok,
@@ -179,6 +185,23 @@ def _tool_count(facts: Mapping[str, Any], name: str) -> int:
         return 0
 
 
+def _successful_tool_count(facts: Mapping[str, Any], name: str) -> int:
+    successful_tools = facts.get("successful_tools")
+    if isinstance(successful_tools, Mapping):
+        try:
+            return int(successful_tools.get(name, 0))
+        except Exception:
+            return 0
+
+    # Compatibility for facts written before successful_tools was recorded.
+    # Infer success only when a call exists and no matching error was observed.
+    calls = _tool_count(facts, name)
+    errors = facts.get("error_tools")
+    if isinstance(errors, list):
+        calls -= sum(1 for item in errors if str(item) == name)
+    return max(0, calls)
+
+
 def should_flag_ungrounded_visual_claim(
     *,
     private: str,
@@ -188,11 +211,9 @@ def should_flag_ungrounded_visual_claim(
     current_entity: str = "",
     prefs: Mapping[str, Any] | None = None,
 ) -> bool:
-    if get_device_capabilities(str(current_entity or "").strip(), prefs or {}).get("is_camera"):
-        return False
     if not isinstance(facts, Mapping):
         return False
-    if _tool_count(facts, CAMERA_TOOL) > 0:
+    if any(_successful_tool_count(facts, name) > 0 for name in VISUAL_EVIDENCE_TOOLS):
         return False
     return has_visual_claim(f"{private}\n{topic}\n{speak}")
 

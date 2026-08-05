@@ -4,6 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,7 +219,7 @@ class CameraHistoryWorkerTests(unittest.TestCase):
             )
             self.assertEqual(len(list(history_root.rglob("*.jpg"))), 2)
 
-    def test_unreadable_preferences_preserve_existing_history_and_skip_capture(self):
+    def test_unreadable_preferences_clear_existing_history_and_skip_capture(self):
         with tempfile.TemporaryDirectory() as tmp:
             prefs_path = Path(tmp) / "preferences.json"
             history_root = Path(tmp) / "history"
@@ -239,8 +240,39 @@ class CameraHistoryWorkerTests(unittest.TestCase):
             result = worker.run_cycle(now=200.0)
 
             self.assertEqual(result["status"], "preferences_unavailable")
+            self.assertFalse(result["enabled"])
+            self.assertEqual(result["removed"], 1)
             self.assertEqual(fetched, [])
-            self.assertEqual(len(list(history_root.rglob("*.jpg"))), 1)
+            self.assertFalse(history_root.exists())
+
+    def test_run_from_environment_clears_history_before_worker_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            self._write_prefs(prefs_path, {"camera_history_enabled": True})
+            camera_history.store_frame(
+                history_root, "camera.living", JPEG_A, captured_at=100.0
+            )
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "EHA_PREFS_FILE": str(prefs_path),
+                        "EHA_CAMERA_HISTORY_DIR": str(history_root),
+                        "HA_URL": "http://ha/api",
+                        "GO2RTC_BASE": "http://go2rtc",
+                        "SUPERVISOR_TOKEN": "token",
+                    },
+                ),
+                mock.patch.object(
+                    camera_history.CameraHistoryWorker, "run_forever"
+                ) as run_forever,
+            ):
+                camera_history.run_from_environment()
+
+            self.assertFalse(history_root.exists())
+            run_forever.assert_called_once_with()
 
     def test_daemon_starts_camera_history_with_runtime(self):
         source = (ROOT / "embodied_ha" / "daemon.py").read_text(encoding="utf-8")

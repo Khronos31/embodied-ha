@@ -68,6 +68,14 @@ class IntrospectionFactsTest(unittest.TestCase):
                 "mcp__sensors__get_sensors": 1,
             },
         )
+        self.assertEqual(
+            extracted["successful_tools"],
+            {
+                "mcp__audio__speak": 1,
+                "mcp__hacontrol__ha_call_service": 1,
+                "mcp__sensors__get_sensors": 1,
+            },
+        )
         self.assertEqual(extracted["error_tools"], ["mcp__camera__use_device_camera"])
         self.assertEqual(extracted["speak_ok"], 1)
         self.assertEqual(extracted["action_ok"], 1)
@@ -150,8 +158,26 @@ class IntrospectionFactsTest(unittest.TestCase):
         self.assertFalse(
             facts.should_flag_ungrounded_visual_claim(
                 private="リビングに人が見えた。",
-                facts={"tools_used": {"mcp__camera__use_device_camera": 1}},
+                facts={"successful_tools": {"mcp__camera__use_device_camera": 1}},
                 current_entity="",
+            )
+        )
+        self.assertFalse(
+            facts.should_flag_ungrounded_visual_claim(
+                private="少し前の画像に人が映っていた。",
+                facts={"successful_tools": {"mcp__camera__review_camera_history": 1}},
+                current_entity="living_stream",
+            )
+        )
+        self.assertTrue(
+            facts.should_flag_ungrounded_visual_claim(
+                private="画像に人が映っていた。",
+                facts={
+                    "tools_used": {"mcp__camera__use_device_camera": 1},
+                    "successful_tools": {},
+                    "error_tools": ["mcp__camera__use_device_camera"],
+                },
+                current_entity="camera.living",
             )
         )
         self.assertFalse(
@@ -161,14 +187,14 @@ class IntrospectionFactsTest(unittest.TestCase):
                 current_entity="",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             facts.should_flag_ungrounded_visual_claim(
                 private="視界に明かりが映っている。",
                 facts={"tools_used": {}},
                 current_entity="camera.living",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             facts.should_flag_ungrounded_visual_claim(
                 private="視界に明かりが映っている。",
                 facts={"tools_used": {}},

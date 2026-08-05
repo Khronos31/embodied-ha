@@ -460,12 +460,18 @@ class CameraHistoryWorker:
         now = time.time() if now is None else float(now)
         prefs = load_preferences(self.prefs_file)
         if prefs is None:
+            try:
+                removed = clear_history(self.history_root)
+            except (OSError, ValueError):
+                removed = 0
+            self._last_enabled = False
+            self._last_failures = ()
             return {
                 "status": "preferences_unavailable",
-                "enabled": self._last_enabled,
+                "enabled": False,
                 "captured": 0,
                 "failed": 0,
-                "removed": 0,
+                "removed": removed,
             }
 
         enabled, retention_minutes = history_settings(prefs)
@@ -550,9 +556,14 @@ class CameraHistoryWorker:
 
 
 def run_from_environment() -> None:
+    history_root = os.environ.get("EHA_CAMERA_HISTORY_DIR", DEFAULT_HISTORY_ROOT)
+    try:
+        clear_history(history_root)
+    except (OSError, ValueError) as exc:
+        print(f"[camera-history] startup cleanup failed: {exc}", flush=True)
     worker = CameraHistoryWorker(
         prefs_file=os.environ.get("EHA_PREFS_FILE", "preferences.json"),
-        history_root=os.environ.get("EHA_CAMERA_HISTORY_DIR", DEFAULT_HISTORY_ROOT),
+        history_root=history_root,
         ha_url=os.environ.get("HA_URL", "http://supervisor/core/api"),
         go2rtc_url=os.environ.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
         token=os.environ.get("SUPERVISOR_TOKEN", ""),
