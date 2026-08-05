@@ -29,8 +29,16 @@ class AudioMcpTests(unittest.TestCase):
         self._body_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._body_tmp.cleanup)
         body_path = Path(self._body_tmp.name) / "body_location.json"
+        self.body_state_path = Path(self._body_tmp.name) / "body_state.json"
         body_path.write_text(json.dumps({"current_entity": "", "current_room": ""}), encoding="utf-8")
-        env_patch = mock.patch.dict(os.environ, {"EHA_BODY_LOCATION_FILE": str(body_path)}, clear=False)
+        env_patch = mock.patch.dict(
+            os.environ,
+            {
+                "EHA_BODY_LOCATION_FILE": str(body_path),
+                "EHA_BODY_STATE_FILE": str(self.body_state_path),
+            },
+            clear=False,
+        )
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.audio_mcp = load_audio_mcp_module()
@@ -40,6 +48,16 @@ class AudioMcpTests(unittest.TestCase):
         self.assertGreater(len(result), 0)
         self.assertEqual(result[0]["type"], "text")
         return json.loads(result[0]["text"])
+
+    def test_body_state_writes_are_isolated_from_workspace_and_production(self):
+        import body_state
+        import embodied_action
+
+        expected = str(self.body_state_path)
+        self.assertEqual(body_state.body_state_path(), expected)
+        self.assertEqual(embodied_action.body_state_path(), expected)
+        self.assertNotEqual(self.body_state_path, ROOT / "body_state.json")
+        self.assertNotEqual(self.body_state_path, Path("/config/embodied-ha/body_state.json"))
 
     def test_parse_volumedetect(self):
         peak, mean = self.audio_mcp.parse_volumedetect(
@@ -62,6 +80,17 @@ class AudioMcpTests(unittest.TestCase):
     def test_build_record_command_rejects_tcp(self):
         with self.assertRaises(ValueError):
             self.audio_mcp.build_record_command("tcp://192.168.1.100:3333", 5)
+
+    def test_speaker_file_path_contract_names_raw_format_and_conversion(self):
+        for tool in (
+            self.audio_mcp.TOOL_SPEAK,
+            self.audio_mcp.TOOL_USE_DEVICE_SPEAKER,
+        ):
+            description = tool["inputSchema"]["properties"]["file_path"]["description"]
+            self.assertIn(".pcm", description)
+            self.assertIn("mono s16le/16kHz", description)
+            self.assertIn("ffmpeg", description)
+            self.assertIn("最長10分", description)
 
     def test_concentrate_hearing_spec_requires_view_file_without_execution_tools(self):
         description = self.audio_mcp.TOOL_CONCENTRATE_HEARING["description"]
@@ -357,6 +386,7 @@ class AudioMcpTests(unittest.TestCase):
                  mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
                 payload = self._json(self.audio_mcp.listen({"source": "rtsp://localhost:8554/capture_tv", "duration": 5}))
 
+        self.assertTrue(self.body_state_path.exists())
         self.assertEqual(payload["source"], "rtsp://localhost:8554/capture_tv")
         self.assertEqual(payload["duration"], 5)
         self.assertTrue(payload["has_sound"])

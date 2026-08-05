@@ -494,7 +494,7 @@ class PlayPcmFileTests(unittest.TestCase):
             ]
         }
         prefs_path = self._write_prefs(prefs)
-        audio = tempfile.NamedTemporaryFile(delete=False)
+        audio = tempfile.NamedTemporaryFile(delete=False, suffix=".pcm")
         audio.write(b"\x01\x02" * 100)
         audio.close()
         played = []
@@ -508,6 +508,118 @@ class PlayPcmFileTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(played, [(b"\x01\x02" * 100, "alsa_output.test")])
+
+    def test_play_pcm_file_converts_non_pcm_audio_before_playback(self):
+        prefs = {"speakers": [{"room": "本体", "type": "local"}]}
+        prefs_path = self._write_prefs(prefs)
+        webm = tempfile.NamedTemporaryFile(delete=False, suffix=".webm")
+        webm.write(b"webm audio")
+        webm.close()
+        converted = b"\x00\x01" * 80
+        proc = mock.Mock()
+        proc.communicate.return_value = (converted, b"")
+        proc.returncode = 0
+        played = []
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak.subprocess, "Popen", return_value=proc) as popen_mock, \
+                 mock.patch.object(self.speak, "_play_pcm_local", side_effect=lambda pcm, sink="", **kw: played.append((pcm, sink))):
+                ok = self.speak.play_pcm_file("本体", webm.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(webm.name)
+
+        self.assertTrue(ok)
+        self.assertEqual(played, [(converted, "")])
+        cmd = popen_mock.call_args.args[0]
+        self.assertIn("-xerror", cmd)
+        self.assertIn("explode", cmd)
+        self.assertEqual(cmd[cmd.index("-i") + 1], webm.name)
+
+    def test_play_pcm_file_does_not_play_when_conversion_fails(self):
+        prefs = {"speakers": [{"room": "本体", "type": "local"}]}
+        prefs_path = self._write_prefs(prefs)
+        invalid = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
+        invalid.write(b"not audio")
+        invalid.close()
+        proc = mock.Mock()
+        proc.communicate.return_value = (b"", b"invalid data")
+        proc.returncode = 1
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak.subprocess, "Popen", return_value=proc), \
+                 mock.patch.object(self.speak, "_play_pcm_local") as play_mock:
+                ok = self.speak.play_pcm_file("本体", invalid.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(invalid.name)
+
+        self.assertFalse(ok)
+        play_mock.assert_not_called()
+
+    def test_play_pcm_file_rejects_oversized_decoded_audio(self):
+        prefs = {"speakers": [{"room": "本体", "type": "local"}]}
+        prefs_path = self._write_prefs(prefs)
+        audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        audio.write(b"compressed audio")
+        audio.close()
+        proc = mock.Mock()
+        proc.communicate.return_value = (b"\x00" * 6, b"")
+        proc.returncode = 0
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak, "MAX_PCM_BYTES", 4), \
+                 mock.patch.object(self.speak.subprocess, "Popen", return_value=proc), \
+                 mock.patch.object(self.speak, "_play_pcm_local") as play_mock:
+                ok = self.speak.play_pcm_file("本体", audio.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(audio.name)
+
+        self.assertFalse(ok)
+        play_mock.assert_not_called()
+
+    def test_play_pcm_file_rejects_odd_length_raw_pcm(self):
+        prefs = {"speakers": [{"room": "本体", "type": "local"}]}
+        prefs_path = self._write_prefs(prefs)
+        audio = tempfile.NamedTemporaryFile(delete=False, suffix=".pcm")
+        audio.write(b"\x00\x01\x02")
+        audio.close()
+        try:
+            with mock.patch.dict(os.environ, {"EHA_PREFS_FILE": prefs_path}, clear=False), \
+                 mock.patch.object(self.speak, "_play_pcm_local") as play_mock:
+                ok = self.speak.play_pcm_file("本体", audio.name)
+        finally:
+            os.unlink(prefs_path)
+            os.unlink(audio.name)
+
+        self.assertFalse(ok)
+        play_mock.assert_not_called()
+
+    def test_non_regular_audio_path_is_rejected_before_open_or_ffmpeg(self):
+        fifo_stat = mock.Mock(st_mode=self.speak.stat.S_IFIFO, st_size=100)
+        with mock.patch.object(self.speak.os, "stat", return_value=fifo_stat), \
+             mock.patch("builtins.open") as open_mock, \
+             mock.patch.object(self.speak.subprocess, "Popen") as popen_mock:
+            with self.assertRaisesRegex(RuntimeError, "audio file read failed"):
+                self.speak._pcm_bytes_from_file("/tmp/audio.webm")
+
+        open_mock.assert_not_called()
+        popen_mock.assert_not_called()
+
+    def test_oversized_source_is_rejected_before_ffmpeg(self):
+        audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        audio.write(b"large")
+        audio.close()
+        try:
+            with mock.patch.object(self.speak, "MAX_AUDIO_INPUT_BYTES", 4), \
+                 mock.patch.object(self.speak.subprocess, "Popen") as popen_mock:
+                with self.assertRaisesRegex(RuntimeError, "audio file read failed"):
+                    self.speak._pcm_bytes_from_file(audio.name)
+        finally:
+            os.unlink(audio.name)
+
+        popen_mock.assert_not_called()
 
     def test_play_pcm_file_converts_wav_before_local_playback(self):
         prefs = {"speakers": [{"room": "本体", "type": "local"}]}
@@ -532,8 +644,8 @@ class PlayPcmFileTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(played, [(converted, "")])
         cmd = popen_mock.call_args.args[0]
-        self.assertEqual(cmd[:4], ["ffmpeg", "-loglevel", "error", "-i"])
-        self.assertEqual(cmd[4], wav.name)
+        self.assertEqual(cmd[:4], ["ffmpeg", "-loglevel", "error", "-xerror"])
+        self.assertEqual(cmd[cmd.index("-i") + 1], wav.name)
         self.assertIn("s16le", cmd)
 
 

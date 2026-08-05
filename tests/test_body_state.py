@@ -300,6 +300,29 @@ class BodyStateTests(unittest.TestCase):
 
         self.assertEqual(projected["energy"], non_projected["energy"])
 
+    def test_go2rtc_projection_builds_return_to_body_pressure(self):
+        base = datetime.datetime(2026, 7, 7, 10, 0, tzinfo=datetime.timezone.utc)
+        common = {"updated_at": base.isoformat(), "return_to_body_pressure": 0.1}
+        projected = body_state.advance_tick(
+            body_state.normalize_state({**common, "remote_avatar_host": "front_door_stream"}),
+            loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
+            prefs={"cameras": [{"source": "front_door_stream"}]},
+            now=base + datetime.timedelta(minutes=10),
+        )
+        non_projected = body_state.advance_tick(
+            body_state.normalize_state({**common, "remote_avatar_host": "not_a_camera"}),
+            loop_name="watch",
+            trigger_kind=body_state.TriggerKind.SCHEDULED,
+            prefs={"cameras": [{"source": "front_door_stream"}]},
+            now=base + datetime.timedelta(minutes=10),
+        )
+
+        self.assertGreater(
+            projected["return_to_body_pressure"],
+            non_projected["return_to_body_pressure"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

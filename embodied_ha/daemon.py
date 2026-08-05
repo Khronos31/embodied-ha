@@ -20,11 +20,13 @@ import body_state
 import anomaly_state
 import desire_state
 import antigravity_setup
+import camera_history
 import claude_setup
 import codex_setup
 import harness_state
 import harness_status
 import invoke_failure
+from state_utils import load_prefs
 from instance_identity import MQTT_PREFIX
 from path_env import build_tools_path
 
@@ -191,10 +193,15 @@ def notify_loop_failing(state: dict) -> bool:
     翌日の人間の日次チェックまで誰も気づかなかった。その穴をここで塞ぐ。
     送信できたら True。
     """
+    latest_failure = invoke_failure.read_latest_failure(
+        _LOG_DIR,
+        source=(state.get("last_source") or "loop").strip(),
+        since=state.get("first_failed_at") or "",
+    )
     payload = json.dumps({
         "notification_id": _LOOP_FAILURE_NOTIFICATION_ID,
         "title": "Embodied HA の自律ループが止まっています",
-        "message": invoke_failure.alert_message(state),
+        "message": invoke_failure.alert_message(state, failure=latest_failure),
     }, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         f"{HA_URL.rstrip('/')}/services/persistent_notification/create",
@@ -312,6 +319,7 @@ def _save_desire_state(state, catalog=None):
 
 def tick_body_state(loop_name, trigger_reason="", active_desires=None, *, trigger_kind):
     kind = body_state.TriggerKind(trigger_kind)
+    prefs = load_prefs(os.environ.get("EHA_PREFS_FILE", ""))
     with _body_lock:
         updated = body_state.update_state(
             _BODY_STATE_FILE,
@@ -321,6 +329,7 @@ def tick_body_state(loop_name, trigger_reason="", active_desires=None, *, trigge
                 trigger_kind=kind,
                 trigger_reason=trigger_reason,
                 active_desires=active_desires,
+                prefs=prefs,
             ),
         )
     _log_body_state(
@@ -360,12 +369,14 @@ def tick_desires(body_state_snapshot=None, loop_name="loop", trigger_reason="", 
     """欲求状態を更新し、必要なら loop に流すプロンプト一覧を返す。"""
     try:
         catalog = _load_desire_catalog()
+        prefs = load_prefs(os.environ.get("EHA_PREFS_FILE", ""))
         with _desires_lock:
             state = _load_desire_state(catalog)
             updated = desire_state.decay_tick(
                 state,
                 catalog=catalog,
                 body_state=body_state_snapshot,
+                prefs=prefs,
                 loop_name=loop_name,
                 trigger_reason=trigger_reason,
             )
@@ -802,6 +813,8 @@ def start_runtime_threads() -> bool:
         threading.Thread(target=loop_scheduler, daemon=True).start()
         threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
         print("[daemon] audio daemon watchdog enabled", flush=True)
+        threading.Thread(target=camera_history.run_from_environment, daemon=True).start()
+        print("[daemon] camera history worker enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)
         _runtime_started.set()
         return True

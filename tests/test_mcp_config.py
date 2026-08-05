@@ -64,6 +64,43 @@ class HttpPostToggleTests(unittest.TestCase):
         self.assertNotIn("EHA_HTTP_ALLOW_POST", http_env)
 
 
+class CameraHistoryToggleTests(unittest.TestCase):
+    def _run_camera_config(self, prefs_content, tmp):
+        prefs_file = Path(tmp) / "preferences.json"
+        prefs_file.write_text(
+            json.dumps(prefs_content, ensure_ascii=False), encoding="utf-8"
+        )
+        out_path = Path(tmp) / "mcp_config.json"
+        subprocess.run(
+            [sys.executable, str(SCRIPT), str(out_path), "camera"],
+            env={
+                "EHA_PREFS_FILE": str(prefs_file),
+                "HA_URL": "http://example.invalid",
+                "PATH": "/usr/bin:/bin",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(out_path.read_text(encoding="utf-8"))
+
+    def test_enabled_injects_history_gate_into_camera_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._run_camera_config(
+                {"camera_history_enabled": True, "camera_history_minutes": 10},
+                tmp,
+            )
+        env = config["mcpServers"]["camera"]["env"]
+        self.assertEqual(env.get("EHA_CAMERA_HISTORY_ENABLED"), "1")
+
+    def test_disabled_omits_history_gate_from_camera_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._run_camera_config(
+                {"camera_history_enabled": False}, tmp
+            )
+        env = config["mcpServers"]["camera"]["env"]
+        self.assertNotIn("EHA_CAMERA_HISTORY_ENABLED", env)
+
 class McpConfigFormatTests(unittest.TestCase):
     def run_config(self, args, env=None):
         run_env = {"PATH": "/usr/bin:/bin", **(env or {})}
@@ -406,6 +443,9 @@ class ServerSpecsTests(unittest.TestCase):
 
     def test_server_specs_match_runtime_tools_when_http_post_enabled(self):
         self.assert_server_specs_match_runtime_tools({"http_post_enabled": True})
+
+    def test_server_specs_match_runtime_tools_when_camera_history_enabled(self):
+        self.assert_server_specs_match_runtime_tools({"camera_history_enabled": True})
 
 
 if __name__ == "__main__":

@@ -22,6 +22,19 @@ def load_memory_mcp_module():
 
 
 class StateUtilsTests(unittest.TestCase):
+    def test_camera_capability_supports_manifest_stream_and_legacy_entity(self):
+        prefs = {"cameras": [{"source": "living_stream", "label": "リビング"}]}
+
+        stream = state_utils.get_device_capabilities("living_stream", prefs)
+        legacy = state_utils.get_device_capabilities("camera.unregistered", prefs)
+        other = state_utils.get_device_capabilities("media_player.living", prefs)
+
+        self.assertTrue(stream["is_camera"])
+        self.assertEqual(stream["camera"]["label"], "リビング")
+        self.assertTrue(legacy["is_camera"])
+        self.assertIsNone(legacy["camera"])
+        self.assertFalse(other["is_camera"])
+
     def test_file_lock_blocks_same_path_but_not_other_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path_a = Path(tmpdir) / "state-a.json"

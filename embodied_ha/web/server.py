@@ -93,6 +93,8 @@ CHIVE_URL  = "https://sudachi.s3-ap-northeast-1.amazonaws.com/chive/chive-1.3-mc
 VOICEVOX_SONG_DIR = os.environ.get("EHA_VOICEVOX_CORE_DIR", "/data/voicevox_core")
 VOICEVOX_CORE_VERSION = "0.16.4"
 VOICEVOX_REQUIRED_FREE_BYTES = int(2.5 * 1024 * 1024 * 1024)
+CAMERA_HISTORY_MIN_MINUTES = 1
+CAMERA_HISTORY_MAX_MINUTES = 60
 
 _install_status: dict[str, dict] = {
     "chive": {"status": "idle", "message": ""},
@@ -100,6 +102,20 @@ _install_status: dict[str, dict] = {
 }
 _install_status_lock = threading.Lock()
 _install_locks = {"chive": threading.Lock(), "voicevox_song": threading.Lock()}
+
+
+def validate_camera_history_options(prefs: dict) -> None:
+    """Reject malformed camera history values before preferences are saved."""
+
+    if "camera_history_enabled" in prefs and type(prefs["camera_history_enabled"]) is not bool:
+        raise ValueError("camera_history_enabled は true または false で指定してください")
+    if "camera_history_minutes" not in prefs:
+        return
+    minutes = prefs["camera_history_minutes"]
+    if type(minutes) is not int or not CAMERA_HISTORY_MIN_MINUTES <= minutes <= CAMERA_HISTORY_MAX_MINUTES:
+        raise ValueError(
+            f"camera_history_minutes は{CAMERA_HISTORY_MIN_MINUTES}〜{CAMERA_HISTORY_MAX_MINUTES}の整数で指定してください"
+        )
 
 
 def _set_install_status(key: str, status: str, message: str) -> None:
@@ -2047,8 +2063,8 @@ class Handler(BaseHTTPRequestHandler):
                     break
             if not wav_path:
                 wav_path = os.path.join(WAV_DIR, f"{event_id}.wav")
-            wav_path = os.path.normpath(wav_path)
-            expected_prefix = os.path.normpath(WAV_DIR)
+            wav_path = os.path.realpath(wav_path)
+            expected_prefix = os.path.realpath(WAV_DIR)
             if not wav_path.startswith(expected_prefix + os.sep) and wav_path != expected_prefix:
                 self.send_error(403, "Forbidden")
                 return
@@ -2195,6 +2211,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "設定データが空か無効です"}, 400)
                     return
                 validate_tts_options(body.get("tts_options"))
+                validate_camera_history_options(body)
                 # 全置換すると、UIがフォームに持っていないキーが保存のたびに消える(findings F-21)。
                 # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。
                 prefs_store.update(

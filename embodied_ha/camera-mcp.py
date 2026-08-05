@@ -12,7 +12,9 @@ import json
 import os
 import subprocess
 import sys
+import time
 
+import camera_history
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
 from media_capture import fetch_frame
 from media_registry import resolve_media_item
@@ -59,6 +61,39 @@ TOOL_WATCH_MEDIA = {
     },
 }
 
+TOOL_REVIEW_CAMERA_HISTORY = {
+    "name": "review_camera_history",
+    "description": (
+        "現在侵入中のカメラに保存された直近の履歴画像を振り返る。ライブ映像ではなく、"
+        "過去に定期取得されたJPEG画像を最大3枚返す。カメラ履歴が有効で、電脳体として"
+        "そのカメラに侵入中のときだけ使用可能。カメラの指定やファイルパスの指定はできない。\n"
+        "start_seconds_ago は範囲の古い側、end_seconds_ago は新しい側を表し、"
+        "start_seconds_ago >= end_seconds_ago とする。"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "start_seconds_ago": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "何秒前から見るか（古い側）。デフォルトは現在付近。",
+            },
+            "end_seconds_ago": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "何秒前まで見るか（新しい側）。省略時はstart_seconds_agoと同じ。",
+            },
+            "max_frames": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": camera_history.MAX_RETURN_FRAMES,
+                "description": "返す画像の最大枚数。デフォルト1、最大3。",
+            },
+        },
+        "required": [],
+    },
+}
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -81,6 +116,22 @@ def _prefs_path() -> str:
 
 def _load_prefs() -> dict:
     return load_prefs(_prefs_path())
+
+
+def _env_enabled(name: str) -> bool:
+    return _clean(os.environ.get(name)).lower() in {"1", "true", "yes", "on"}
+
+
+def _history_tool_enabled() -> bool:
+    enabled, _ = camera_history.history_settings(_load_prefs())
+    return _env_enabled("EHA_CAMERA_HISTORY_ENABLED") and enabled
+
+
+def _available_tools() -> list[dict]:
+    tools = [TOOL_USE_DEVICE_CAMERA, TOOL_WATCH_MEDIA]
+    if _history_tool_enabled():
+        tools.append(TOOL_REVIEW_CAMERA_HISTORY)
+    return tools
 
 
 def _load_body_location() -> dict:
@@ -263,6 +314,131 @@ def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id
     }})
 
 
+def _history_error(req_id, message: str) -> None:
+    send({
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "result": {
+            "content": [{"type": "text", "text": message}],
+            "isError": True,
+        },
+    })
+
+
+def _bounded_history_arguments(arguments: dict, retention_minutes: int) -> tuple[int, int, int]:
+    try:
+        start = int(arguments.get("start_seconds_ago", 0))
+        end_raw = arguments.get("end_seconds_ago")
+        end = start if end_raw is None else int(end_raw)
+        max_frames = int(arguments.get("max_frames", 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("履歴の時間と枚数は整数で指定してください") from exc
+    if start < 0 or end < 0:
+        raise ValueError("履歴の時間は0秒以上で指定してください")
+    if start < end:
+        raise ValueError("start_seconds_ago は end_seconds_ago 以上にしてください")
+    if start > retention_minutes * 60:
+        raise ValueError(f"保存期間（{retention_minutes}分）より前の履歴は取得できません")
+    if not 1 <= max_frames <= camera_history.MAX_RETURN_FRAMES:
+        raise ValueError(f"max_frames は1〜{camera_history.MAX_RETURN_FRAMES}で指定してください")
+    return start, end, max_frames
+
+
+def _handle_review_camera_history(arguments: dict, req_id) -> None:
+    if not _history_tool_enabled():
+        _history_error(req_id, "カメラ履歴は無効です。高度な設定で有効にしてください。")
+        return
+
+    _, current_entity, camera = _load_current_camera()
+    if not current_entity:
+        _history_error(req_id, "物理体モードではカメラ履歴を使用できません。カメラデバイスに侵入してください。")
+        return
+    if not camera:
+        _history_error(req_id, f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")
+        return
+
+    source = _camera_source_for_capture(camera, current_entity)
+    if not source:
+        _history_error(req_id, "現在侵入中のカメラソースを解決できません。")
+        return
+    _, retention_minutes = camera_history.history_settings(_load_prefs())
+    try:
+        start, end, max_frames = _bounded_history_arguments(arguments, retention_minutes)
+        requested_at = time.time()
+        records = camera_history.select_frames(
+            os.environ.get("EHA_CAMERA_HISTORY_DIR", camera_history.DEFAULT_HISTORY_ROOT),
+            source,
+            start_seconds_ago=start,
+            end_seconds_ago=end,
+            max_frames=max_frames,
+            retention_minutes=retention_minutes,
+            now=requested_at,
+        )
+    except (TypeError, ValueError) as exc:
+        _history_error(req_id, str(exc))
+        return
+
+    frames: list[tuple[camera_history.FrameRecord, bytes]] = []
+    for record in records:
+        try:
+            frames.append((record, camera_history.read_frame(record)))
+        except OSError:
+            continue
+    if not frames:
+        _history_error(req_id, "指定した時刻付近に利用できるカメラ履歴がありません。")
+        return
+
+    context = camera_context(source)
+    try:
+        apply_action_to_body_state(
+            action_mode=context.get("action_mode"),
+            action_cost=context.get("action_cost"),
+            target_room=context.get("source_room"),
+            target_host=context.get("target_host"),
+            move_cost=context.get("move_cost"),
+        )
+    except Exception:
+        pass
+
+    frame_contexts = [
+        {
+            "captured_at": datetime.datetime.fromtimestamp(record.captured_at).astimezone().isoformat(timespec="milliseconds"),
+            "seconds_ago": max(0, round(requested_at - record.captured_at, 3)),
+        }
+        for record, _ in frames
+    ]
+    history_context = {
+        "source": source,
+        "historical_not_live": True,
+        "requested_at": datetime.datetime.fromtimestamp(requested_at).astimezone().isoformat(timespec="seconds"),
+        "requested_range_seconds_ago": {"start": start, "end": end},
+        "retention_minutes": retention_minutes,
+        "frames": frame_contexts,
+    }
+    content = [
+        {
+            "type": "text",
+            "text": json.dumps({"camera_history_context": history_context}, ensure_ascii=False),
+        }
+    ]
+    for frame_context, (_, frame) in zip(frame_contexts, frames):
+        content.extend([
+            {
+                "type": "text",
+                "text": (
+                    "これはライブ映像ではなく、過去のカメラ履歴です。"
+                    f" 撮影時刻: {frame_context['captured_at']}"
+                ),
+            },
+            {
+                "type": "image",
+                "data": base64.b64encode(frame).decode(),
+                "mimeType": "image/jpeg",
+            },
+        ])
+    send({"jsonrpc": "2.0", "id": req_id, "result": {"content": content}})
+
+
 def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str, req_id):
     if not _camera_supports_ptz(camera, current_entity):
         send({"jsonrpc": "2.0", "id": req_id, "result": {
@@ -304,20 +480,23 @@ def main():
             send({"jsonrpc": "2.0", "id": id_, "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "camera-mcp", "version": "3.0"}
+                "serverInfo": {"name": "camera-mcp", "version": "3.1"}
             }})
 
         elif method == "notifications/initialized":
             pass
 
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": [TOOL_USE_DEVICE_CAMERA, TOOL_WATCH_MEDIA]}})
+            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": _available_tools()}})
 
         elif method == "tools/call":
             tool_name = req["params"]["name"]
             call_args = req["params"].get("arguments", {})
             if tool_name == "watch_media":
                 _handle_watch_media(call_args.get("source"), args.ha_url, args.go2rtc_url, id_)
+                continue
+            if tool_name == "review_camera_history":
+                _handle_review_camera_history(call_args, id_)
                 continue
             if tool_name != "use_device_camera":
                 send({"jsonrpc": "2.0", "id": id_, "result": {

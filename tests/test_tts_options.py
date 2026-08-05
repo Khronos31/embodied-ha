@@ -82,6 +82,28 @@ class PreferencesEndpointTests(unittest.TestCase):
             self.assertEqual(handler.send_json.call_args.args[1], 400)
             self.assertEqual(json.loads(prefs_file.read_text()), {"keep": True})
 
+    def test_camera_history_options_are_validated_before_save(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefs_file = Path(temp) / "preferences.json"
+            prefs_file.write_text('{"keep": true}', encoding="utf-8")
+            valid = self._handler({
+                "camera_history_enabled": True,
+                "camera_history_minutes": 15,
+            })
+            with mock.patch.object(server, "PREFS_FILE", str(prefs_file)):
+                valid.do_PUT()
+            self.assertEqual(valid.send_json.call_args.args[0], {"ok": True})
+
+            for invalid_value in (0, 61, True, "10"):
+                with self.subTest(value=invalid_value):
+                    invalid = self._handler({
+                        "camera_history_enabled": True,
+                        "camera_history_minutes": invalid_value,
+                    })
+                    with mock.patch.object(server, "PREFS_FILE", str(prefs_file)):
+                        invalid.do_PUT()
+                    self.assertEqual(invalid.send_json.call_args.args[1], 400)
+
 
 class VoicevoxSpeakersTests(unittest.TestCase):
     def test_normalizes_speaker_styles(self):

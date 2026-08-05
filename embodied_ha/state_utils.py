@@ -14,6 +14,7 @@ import fcntl
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -112,7 +113,7 @@ def load_prefs(prefs_file: str) -> dict[str, Any]:
 
 
 
-def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[str, Any]:
+def get_device_capabilities(current_entity: str, prefs: Mapping[str, Any]) -> dict[str, Any]:
     """Return device capability metadata for ``current_entity``.
 
     The result includes boolean capability flags and the matching manifest
@@ -152,7 +153,9 @@ def get_device_capabilities(current_entity: str, prefs: dict[str, Any]) -> dict[
     return {
         "is_mic": mic_entry is not None,
         "is_speaker": speaker_entry is not None,
-        "is_camera": camera_entry is not None,
+        # Keep the legacy HA entity fallback while also recognizing configured
+        # go2rtc stream names, which do not have a ``camera.`` prefix.
+        "is_camera": camera_entry is not None or entity.startswith("camera."),
         "mic_source": clean(mic_entry.get("source")) if mic_entry else None,
         "mic_label": clean(mic_entry.get("label")) if mic_entry else None,
         "speaker": speaker_entry,

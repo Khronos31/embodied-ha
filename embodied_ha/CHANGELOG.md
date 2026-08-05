@@ -6,6 +6,53 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.6] - 2026-08-05
+
+### Added / 追加
+
+- Home Assistantカメラとgo2rtc映像ソースの静止画を、既定OFF・指定した保持時間で一時保存する
+  カメラ履歴を追加しました。履歴は再起動で消える専用の一時領域に置かれ、エージェントは現在
+  入っているカメラからだけ、専用MCPを明示的に呼び出して参照できます。高度な設定から機能と
+  保持時間（1〜60分）を設定できます。
+  Added opt-in rolling camera history for configured Home Assistant cameras and go2rtc sources. Frames are
+  kept in a restart-ephemeral cache for the configured 1–60 minute window, and the agent can review them only
+  through an explicit MCP call while inhabiting that camera. The feature is disabled by default.
+
+### Changed / 変更
+
+- カメラ投射中の毎ターン画像注入と、observe時の追加LLMによる見守り要約を廃止しました。
+  必要なときに現在映像または履歴を明示的に確認する方式へ変更し、トークン消費を抑えます。
+  Removed passive per-turn image injection during camera projection and the extra observe-mode watch-summary
+  LLM call. Camera evidence is now acquired explicitly when needed to reduce token use.
+- `camera.*`以外の設定済み映像ソースもカメラ投射として扱い、身体位置・欲求・会話・ループ間で
+  同じデバイス能力判定を使用するようにしました。
+  Treats configured non-`camera.*` video sources as camera projections and uses the same capability lookup
+  across body location, desires, chat, and autonomous loops.
+
+### Fixed / 修正
+
+- 成功したカメラ取得だけを視覚的主張の根拠として扱います。履歴設定を読めない場合は取得を停止して
+  専用キャッシュを消去し、起動時にも前回の一時履歴を引き継ぎません。
+  Only successful camera tool results now ground visual claims. Invalid history settings fail closed and clear
+  the dedicated cache, which is also cleared at startup.
+- 連続失敗の通知、スピーカー再生前の音声ファイル検証、WAVパスの境界検査、センサー設定読込時の
+  ファイルクローズを修正しました。
+  Fixed consecutive-failure notifications, audio validation before speaker playback, WAV path boundary checks,
+  and file closing while rendering sensor configuration.
+
+## [2.1.5] - 2026-08-02
+
+### Fixed / 修正
+
+- Antigravityで日誌を生成すると、CLIが正常終了しても空の応答になり、同じ日の日誌を繰り返し
+  試してしまう問題を修正しました。日誌ではCLIの構造化出力を使い、対応前のCLIが選ばれている
+  既存個体は、認証を保持したまま起動時に対応版へ更新します。更新に失敗した場合は旧CLIへ戻し、
+  不完全な日誌や完了markerを保存しません。
+  Fixed Antigravity daybook generation repeatedly retrying the same day after the CLI exited successfully
+  with an empty response. Daybooks now use the CLI's structured output, and existing instances with an
+  older selected CLI update to a compatible version at startup without changing authentication. Failed
+  updates restore the previous CLI and do not save partial daybooks or advance the completion marker.
+
 ## [2.1.3] - 2026-08-02
 
 ### Fixed / 修正

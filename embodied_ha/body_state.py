@@ -24,6 +24,7 @@ from typing import Any, Mapping
 from state_utils import clamp as _clamp
 from state_utils import clean as _clean
 from state_utils import coerce_float as _coerce_float
+from state_utils import get_device_capabilities as _get_device_capabilities
 from state_utils import now as _now
 from state_utils import parse_ts as _parse_ts
 
@@ -237,6 +238,7 @@ def advance_tick(
     trigger_kind: TriggerKind | str,
     trigger_reason: str = "",
     active_desires: list[str] | None = None,
+    prefs: Mapping[str, Any] | None = None,
     now: _dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Update the body state for a scheduler tick.
@@ -262,7 +264,7 @@ def advance_tick(
     embodiment_tension = current["embodiment_tension"]
     return_to_body_pressure = current["return_to_body_pressure"]
     remote_host = _clean(current.get("remote_avatar_host", ""))
-    projecting_camera = remote_host.startswith("camera.")
+    projecting_camera = bool(_get_device_capabilities(remote_host, prefs or {}).get("is_camera"))
 
     curiosity += 0.01 + min(0.06, elapsed_hours * 0.012) + min(0.03, desire_count * 0.004)
     energy += (0.66 - energy) * min(0.18, 0.04 + elapsed_hours * 0.02)

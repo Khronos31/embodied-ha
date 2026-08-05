@@ -24,8 +24,6 @@ import chat_invoke  # noqa: E402
 import chat_postprocess  # noqa: E402
 import chat_prefs_update  # noqa: E402
 import eha_config  # noqa: E402
-from media_capture import fetch_frame  # noqa: E402
-from observe_context import build_projected_camera_blocks  # noqa: E402
 from response_parse import chat_extract  # noqa: E402
 
 
@@ -119,31 +117,6 @@ def _build_features_presented(script_dir):
     return _run_subprocess_text(["python3", os.path.join(script_dir, "feature-flags.py"), "get"], fallback="")
 
 
-def _build_projected_camera_blocks(cfg, prefs_file, projected_camera_source):
-    """投射中カメラの画像content blockを構築する（loop.sh:499-509のobserveモードと同一パターン）。
-
-    失敗しても呼び出し側へは伝播せず、stderrへログして空リストを返す
-    （loop.sh側のtry/exceptと同一契約）。
-    """
-    try:
-        with open(prefs_file, encoding="utf-8") as fh:
-            prefs = json.load(fh)
-    except Exception:
-        prefs = {}
-    try:
-        return build_projected_camera_blocks(
-            projected_camera_source or "",
-            prefs,
-            fetch_frame=fetch_frame,
-            ha_url=cfg.get("HA_URL", ""),
-            go2rtc_url=cfg.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
-            token=cfg.get("SUPERVISOR_TOKEN", ""),
-        )
-    except Exception as e:
-        print(f"[chat] projected camera fetch failed: {e}", file=sys.stderr)
-        return []
-
-
 def run(environ=None):
     environ = dict(environ if environ is not None else os.environ)
     cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
@@ -200,14 +173,8 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     sensors = _build_sensors(SCRIPT_DIR)
     body_location_context = _build_body_location_context(SCRIPT_DIR)
 
-    # 投射カメラの画像注入。chat.sh旧実装(PROJECTED_CAMERA_B64)は取得のみで
-    # 実際のcontent block注入コードが無く機能していなかった(2026-06-28導入時
-    # から一度も配線されず、855cb28のshellcheck巻き添え削除でloop.sh側も
-    # 一時失われた経緯あり)。loop.shのobserveモードがv1.26.4で正式復活させた
-    # observe_context.build_projected_camera_blocksと同じ仕組みをchat.pyで
-    # 正しく実装する(chat.sh 本体の修正は別スコープ)。
-    projected_camera_source = chat_context.resolve_projected_camera_entity(body_location_file)
-    projected_camera_blocks = _build_projected_camera_blocks(cfg, prefs_file, projected_camera_source)
+    projected_camera_source = chat_context.resolve_projected_camera_entity(body_location_file, prefs_file)
+    camera_history_enabled, camera_history_minutes = chat_invoke.read_camera_history_settings(prefs_file)
 
     features_md_path = os.path.join(SCRIPT_DIR, "features.md")
     features_md = ""
@@ -251,6 +218,8 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
         user_room_speaker=user_room_speaker,
         recent_auditory_input=recent_auditory_input,
         user_msg=user_msg,
+        camera_history_enabled=camera_history_enabled,
+        camera_history_minutes=camera_history_minutes,
     )
     claude_env = chat_invoke.build_claude_env(cfg)
     cwd = (
@@ -261,7 +230,6 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     response_text = chat_invoke.invoke_chat_claude(
         chat_source=chat_source,
         prompt=prompt,
-        prefix_blocks=projected_camera_blocks,
         script_dir=SCRIPT_DIR,
         claude_env=claude_env,
         cwd=cwd,

@@ -14,7 +14,7 @@ from room_graph import (
     room_graph_path as room_graph_path,  # noqa: F401
     rooms,
 )
-from state_utils import clean, read_json
+from state_utils import clean, get_device_capabilities, load_prefs, read_json
 
 DEFAULT_BODY_LOCATION_FILE = "/config/embodied-ha/body_location.json"
 DEFAULT_BODY_STATE_FILE = "/config/embodied-ha/body_state.json"
@@ -152,6 +152,7 @@ def format_body_context(limit: int = 5) -> str:
     current = state["current_room"]
     projected = state.get("projected_room")
     current_entity = clean(state.get("current_entity"))
+    prefs = load_prefs(os.environ.get("EHA_PREFS_FILE", ""))
     remote_avatar_host = clean(body_state.get("remote_avatar_host"))
     body_room_name = room_label(current, graph)
     projected_room_name = room_label(projected, graph) if projected else body_room_name
@@ -159,7 +160,7 @@ def format_body_context(limit: int = 5) -> str:
 
     if projected and current_entity:
         display_entity = current_entity or remote_avatar_host
-        if current_entity.startswith("camera."):
+        if get_device_capabilities(current_entity, prefs).get("is_camera"):
             lines.append(f"{projected_room_name} の `{display_entity}` から見ている（電脳体）。身体は {body_room_name} にある。")
         else:
             lines.append(f"`{display_entity}` の中にいる（電脳体）。身体は {body_room_name} にある。")

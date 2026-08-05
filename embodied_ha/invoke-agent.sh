@@ -248,6 +248,7 @@ extract_result_json() {
 import json, re, sys
 raw = sys.stdin.read().strip()
 result = ""
+recognized_envelope = False
 for line in raw.splitlines():
     line = line.strip()
     if not line:
@@ -256,13 +257,36 @@ for line in raw.splitlines():
         event = json.loads(line)
     except Exception:
         continue
-    if isinstance(event, dict) and event.get("type") == "result":
+    is_agy_envelope = (
+        isinstance(event, dict)
+        and "conversation_id" in event
+        and "status" in event
+        and "response" in event
+    )
+    if is_agy_envelope and event.get("status") != "SUCCESS":
+        detail = event.get("error") or event.get("status") or "unknown error"
+        print(f"invoke-agent.sh: agy structured output failed: {detail}", file=sys.stderr)
+        sys.exit(1)
+    if isinstance(event, dict) and event.get("structured_output") is not None:
+        # Claude stream-json and Antigravity 1.1.8+ JSON output both expose
+        # the schema-validated payload here. The Antigravity JSON envelope has
+        # no `type: result`, so key off the payload itself first.
+        recognized_envelope = True
         structured = event.get("structured_output")
-        result = json.dumps(structured, ensure_ascii=False) if structured is not None else event.get("result", "")
+        result = json.dumps(structured, ensure_ascii=False)
+    elif isinstance(event, dict) and event.get("type") == "result":
+        recognized_envelope = True
+        result = event.get("result", "")
+    elif is_agy_envelope:
+        # Antigravity native JSON without a structured payload. Preserve its
+        # final text response, but do not mistake the outer metadata envelope
+        # for the requested JSON when the response is empty.
+        recognized_envelope = True
+        result = event.get("response", "")
     elif isinstance(event, str):
         # agy may JSON-encode its schema-shaped final response as a string.
         result = event
-if not result:
+if not result and not recognized_envelope:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     result = m.group(0) if m else raw
 print(result, end="")
@@ -838,6 +862,19 @@ run_agy() {
   [[ -z "$mcp_config" ]] || die "--mcp-config is not supported for agy in invoke-agent.sh yet"
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
+  local structured_args=()
+  # Antigravity 1.1.8 added native structured output. Use it for the F-51
+  # daybook path whose exact schema is live-verified. Current loop schemas use
+  # nullable type unions that Antigravity 1.1.9 rejects before model execution,
+  # so other sites deliberately retain the prompt-schema fallback.
+  if [[ "$agent_site" == "daybook" && -n "$json_schema" ]]; then
+    local agy_help
+    agy_help="$("$bin" --help 2>&1 || true)"
+    if grep -q -- '--output-format' <<< "$agy_help" \
+        && grep -q -- '--json-schema' <<< "$agy_help"; then
+      structured_args=(--output-format json --json-schema "$json_schema")
+    fi
+  fi
   ensure_agy_native_safety_policy "$agy_home"
   local site_dir=""
   local project_arg=()
@@ -914,7 +951,7 @@ run_agy() {
     if [[ -s "$project_id_file" ]]; then
       project_id="$(head -n 1 "$project_id_file" | tr -d '[:space:]')"
       project_arg=(--project "$project_id")
-      stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" "${project_arg[@]}" --model "$model" -p "$full_prompt")"
+      stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" "${project_arg[@]}" --model "$model" "${structured_args[@]}" -p "$full_prompt")"
     else
       local projects_dir="$agy_home/.gemini/config/projects"
       mkdir -p "$projects_dir"
@@ -927,10 +964,10 @@ run_agy() {
           flock -x 200
           if [[ -s "$project_id_file" ]]; then
             project_id="$(head -n 1 "$project_id_file" | tr -d '[:space:]')"
-            cd "$site_dir" && HOME="$agy_home" "$bin" --project "$project_id" --model "$model" -p "$full_prompt"
+            cd "$site_dir" && HOME="$agy_home" "$bin" --project "$project_id" --model "$model" "${structured_args[@]}" -p "$full_prompt"
           else
             find "$projects_dir" -maxdepth 1 -type f -printf '%f\n' | sort > "$before_file"
-            cd "$site_dir" && HOME="$agy_home" "$bin" --new-project --model "$model" -p "$full_prompt"
+            cd "$site_dir" && HOME="$agy_home" "$bin" --new-project --model "$model" "${structured_args[@]}" -p "$full_prompt"
             project_id="$(detect_new_agy_project_id "$projects_dir" "$before_file" "$site_dir")"
             printf '%s\n' "$project_id" > "$project_id_file.tmp.$$"
             mv "$project_id_file.tmp.$$" "$project_id_file"
@@ -939,9 +976,9 @@ run_agy() {
       )"
     fi
   elif [[ -n "$site_dir" ]]; then
-    stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" --model "$model" -p "$full_prompt")"
+    stdout="$(cd "$site_dir" && HOME="$agy_home" "$bin" --model "$model" "${structured_args[@]}" -p "$full_prompt")"
   else
-    stdout="$(HOME="$agy_home" "$bin" --model "$model" -p "$full_prompt")"
+    stdout="$(HOME="$agy_home" "$bin" --model "$model" "${structured_args[@]}" -p "$full_prompt")"
   fi
   printf '%s' "$stdout" | extract_result_json
 }

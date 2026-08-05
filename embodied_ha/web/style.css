@@ -940,8 +940,11 @@ input:checked + .slider:before {
 }
 
 .form-group input[readonly],
-.form-input[readonly] {
+.form-input[readonly],
+.form-group input:disabled,
+.form-input:disabled {
     background-color: var(--claude-bg-input-disabled);
+    opacity: 0.6;
     cursor: not-allowed;
 }
 
