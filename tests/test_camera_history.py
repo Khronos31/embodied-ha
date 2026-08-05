@@ -1,8 +1,10 @@
+import io
 import json
 import os
 import tempfile
 import threading
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -217,7 +219,219 @@ class CameraHistoryWorkerTests(unittest.TestCase):
             self.assertTrue(
                 all(item[1]["ha_url"] == "http://ha/api" for item in fetched)
             )
+            self.assertTrue(
+                all(item[1]["timeout_seconds"] == 4 for item in fetched)
+            )
             self.assertEqual(len(list(history_root.rglob("*.jpg"))), 2)
+
+    def test_retry_recovers_one_fetch_interruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            self._write_prefs(
+                prefs_path,
+                {"camera_history_enabled": True, "cameras": [{"source": "study"}]},
+            )
+            responses = iter([None, JPEG_A])
+            fetched = []
+
+            def fetch(source, **kwargs):
+                fetched.append((source, kwargs))
+                return next(responses)
+
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(prefs_path),
+                history_root=str(history_root),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=fetch,
+                retry_delay=0,
+            )
+
+            result = worker.run_cycle(now=1000.0)
+
+            self.assertEqual(result["captured"], 1)
+            self.assertEqual(result["failed"], 0)
+            self.assertEqual(len(fetched), 2)
+            self.assertEqual(result["failure_events"], [])
+            self.assertEqual(
+                camera_history.list_frames(history_root, "study")[0].captured_at,
+                1000.0,
+            )
+
+    def test_runtime_capture_timestamp_is_retrieval_completion_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(Path(tmp) / "unused.json"),
+                history_root=str(Path(tmp) / "history"),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=lambda source, **kwargs: JPEG_A,
+                retry_delay=0,
+            )
+
+            with mock.patch.object(camera_history.time, "time", return_value=1002.5):
+                result = worker._capture_source(
+                    "study",
+                    None,
+                    allow_retry=True,
+                )
+
+            self.assertEqual(result.status, "captured")
+            self.assertEqual(result.captured_at, 1002.5)
+
+    def test_fetch_failures_are_counted_and_recovery_hides_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            source = "camera.secret_room"
+            self._write_prefs(
+                prefs_path,
+                {"camera_history_enabled": True, "cameras": [{"source": source}]},
+            )
+            responses = iter([None, None, None, None, JPEG_A])
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(prefs_path),
+                history_root=str(history_root),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=lambda _source, **kwargs: next(responses),
+                retry_delay=0,
+            )
+
+            first = worker.run_cycle(now=1000.0)
+            second = worker.run_cycle(now=1010.0)
+            recovered = worker.run_cycle(now=1020.0)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                worker._log_cycle_events(first)
+                worker._log_cycle_events(second)
+                worker._log_cycle_events(recovered)
+
+            self.assertEqual(first["failure_events"][0]["consecutive"], 1)
+            self.assertEqual(first["failure_events"][0]["attempts"], 2)
+            self.assertEqual(second["failure_events"][0]["consecutive"], 2)
+            self.assertEqual(
+                recovered["recovery_events"],
+                [
+                    {
+                        "source_index": 1,
+                        "reason": "fetch_unavailable",
+                        "previous_consecutive": 2,
+                    }
+                ],
+            )
+            self.assertIn("source_index=1", output.getvalue())
+            self.assertIn("previous_consecutive=2", output.getvalue())
+            self.assertNotIn(source, output.getvalue())
+
+    def test_invalid_frame_and_storage_failure_are_not_retried(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            self._write_prefs(
+                prefs_path,
+                {"camera_history_enabled": True, "cameras": [{"source": "study"}]},
+            )
+            fetched = []
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(prefs_path),
+                history_root=str(history_root),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=lambda source, **kwargs: fetched.append(source) or b"not-jpeg",
+                retry_delay=0,
+            )
+
+            invalid = worker.run_cycle(now=1000.0)
+            self.assertEqual(len(fetched), 1)
+            self.assertEqual(invalid["failure_events"][0]["reason"], "invalid_frame")
+
+            fetched.clear()
+            worker.fetch = lambda source, **kwargs: fetched.append(source) or JPEG_A
+            with mock.patch.object(camera_history, "store_frame", return_value=None):
+                storage = worker.run_cycle(now=1010.0)
+            self.assertEqual(len(fetched), 1)
+            self.assertEqual(storage["failure_events"][0]["reason"], "store_failed")
+
+    def test_more_than_four_sources_do_not_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            sources = [f"camera-{index}" for index in range(5)]
+            self._write_prefs(
+                prefs_path,
+                {
+                    "camera_history_enabled": True,
+                    "cameras": [{"source": source} for source in sources],
+                },
+            )
+            fetched = []
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(prefs_path),
+                history_root=str(history_root),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=lambda source, **kwargs: fetched.append(source) or None,
+                retry_delay=0,
+            )
+
+            result = worker.run_cycle(now=1000.0)
+
+            self.assertEqual(result["failed"], 5)
+            self.assertEqual(sorted(fetched), sorted(sources))
+            self.assertTrue(
+                all(event["attempts"] == 1 for event in result["failure_events"])
+            )
+
+    def test_tracking_reset_is_reported_on_disable_and_source_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_path = Path(tmp) / "preferences.json"
+            history_root = Path(tmp) / "history"
+            self._write_prefs(
+                prefs_path,
+                {"camera_history_enabled": True, "cameras": [{"source": "one"}]},
+            )
+            worker = camera_history.CameraHistoryWorker(
+                prefs_file=str(prefs_path),
+                history_root=str(history_root),
+                ha_url="http://ha/api",
+                go2rtc_url="http://go2rtc",
+                token="token",
+                fetch=lambda source, **kwargs: None,
+                retry_delay=0,
+            )
+
+            initial = worker.run_cycle(now=1000.0)
+            self.assertEqual(initial["tracking_reset"], "worker_start")
+            self._write_prefs(
+                prefs_path,
+                {"camera_history_enabled": True, "cameras": [{"source": "two"}]},
+            )
+            changed = worker.run_cycle(now=1010.0)
+            self.assertEqual(changed["tracking_reset"], "source_set_changed")
+            self._write_prefs(prefs_path, {"camera_history_enabled": False})
+            disabled = worker.run_cycle(now=1020.0)
+            self.assertEqual(disabled["tracking_reset"], "disabled")
+
+    def test_failure_logging_is_rate_limited_after_gate_boundary(self):
+        self.assertTrue(
+            all(
+                camera_history.CameraHistoryWorker._should_log_failure(count)
+                for count in range(1, 7)
+            )
+        )
+        self.assertFalse(
+            camera_history.CameraHistoryWorker._should_log_failure(7)
+        )
+        self.assertTrue(
+            camera_history.CameraHistoryWorker._should_log_failure(30)
+        )
 
     def test_unreadable_preferences_clear_existing_history_and_skip_capture(self):
         with tempfile.TemporaryDirectory() as tmp:

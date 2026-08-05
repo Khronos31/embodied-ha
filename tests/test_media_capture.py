@@ -52,6 +52,21 @@ class MediaCaptureTests(unittest.TestCase):
         cmd = run_mock.call_args.args[0]
         self.assertEqual(cmd, ["curl", "-sf", "--max-time", "8", "http://homeassistant.local:1984/api/frame.jpeg?src=capture_tv"])
 
+    def test_fetch_frame_accepts_bounded_timeout_override(self):
+        with mock.patch.object(
+            self.media_capture.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=b"x" * 120),
+        ) as run_mock:
+            self.media_capture.fetch_frame(
+                "capture_tv",
+                ha_url="http://supervisor/core/api",
+                go2rtc_url="http://homeassistant.local:1984",
+                token="token123",
+                timeout_seconds=4,
+            )
+        self.assertEqual(run_mock.call_args.args[0][2:4], ["--max-time", "4"])
+
 
 if __name__ == "__main__":
     unittest.main()

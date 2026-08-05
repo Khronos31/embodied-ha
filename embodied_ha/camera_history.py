@@ -37,6 +37,12 @@ MAX_FRAMES_PER_CAMERA = math.ceil(
 ) + 2
 MAX_RETURN_FRAMES = 3
 MAX_STORED_FRAME_BYTES = 16 * 1024 * 1024
+HISTORY_FETCH_TIMEOUT_SECONDS = 4
+HISTORY_MAX_FETCH_ATTEMPTS = 2
+HISTORY_RETRY_DELAY_SECONDS = 0.25
+MAX_CAPTURE_WORKERS = 4
+HISTORY_RETRY_MAX_SOURCES = MAX_CAPTURE_WORKERS
+FAILURE_LOG_EVERY = 30
 _CAMERA_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
 _FRAME_NAME_RE = re.compile(r"^(\d{1,20})\.jpg$")
 
@@ -46,6 +52,13 @@ class FrameRecord:
     path: Path
     captured_at: float
     size: int
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    status: str
+    attempts: int
+    captured_at: float | None = None
 
 
 def _clean(value: Any) -> str:
@@ -422,6 +435,9 @@ class CameraHistoryWorker:
         fetch: Callable[..., bytes | None] = fetch_frame,
         capture_interval: float = CAPTURE_INTERVAL_SECONDS,
         max_total_bytes: int = MAX_TOTAL_BYTES,
+        fetch_timeout: int = HISTORY_FETCH_TIMEOUT_SECONDS,
+        retry_delay: float = HISTORY_RETRY_DELAY_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.prefs_file = prefs_file
         self.history_root = history_root
@@ -431,32 +447,139 @@ class CameraHistoryWorker:
         self.fetch = fetch
         self.capture_interval = max(1.0, float(capture_interval))
         self.max_total_bytes = max(0, int(max_total_bytes))
+        self.fetch_timeout = max(1, int(fetch_timeout))
+        self.retry_delay = max(0.0, float(retry_delay))
+        self.sleep = sleep
         self._last_enabled: bool | None = None
         self._last_failures: tuple[str, ...] = ()
+        self._tracked_sources: tuple[str, ...] | None = None
+        self._failure_states: dict[str, tuple[str, int]] = {}
+        self._pending_reset_reason: str | None = "worker_start"
 
-    def _capture_source(self, source: str, captured_at: float) -> bool:
-        try:
-            frame = self.fetch(
-                source,
-                ha_url=self.ha_url,
-                go2rtc_url=self.go2rtc_url,
-                token=self.token,
-            )
-        except Exception:
-            return False
+    def _reset_failure_tracking(self, reason: str) -> None:
+        if self._failure_states or self._tracked_sources is not None:
+            self._pending_reset_reason = reason
+        self._failure_states = {}
+        self._tracked_sources = None
+        self._last_failures = ()
+
+    def _capture_source(
+        self,
+        source: str,
+        captured_at: float | None,
+        *,
+        allow_retry: bool,
+    ) -> CaptureResult:
+        attempts_allowed = HISTORY_MAX_FETCH_ATTEMPTS if allow_retry else 1
+        frame: bytes | None = None
+        attempt = 0
+        for attempt in range(1, attempts_allowed + 1):
+            try:
+                frame = self.fetch(
+                    source,
+                    ha_url=self.ha_url,
+                    go2rtc_url=self.go2rtc_url,
+                    token=self.token,
+                    timeout_seconds=self.fetch_timeout,
+                )
+            except Exception:
+                return CaptureResult("fetch_exception", attempt)
+            if frame:
+                break
+            if attempt < attempts_allowed and self.retry_delay:
+                self.sleep(self.retry_delay)
         if not frame:
-            return False
-        return (
-            store_frame(
-                self.history_root,
-                source,
-                frame,
-                captured_at=captured_at,
-            )
-            is not None
+            return CaptureResult("fetch_unavailable", attempts_allowed)
+        if not _looks_like_jpeg(frame):
+            return CaptureResult("invalid_frame", attempt)
+
+        # captured_at is retrieval completion time in production. Tests may pass
+        # a deterministic cycle time explicitly.
+        completed_at = time.time() if captured_at is None else captured_at
+        record = store_frame(
+            self.history_root,
+            source,
+            frame,
+            captured_at=completed_at,
         )
+        if record is None:
+            return CaptureResult("store_failed", attempt)
+        return CaptureResult("captured", attempt, record.captured_at)
+
+    def _update_failure_tracking(
+        self,
+        sources: list[str],
+        capture_results: dict[str, CaptureResult],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        source_tuple = tuple(sources)
+        if self._tracked_sources is not None and self._tracked_sources != source_tuple:
+            self._reset_failure_tracking("source_set_changed")
+        self._tracked_sources = source_tuple
+
+        failures: list[dict[str, Any]] = []
+        recoveries: list[dict[str, Any]] = []
+        for index, source in enumerate(sources, start=1):
+            capture = capture_results[source]
+            previous = self._failure_states.get(source)
+            if capture.status == "captured":
+                if previous:
+                    recoveries.append(
+                        {
+                            "source_index": index,
+                            "reason": previous[0],
+                            "previous_consecutive": previous[1],
+                        }
+                    )
+                    self._failure_states.pop(source, None)
+                continue
+
+            consecutive = previous[1] + 1 if previous and previous[0] == capture.status else 1
+            self._failure_states[source] = (capture.status, consecutive)
+            failures.append(
+                {
+                    "source_index": index,
+                    "reason": capture.status,
+                    "consecutive": consecutive,
+                    "attempts": capture.attempts,
+                }
+            )
+        return failures, recoveries
+
+    @staticmethod
+    def _should_log_failure(consecutive: int) -> bool:
+        return consecutive <= 6 or consecutive % FAILURE_LOG_EVERY == 0
+
+    def _log_cycle_events(self, result: dict[str, Any]) -> None:
+        reset_reason = result.get("tracking_reset")
+        if reset_reason:
+            print(
+                f"[camera-history] failure tracking reset reason={reset_reason}",
+                flush=True,
+            )
+        for event in result.get("failure_events", []):
+            if not self._should_log_failure(int(event["consecutive"])):
+                continue
+            print(
+                "[camera-history] capture failed "
+                f"source_index={event['source_index']} reason={event['reason']} "
+                f"consecutive={event['consecutive']} attempts={event['attempts']}",
+                flush=True,
+            )
+        for event in result.get("recovery_events", []):
+            print(
+                "[camera-history] capture recovered "
+                f"source_index={event['source_index']} reason={event['reason']} "
+                f"previous_consecutive={event['previous_consecutive']}",
+                flush=True,
+            )
+
+    def _result_with_tracking_reset(self, result: dict[str, Any]) -> dict[str, Any]:
+        result["tracking_reset"] = self._pending_reset_reason
+        self._pending_reset_reason = None
+        return result
 
     def run_cycle(self, *, now: float | None = None) -> dict[str, Any]:
+        deterministic_time = now is not None
         now = time.time() if now is None else float(now)
         prefs = load_preferences(self.prefs_file)
         if prefs is None:
@@ -465,14 +588,16 @@ class CameraHistoryWorker:
             except (OSError, ValueError):
                 removed = 0
             self._last_enabled = False
-            self._last_failures = ()
-            return {
-                "status": "preferences_unavailable",
-                "enabled": False,
-                "captured": 0,
-                "failed": 0,
-                "removed": removed,
-            }
+            self._reset_failure_tracking("preferences_unavailable")
+            return self._result_with_tracking_reset(
+                {
+                    "status": "preferences_unavailable",
+                    "enabled": False,
+                    "captured": 0,
+                    "failed": 0,
+                    "removed": removed,
+                }
+            )
 
         enabled, retention_minutes = history_settings(prefs)
         self._last_enabled = enabled
@@ -481,57 +606,75 @@ class CameraHistoryWorker:
                 removed = clear_history(self.history_root)
             except (OSError, ValueError):
                 removed = 0
-            self._last_failures = ()
-            return {
-                "status": "disabled",
-                "enabled": False,
-                "captured": 0,
-                "failed": 0,
-                "removed": removed,
-            }
+            self._reset_failure_tracking("disabled")
+            return self._result_with_tracking_reset(
+                {
+                    "status": "disabled",
+                    "enabled": False,
+                    "captured": 0,
+                    "failed": 0,
+                    "removed": removed,
+                }
+            )
 
         sources = camera_sources(prefs)
         captured = 0
         failures: list[str] = []
+        capture_results: dict[str, CaptureResult] = {}
         if sources:
-            worker_count = min(4, len(sources))
+            worker_count = min(MAX_CAPTURE_WORKERS, len(sources))
+            allow_retry = len(sources) <= HISTORY_RETRY_MAX_SOURCES
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 futures = {
-                    executor.submit(self._capture_source, source, now): source
+                    executor.submit(
+                        self._capture_source,
+                        source,
+                        now if deterministic_time else None,
+                        allow_retry=allow_retry,
+                    ): source
                     for source in sources
                 }
                 for future in as_completed(futures):
                     source = futures[future]
                     try:
-                        ok = future.result()
+                        capture = future.result()
                     except Exception:
-                        ok = False
-                    if ok:
+                        capture = CaptureResult("worker_exception", 0)
+                    capture_results[source] = capture
+                    if capture.status == "captured":
                         captured += 1
                     else:
                         failures.append(source)
 
+        failure_events, recovery_events = self._update_failure_tracking(
+            sources,
+            capture_results,
+        )
+        prune_now = now if deterministic_time else time.time()
         removed = prune_history(
             self.history_root,
             retention_minutes=retention_minutes,
-            now=now,
+            now=prune_now,
             max_total_bytes=self.max_total_bytes,
         )
         self._last_failures = tuple(sorted(failures))
-        return {
-            "status": "enabled",
-            "enabled": True,
-            "retention_minutes": retention_minutes,
-            "sources": len(sources),
-            "captured": captured,
-            "failed": len(failures),
-            "removed": removed,
-        }
+        return self._result_with_tracking_reset(
+            {
+                "status": "enabled",
+                "enabled": True,
+                "retention_minutes": retention_minutes,
+                "sources": len(sources),
+                "captured": captured,
+                "failed": len(failures),
+                "removed": removed,
+                "failure_events": failure_events,
+                "recovery_events": recovery_events,
+            }
+        )
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
         last_status = None
-        last_failures: tuple[str, ...] = ()
         while not stop_event.is_set():
             started = time.monotonic()
             try:
@@ -543,14 +686,7 @@ class CameraHistoryWorker:
             if status != last_status:
                 print(f"[camera-history] status={status}", flush=True)
                 last_status = status
-            if self._last_failures != last_failures:
-                if self._last_failures:
-                    print(
-                        "[camera-history] capture unavailable for "
-                        f"{len(self._last_failures)} camera(s)",
-                        flush=True,
-                    )
-                last_failures = self._last_failures
+            self._log_cycle_events(result)
             elapsed = time.monotonic() - started
             stop_event.wait(max(1.0, self.capture_interval - elapsed))
 
