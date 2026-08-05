@@ -18,7 +18,8 @@ env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      EHA_ACTIVE_LISTEN_RETENTION_HOURS, EHA_BACKGROUND_AUDIO_LOG_FILE,
      EHA_NON_SPEECH_AUDIO_EVENTS_FILE, EHA_AUDIO_EVENT_TAGS_FILE, EHA_AUDIO_WAV_DIR,
      EHA_ROOM_GRAPH_FILE, EHA_BODY_LOCATION_FILE, EHA_BODY_LOCATION_LOG_FILE, EHA_ANOMALY_STATE_FILE,
-     EHA_TOOLS_PATH, EHA_GITHUB_APP_PEM, PATH, LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
+     EHA_TOOLS_PATH, EHA_CAMERA_HISTORY_DIR, EHA_GITHUB_APP_PEM, PATH,
+     LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
 """
 import argparse
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ _ENV_KEYS = (
     "EHA_ACTIVE_LISTEN_RETENTION_HOURS", "EHA_BACKGROUND_AUDIO_LOG_FILE",
     "EHA_NON_SPEECH_AUDIO_EVENTS_FILE", "EHA_AUDIO_EVENT_TAGS_FILE", "EHA_AUDIO_WAV_DIR",
     "EHA_ROOM_GRAPH_FILE", "EHA_BODY_LOCATION_FILE", "EHA_BODY_LOCATION_LOG_FILE", "EHA_ANOMALY_STATE_FILE",
-    "EHA_TOOLS_PATH", "EHA_GITHUB_APP_PEM", "EHA_ACTOR", "EHA_MQTT_PREFIX", "PATH",
+    "EHA_TOOLS_PATH", "EHA_CAMERA_HISTORY_DIR", "EHA_GITHUB_APP_PEM", "EHA_ACTOR", "EHA_MQTT_PREFIX", "PATH",
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
 
@@ -129,6 +130,13 @@ def _audio_tools():
     return tuple(tools)
 
 
+def _camera_tools():
+    tools = ["use_device_camera", "watch_media"]
+    if prefs.get("camera_history_enabled") is True:
+        tools.append("review_camera_history")
+    return tuple(tools)
+
+
 SERVER_SPECS = {
     "audio": ServerSpec(
         lambda: _server("audio-mcp.py", extra_env={"EHA_AGENT_HARNESS": SELECTED_HARNESS or None}),
@@ -146,10 +154,9 @@ SERVER_SPECS = {
     "camera": ServerSpec(lambda: _server("camera-mcp.py", [
         "--ha-url",     os.environ["HA_URL"],
         "--go2rtc-url", os.environ.get("GO2RTC_BASE", "http://homeassistant.local:1984"),
-    ]), (
-        "use_device_camera",
-        "watch_media",
-    )),
+    ], extra_env={
+        "EHA_CAMERA_HISTORY_ENABLED": "1" if prefs.get("camera_history_enabled") is True else None,
+    }), _camera_tools),
     "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
     # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を

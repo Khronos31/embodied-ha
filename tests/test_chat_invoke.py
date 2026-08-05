@@ -521,5 +521,54 @@ class AllowedToolsHttpPostTests(unittest.TestCase):
             self.assertFalse(chat_invoke._read_http_post_enabled(""))
 
 
+class CameraHistoryChatTests(unittest.TestCase):
+    def test_history_tool_and_prompt_are_opt_in(self):
+        disabled = chat_invoke._allowed_tools_for_chat_source(
+            "chat", camera_history_enabled=False
+        )
+        enabled = chat_invoke._allowed_tools_for_chat_source(
+            "chat", camera_history_enabled=True
+        )
+        self.assertNotIn("mcp__camera__review_camera_history", disabled)
+        self.assertIn("mcp__camera__review_camera_history", enabled)
+
+        prompt = BuildChatPromptContractTests()._minimal_prompt()
+        self.assertNotIn("review_camera_history", prompt)
+        prompt = chat_invoke.build_chat_prompt(
+            character="test", resident="resident",
+            projected_camera_source="camera.living", recent_activity="none",
+            current_mood="calm", inner_voice="none", body_narrative="body",
+            body_location_context="location", turn_taking_state="{}",
+            sensors="sensors", long_memory="memory", open_loops="none",
+            recent_chat_context="", chat_hist="none", entity_table="",
+            pending="none", features_md="", features_presented="",
+            extra_context="", policies_raw="", chat_source="chat",
+            user_room="", user_room_speaker="", recent_auditory_input="",
+            user_msg="hello", camera_history_enabled=True,
+            camera_history_minutes=12,
+        )
+        self.assertIn("review_camera_history", prompt)
+        self.assertIn("直近12分", prompt)
+        self.assertIn("画像は自動では届きません", prompt)
+
+    def test_settings_reader_is_strict_and_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs = Path(tmp) / "preferences.json"
+            prefs.write_text(json.dumps({
+                "camera_history_enabled": True,
+                "camera_history_minutes": 100,
+            }), encoding="utf-8")
+            self.assertEqual(
+                chat_invoke.read_camera_history_settings(str(prefs)), (True, 60)
+            )
+            prefs.write_text(json.dumps({
+                "camera_history_enabled": 1,
+                "camera_history_minutes": "bad",
+            }), encoding="utf-8")
+            self.assertEqual(
+                chat_invoke.read_camera_history_settings(str(prefs)), (False, 10)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

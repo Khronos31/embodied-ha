@@ -11,6 +11,9 @@
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
+  "_camera_history_doc": "任意機能。trueのとき、設定済みカメラのJPEGを/tmpへ短時間だけ保存し、侵入中の同じカメラから履歴を振り返れる。LLMへ自動注入はしない。保存期間は1〜60分。",
+  "camera_history_enabled": false,
+  "camera_history_minutes": 10,
   "_cameras_doc": "カメラ（目）: 侵入して見る実デバイス。entity は侵入時の ID、source は HA エンティティ ID か go2rtc / 直接 URL。ptz は必要なカメラだけ設定する。",
   "cameras": [
     {

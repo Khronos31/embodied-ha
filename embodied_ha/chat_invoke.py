@@ -117,13 +117,23 @@ def build_chat_prompt(
     user_room_speaker,
     recent_auditory_input,
     user_msg,
+    camera_history_enabled=False,
+    camera_history_minutes=10,
 ):
-    """chat.sh:308-510のプロンプト文字列組み立てと完全に同一のロジック。"""
-    projected_camera_note = (
-        f"# 現在の視界（電脳体: {projected_camera_source}）\n今あなたが投射しているカメラの映像を受け取っています。"
-        if projected_camera_source
-        else ""
-    )
+    """chat.sh由来の会話プロンプトへ現在の機能契約を組み立てる。"""
+    if projected_camera_source:
+        history_note = (
+            f"\n必要なら review_camera_history で直近{camera_history_minutes}分の過去画像を最大3枚振り返れます。"
+            if camera_history_enabled
+            else ""
+        )
+        projected_camera_note = (
+            f"# 現在の視界（電脳体: {projected_camera_source}）\n"
+            "画像は自動では届きません。見たいときは use_device_camera(action=capture) を使ってください。"
+            f"{history_note}"
+        )
+    else:
+        projected_camera_note = ""
 
     entity_table_block = (
         f"""# 操作できる家電（エンティティ対応表）
@@ -203,6 +213,7 @@ def build_chat_prompt(
 - feature_presented: この返事でアドオンの機能を紹介したなら、その機能id（features の見出し [id]）。紹介していなければ null。"""
 
     deep_listen_capability = "、音声そのものを直接確認する深聴き（concentrate_hearing）" if _effective_harness() in {"agy", "antigravity", "gemini"} else ""
+    camera_history_capability = "、侵入中のカメラの過去画像を振り返る（review_camera_history）" if camera_history_enabled else ""
 
     return f"""# あなた自身について
 
@@ -216,7 +227,7 @@ def build_chat_prompt(
 あなたは今この家の状況をリアルタイムで把握しています。それを踏まえて自然に会話してください。
 
 # 自分にできること・できないこと
-- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、カメラデバイスへの侵入後に撮影・PTZ操作（use_device_camera: action=capture/ptz_left/right/up/down）、テレビ・画面・音楽などのメディアを侵入不要で観る/聴く（watch_media / listen_media）、気に入った視聴体験を record_episode(kind=media_watch/media_listen) で残すこと、短時間の音声確認（listen/use_device_microphone）{deep_listen_capability}、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（enter_cyberspace / move_cyber / return_to_body）
+- **できる**: 家電操作（light/climate/switch/media_player など）、記憶の検索（recall）、指示語の解決（resolve_reference）、ライブのHA状態確認（ha_get）、会話・相談、社会性レイヤーの記録（relationship / narrative / social_state / shared_focus / person_model / turn-taking / consent / boundary）、カメラデバイスへの侵入後に撮影・PTZ操作（use_device_camera: action=capture/ptz_left/right/up/down）{camera_history_capability}、テレビ・画面・音楽などのメディアを侵入不要で観る/聴く（watch_media / listen_media）、気に入った視聴体験を record_episode(kind=media_watch/media_listen) で残すこと、短時間の音声確認（listen/use_device_microphone）{deep_listen_capability}、主要センサーの取り直し（get_sensors）、部屋の移動（move_to）と別室への投射（enter_cyberspace / move_cyber / return_to_body）
 - **今の自分にはできない**: ファイルへの書き込み・設定ファイルの編集・コードの実装。ファイルの読み取り（Read）はできる。
 - YAMLなどの設定ファイルの編集は、壊すとHAが起動しなくなるため慎重を要する。{resident}さんから設定変更を頼まれたら、自分の手には負えないことを正直に伝える。
 - **ツールが失敗したときは正直に伝える**: Readでファイルが見つからない・読めない場合は「読めなかった」と伝える。読んでいないのに読めたふりをしない。ディレクトリ一覧は取得できないので、ファイル名が不明なら「ファイル名を教えてください」と聞く。
@@ -392,12 +403,34 @@ def _read_http_post_enabled(prefs_file):
     return bool(prefs.get("http_post_enabled")) if isinstance(prefs, dict) else False
 
 
-def _allowed_tools_for_chat_source(chat_source, *, http_post_enabled=False):
+def read_camera_history_settings(prefs_file):
+    if not prefs_file:
+        return False, 10
+    try:
+        with open(prefs_file, encoding="utf-8") as fh:
+            prefs = json.load(fh)
+    except Exception:
+        return False, 10
+    if not isinstance(prefs, dict):
+        return False, 10
+    enabled = prefs.get("camera_history_enabled") is True
+    try:
+        minutes = max(1, min(60, int(prefs.get("camera_history_minutes", 10))))
+    except (TypeError, ValueError):
+        minutes = 10
+    return enabled, minutes
+
+
+def _allowed_tools_for_chat_source(
+    chat_source, *, http_post_enabled=False, camera_history_enabled=False
+):
     allowed = _COMMON_TOOLS
     if _effective_harness() in {"agy", "antigravity", "gemini"}:
         allowed += ",mcp__audio__concentrate_hearing"
     if http_post_enabled:
         allowed += ",mcp__http__http_post"
+    if camera_history_enabled:
+        allowed += ",mcp__camera__review_camera_history"
     if chat_source == "voice":
         return allowed + ",mcp__audio__speak,mcp__audio__use_device_speaker"
     return allowed + ",mcp__audio__speak"
@@ -433,10 +466,15 @@ def build_invoke_agent_chat_command(
     user_prompt,
     content_json_path=None,
     http_post_enabled=False,
+    camera_history_enabled=False,
     transcript_file=None,
 ):
     """Build an invoke-agent.sh command for chat.py's response path."""
-    allowed = _allowed_tools_for_chat_source(chat_source, http_post_enabled=http_post_enabled)
+    allowed = _allowed_tools_for_chat_source(
+        chat_source,
+        http_post_enabled=http_post_enabled,
+        camera_history_enabled=camera_history_enabled,
+    )
     mcp_servers = _CHAT_MCP_SERVERS
     # _COMMON_TOOLS には既に Read が入っているので、ここで増えるのは codex の files MCP だけ。
     allowed, mcp_servers = file_read_capability.grant_file_read(allowed, mcp_servers, _effective_harness())
@@ -509,6 +547,7 @@ def invoke_chat_claude(
     env = dict(claude_env)
     env.setdefault("CLAUDE_BIN", claude_bin)
     http_post_enabled = _read_http_post_enabled(prefs_file)
+    camera_history_enabled, _ = read_camera_history_settings(prefs_file)
     content_json_path = None
     transcript_file = None
     try:
@@ -531,6 +570,7 @@ def invoke_chat_claude(
             user_prompt=prompt,
             content_json_path=content_json_path,
             http_post_enabled=http_post_enabled,
+            camera_history_enabled=camera_history_enabled,
             transcript_file=transcript_file,
         )
         r = run(cmd, capture_output=True, text=True, cwd=cwd, env=env)

@@ -43,8 +43,6 @@ import scene_state  # noqa: E402
 from auditory_context import format_recent_auditory_prompt, resolve_source_filter  # noqa: E402
 from introspection_facts import extract_facts_from_stream_text, write_facts_file  # noqa: E402
 from json_schemas import loop_schema  # noqa: E402
-from media_capture import fetch_frame  # noqa: E402
-from observe_context import build_projected_camera_blocks  # noqa: E402
 from path_env import build_tools_path  # noqa: E402
 from response_parse import loop_extract  # noqa: E402
 
@@ -424,6 +422,7 @@ def persist_loop_introspection(
     explore_log: str | os.PathLike[str],
     facts_file: str | os.PathLike[str] | None = None,
     projected_camera_source: str = "",
+    projected_camera_prefs: dict[str, Any] | None = None,
 ) -> bool:
     """loop.sh の observations/explore 保存分岐を移植する。
 
@@ -468,6 +467,7 @@ def persist_loop_introspection(
         speak=parsed.get("speak", "") or "",
         facts=facts,
         current_entity=projected_camera_source,
+        prefs=projected_camera_prefs,
     ):
         row["ungrounded_visual_claim"] = True
 
@@ -540,8 +540,8 @@ def mode_config(mode: str) -> ModeConfig:
     configs = {
         "observe": ModeConfig(
             label="家の見守りの時間",
-            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- use_device_camera … 電脳体でカメラデバイスに侵入中のみ使える\n-- watch_media … テレビ・PC画面等のメディアを観る（侵入不要）\n-- listen … 音声を短時間だけ聴く\n-- listen_media … 番組音・音楽等のメディア音声を聴く（侵入不要）\n-- recall … 過去ログをキーワードで全文検索\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
-            task="# やってほしいこと\n1. 見守りシステムからの報告とセンサー・聴覚情報で家の様子を掴む\n2. 報告は伝聞。気になることがあれば move_to → enter_cyberspace → use_device_camera で現地を自分の目で確認する\n3. 現地確認していないものを「見た」と語らない（報告を根拠に見たことにしない）\n4. 自分の目で見た内容は scene grounding として保存する\n5. 家人に伝えたいことがあれば speak / use_device_speaker を使う",
+            tools_desc="# 使えるツール\n-- get_sensors … おもなデバイスの現在値をまとめて取得\n-- ha_get … HA の状態を読む（操作不可）\n-- use_device_camera … 電脳体でカメラデバイスに侵入中のみ、現在の画像を取得できる\n-- watch_media … テレビ・PC画面等のメディアを観る（侵入不要）\n-- listen … 音声を短時間だけ聴く\n-- listen_media … 番組音・音楽等のメディア音声を聴く（侵入不要）\n-- recall … 過去ログをキーワードで全文検索\n-- remember / record_episode / record_causal_chain / loops_add / sociality / record / speak / use_device_speaker / http … 必要に応じて使う（recordは歌声WAV生成のみ。実際に鳴らすなら生成後のfile_pathをspeakに渡す）",
+            task="# やってほしいこと\n1. センサー・聴覚情報で家の様子を掴む\n2. 気になることがあれば move_to → enter_cyberspace → use_device_camera で現地を自分の目で確認する\n3. 現地確認していないものを「見た」と語らない\n4. 自分の目で見た内容は scene grounding として保存する\n5. 家人に伝えたいことがあれば speak / use_device_speaker を使う",
             allowed_tools="mcp__sensors__get_sensors,mcp__ha__ha_get,mcp__body__get_location,mcp__body__move_to,mcp__body__enter_cyberspace,mcp__body__move_cyber,mcp__body__return_to_body,mcp__body__estimate_move_cost,mcp__body__get_room_graph,mcp__camera__use_device_camera,mcp__camera__watch_media,mcp__audio__listen,mcp__audio__listen_media,mcp__audio__read_heard_audio_log,mcp__audio__read_active_listen_log,mcp__audio__speak,mcp__audio__use_device_speaker,mcp__audio__use_device_microphone,mcp__memory__recall,mcp__memory__remember,mcp__memory__record_episode,mcp__memory__record_causal_chain,mcp__memory__record_counterfactual,mcp__memory__get_episode,mcp__memory__get_working_memory,mcp__memory__ingest_scene,mcp__memory__compare_recent_scenes,mcp__memory__list_episodes,mcp__memory__get_causal_chain,mcp__memory__loops_add,mcp__memory__loops_list,mcp__memory__loops_close,mcp__sociality__get_person_model,mcp__sociality__should_interrupt,mcp__sociality__get_turn_taking_state,mcp__sociality__ingest_interaction,mcp__sociality__record_boundary,mcp__sociality__record_consent,mcp__sociality__get_narrative,mcp__sociality__append_narrative,mcp__http__http_get,mcp__song__record",
             mcp_servers=("sensors", "ha", "camera", "audio", "body", "memory", "sociality", "http", "song"),
         ),
@@ -726,8 +726,8 @@ def build_recent_auditory_input(prefs_file: str, body_location_file: str) -> str
     return ""
 
 
-def detect_projected_camera(body_location_file: str) -> str:
-    return chat_context.resolve_projected_camera_entity(body_location_file)
+def detect_projected_camera(body_location_file: str, prefs: dict[str, Any] | None = None) -> str:
+    return chat_context.resolve_projected_camera_entity(body_location_file, prefs=prefs or {})
 
 
 def update_anomaly_context(cfg: dict[str, str], paths: LoopPaths, sensors: str, open_loops_json: str) -> tuple[str, str]:
@@ -833,9 +833,40 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     home_policy = _read_text(cfg.get("EHA_HOME_POLICY_FILE") or os.path.join(cfg.get("EHA_DATA_DIR", "/config/embodied-ha"), "home_policy.md"))
     features_md = _read_text(os.path.join(SCRIPT_DIR, "features.md"))
     features_presented = _run_text(["python3", os.path.join(SCRIPT_DIR, "feature-flags.py"), "get"], fallback="", run=run)
-    projected_camera_source = detect_projected_camera(body_location_file)
+    prefs_snapshot = _read_json(cfg.get("EHA_PREFS_FILE", ""))
+    if not isinstance(prefs_snapshot, dict):
+        prefs_snapshot = {}
+    projected_camera_source = detect_projected_camera(body_location_file, prefs_snapshot)
+    camera_history_enabled = prefs_snapshot.get("camera_history_enabled") is True
+    try:
+        camera_history_minutes = max(
+            1, min(60, int(prefs_snapshot.get("camera_history_minutes", 10)))
+        )
+    except (TypeError, ValueError):
+        camera_history_minutes = 10
+    if camera_history_enabled and "camera" in mcp_servers:
+        allowed_tools += ",mcp__camera__review_camera_history"
+        config = replace(
+            config,
+            tools_desc=(
+                config.tools_desc
+                + f"\n-- review_camera_history … 現在侵入中のカメラだけ、直近{camera_history_minutes}分の過去画像を最大3枚振り返る"
+            ),
+        )
     recent_auditory_input = build_recent_auditory_input(cfg.get("EHA_PREFS_FILE", ""), body_location_file)
-    projected_camera_note = f"【現在の視界】電脳体が {projected_camera_source} に投射中です。" if projected_camera_source else ""
+    if projected_camera_source:
+        history_note = (
+            f"必要なら review_camera_history で直近{camera_history_minutes}分の過去画像を振り返れます。"
+            if camera_history_enabled and "camera" in mcp_servers
+            else ""
+        )
+        projected_camera_note = (
+            f"【現在の視界】電脳体が {projected_camera_source} に投射中です。"
+            "画像は自動では届きません。見たいときは use_device_camera(action=capture) を使ってください。"
+            f"{history_note}"
+        )
+    else:
+        projected_camera_note = ""
     presented_note = f"既に伝えた機能: {features_presented}（繰り返し紹介しなくてよい）\n" if features_presented else ""
     features_note = f"\n【このアドオンでできること】（文脈が自然なら speak / use_device_speaker で一つ紹介してよい。紹介したら JSON の feature_presented に見出し末尾の [id] を入れる）\n{presented_note}{features_md}\n" if features_md else ""
     behavior_policy_note = f"\n# 行動ポリシー（{resident}さんが設定した行動ルール。必ず踏まえて行動する）\n{cfg.get('POLICIES', '')}" if cfg.get("POLICIES") else ""
@@ -861,69 +892,8 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
         "mcp_servers": list(mcp_servers),
         "unread_autonomous_chat_count": unread_chat_count,
         "projected_camera_source": projected_camera_source,
+        "projected_camera_prefs": prefs_snapshot,
     }
-
-
-WATCH_REPORT_SYSTEM = "あなたは家の見守りカメラの要約システムです。各カメラの現在の様子を1行ずつ、事実だけ簡潔に報告してください。推測や人格的な感想は書かないでください。"
-WATCH_REPORT_HEADING = "# 見守りシステムからの報告（カメラ映像そのものではなく、システムによる要約です）"
-
-
-def build_observe_content_blocks(context: dict[str, Any], paths: LoopPaths, *, run=subprocess.run) -> list[dict[str, Any]]:
-    cfg = context["cfg"]
-    prefs = _read_json(cfg.get("EHA_PREFS_FILE", ""))
-    if not isinstance(prefs, dict):
-        prefs = {}
-    content: list[dict[str, Any]] = []
-    cameras = [cam for cam in prefs.get("cameras", []) if isinstance(cam, dict)] if isinstance(prefs.get("cameras"), list) else []
-    failure_lines = []
-    captured_blocks: list[dict[str, Any]] = []
-    for cam in cameras:
-        source = str(cam.get("ha_entity") or cam.get("source") or cam.get("entity") or "").strip()
-        if not source:
-            continue
-        label = str(cam.get("label") or cam.get("room") or source).strip()
-        try:
-            frame = fetch_frame(source, ha_url=cfg.get("HA_URL", ""), go2rtc_url=cfg.get("GO2RTC_BASE", "http://homeassistant.local:1984"), token=cfg.get("SUPERVISOR_TOKEN", ""))
-        except Exception:
-            frame = None
-        if not frame:
-            failure_lines.append(f"{label}（{source}）: 取得失敗")
-            continue
-        captured_blocks.append({"type": "text", "text": f"{label}（{source}）:"})
-        captured_blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": __import__("base64").b64encode(frame).decode("ascii")}})
-    if captured_blocks:
-        blocks = [{"type": "text", "text": "各画像の直前にカメラ名とentity/sourceを示します。出力は各カメラ1行だけにしてください。取得失敗行はそのまま含めてください。"}, *captured_blocks]
-        if failure_lines:
-            blocks.append({"type": "text", "text": "取得失敗カメラ:\n" + "\n".join(failure_lines)})
-        try:
-            summary = invoke_loop_claude(
-                user_prompt="見守りカメラの現在状況を要約してください。",
-                system_prompt=WATCH_REPORT_SYSTEM,
-                mode="observe",
-                allowed_tools="",
-                mcp_servers=[],
-                environ=cfg,
-                model="haiku",
-                response_schema=None,
-                content_blocks=blocks,
-                run=run,
-            ).strip()
-        except InvokeAgentError as exc:
-            print(f"[loop][observe] camera summary failed; continuing without it: {exc}", file=sys.stderr)
-            summary = ""
-        if summary:
-            content.append({"type": "text", "text": WATCH_REPORT_HEADING + "\n" + summary})
-    elif failure_lines:
-        content.append({"type": "text", "text": WATCH_REPORT_HEADING + "\n" + "\n".join(failure_lines)})
-    try:
-        content.extend(build_projected_camera_blocks(
-            context.get("projected_camera_source", ""), prefs, fetch_frame=fetch_frame,
-            ha_url=cfg.get("HA_URL", ""), go2rtc_url=cfg.get("GO2RTC_BASE", "http://homeassistant.local:1984"), token=cfg.get("SUPERVISOR_TOKEN", ""),
-        ))
-    except Exception as e:
-        print(f"[loop][observe] projected camera fetch failed: {e}", file=sys.stderr)
-    content.append({"type": "text", "text": context["user_prompt"]})
-    return content
 
 
 def record_presented_features(parsed: dict[str, Any], *, run=subprocess.run) -> None:
@@ -1032,6 +1002,7 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
         explore_log=paths.explore_log,
         facts_file=os.path.join(paths.tmp_dir, f"{mode}_facts.json"),
         projected_camera_source=context.get("projected_camera_source", ""),
+        projected_camera_prefs=context.get("projected_camera_prefs"),
     )
     pending = pending_proposal_payload(parsed, timestamp=timestamp)
     write_pending_proposal(paths.pending_file, pending)
@@ -1067,7 +1038,6 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             os.remove(facts_file)
         except OSError:
             pass
-        content_blocks = build_observe_content_blocks(context, paths, run=run_subprocess) if context["mode"] == "observe" else None
         response = invoke_loop_claude(
             user_prompt=context["user_prompt"],
             system_prompt=context["sys_prompt"],
@@ -1075,7 +1045,6 @@ def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run)
             allowed_tools=context["allowed_tools"],
             mcp_servers=context["mcp_servers"],
             environ=context["cfg"],
-            content_blocks=content_blocks,
             facts_file=facts_file,
             model="sonnet" if context["mode"] == "observe" else None,
             response_schema=loop_schema(context["mode"]),

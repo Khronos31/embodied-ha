@@ -14,6 +14,7 @@ import os
 import datetime
 
 from auditory_context import format_recent_auditory_prompt, resolve_source_filter
+from state_utils import get_device_capabilities, load_prefs
 
 import sociality_state as ss
 
@@ -126,8 +127,8 @@ def build_turn_taking_state(log_dir, resident):
     return json.dumps(state, ensure_ascii=False, indent=2)
 
 
-def resolve_projected_camera_entity(body_location_file=None):
-    """body_location.jsonのcurrent_entityがcamera.*なら、そのentity_idを返す。
+def resolve_projected_camera_entity(body_location_file=None, prefs_file=None, *, prefs=None):
+    """body_location.jsonのcurrent_entityがカメラなら、その識別子を返す。
 
     body_location_fileが指定されない場合の既定値は本番の絶対パス
     (/config/embodied-ha/body_location.json)——chat.shの既存フォールバック
@@ -138,7 +139,9 @@ def resolve_projected_camera_entity(body_location_file=None):
         with open(f, encoding="utf-8") as fh:
             d = json.load(fh)
         h = (d.get("current_entity") or "").strip()
-        if h.startswith("camera."):
+        if prefs is None:
+            prefs = load_prefs(prefs_file) if prefs_file else {}
+        if get_device_capabilities(h, prefs).get("is_camera"):
             return h
     except Exception:
         pass

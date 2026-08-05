@@ -207,6 +207,20 @@ class ProjectedCameraEntityTests(unittest.TestCase):
                 json.dump({"current_entity": "light.living"}, fh)
             self.assertEqual(chat_context.resolve_projected_camera_entity(str(f)), "")
 
+    def test_configured_go2rtc_stream_is_returned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "body_location.json"
+            prefs = Path(tmp) / "preferences.json"
+            f.write_text(json.dumps({"current_entity": "front_door_stream"}), encoding="utf-8")
+            prefs.write_text(
+                json.dumps({"cameras": [{"source": "front_door_stream"}]}),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                chat_context.resolve_projected_camera_entity(str(f), str(prefs)),
+                "front_door_stream",
+            )
+
     def test_missing_file_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "does_not_exist.json"

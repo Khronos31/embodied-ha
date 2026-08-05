@@ -3,6 +3,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -177,6 +178,134 @@ class CameraMcpTests(unittest.TestCase):
         self.assertEqual(tools_list_reply["id"], 3)
         tool_names = {tool["name"] for tool in tools_list_reply["result"]["tools"]}
         self.assertEqual(tool_names, {"use_device_camera", "watch_media"})
+
+    def test_history_tool_is_visible_only_when_both_env_and_preference_enable_it(self):
+        camera_mcp = load_camera_mcp_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            prefs.write_text(
+                json.dumps({"camera_history_enabled": True}), encoding="utf-8"
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_CAMERA_HISTORY_ENABLED": "1",
+                },
+                clear=False,
+            ):
+                tool_names = {tool["name"] for tool in camera_mcp._available_tools()}
+                self.assertIn("review_camera_history", tool_names)
+                history_tool = next(
+                    tool
+                    for tool in camera_mcp._available_tools()
+                    if tool["name"] == "review_camera_history"
+                )
+                properties = history_tool["inputSchema"]["properties"]
+                self.assertNotIn("source", properties)
+                self.assertNotIn("path", properties)
+
+                prefs.write_text(
+                    json.dumps({"camera_history_enabled": False}), encoding="utf-8"
+                )
+                self.assertNotIn(
+                    "review_camera_history",
+                    {tool["name"] for tool in camera_mcp._available_tools()},
+                )
+
+    def test_history_tool_returns_only_current_camera_frames(self):
+        camera_mcp = load_camera_mcp_module()
+        jpeg = b"\xff\xd8" + (b"history" * 40) + b"\xff\xd9"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "history"
+            prefs = Path(tmpdir) / "preferences.json"
+            body = Path(tmpdir) / "body_location.json"
+            prefs.write_text(
+                json.dumps(
+                    {
+                        "camera_history_enabled": True,
+                        "camera_history_minutes": 10,
+                        "cameras": [
+                            {"source": "camera.living", "label": "リビング"},
+                            {"source": "study_capture", "label": "スタディ"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            body.write_text(
+                json.dumps({"current_entity": "camera.living"}), encoding="utf-8"
+            )
+            camera_mcp.camera_history.store_frame(
+                root, "camera.living", jpeg, captured_at=time.time() - 30
+            )
+            camera_mcp.camera_history.store_frame(
+                root, "study_capture", jpeg, captured_at=time.time() - 30
+            )
+            sent = []
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(body),
+                    "EHA_CAMERA_HISTORY_ENABLED": "1",
+                    "EHA_CAMERA_HISTORY_DIR": str(root),
+                },
+                clear=False,
+            ), mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+                camera_mcp._handle_review_camera_history(
+                    {"start_seconds_ago": 30, "max_frames": 1}, 77
+                )
+
+            result = sent[-1]["result"]
+            self.assertFalse(result.get("isError", False))
+            image_blocks = [
+                block for block in result["content"] if block.get("type") == "image"
+            ]
+            self.assertEqual(len(image_blocks), 1)
+            context = json.loads(result["content"][0]["text"])[
+                "camera_history_context"
+            ]
+            self.assertEqual(context["source"], "camera.living")
+            self.assertNotIn("study_capture", result["content"][0]["text"])
+
+    def test_history_tool_rejects_physical_body_and_disabled_direct_call(self):
+        camera_mcp = load_camera_mcp_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefs = Path(tmpdir) / "preferences.json"
+            body = Path(tmpdir) / "body_location.json"
+            prefs.write_text(
+                json.dumps({"camera_history_enabled": True}), encoding="utf-8"
+            )
+            body.write_text("{}", encoding="utf-8")
+            sent = []
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(body),
+                    "EHA_CAMERA_HISTORY_ENABLED": "1",
+                },
+                clear=False,
+            ), mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+                camera_mcp._handle_review_camera_history({}, 78)
+            self.assertTrue(sent[-1]["result"]["isError"])
+            self.assertIn("物理体", sent[-1]["result"]["content"][0]["text"])
+
+            sent.clear()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(body),
+                    "EHA_CAMERA_HISTORY_ENABLED": "0",
+                },
+                clear=False,
+            ), mock.patch.object(camera_mcp, "send", side_effect=sent.append):
+                camera_mcp._handle_review_camera_history({}, 79)
+            self.assertTrue(sent[-1]["result"]["isError"])
+            self.assertIn("無効", sent[-1]["result"]["content"][0]["text"])
 
 
 if __name__ == "__main__":

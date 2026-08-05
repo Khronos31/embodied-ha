@@ -663,6 +663,26 @@
                             </div>
                         </section>
                         <section class="settings-section card">
+                            <h3>カメラ静止画履歴 (camera_history)</h3>
+                            <p class="section-desc">
+                                設定済みのHome Assistantカメラやgo2rtcストリームの静止画を定期的に一時保存します。<br>
+                                保存先は <code>/tmp</code> （アドオン再起動時に消去）です。<br>
+                                LLMへの自動送信・自動注入は行わず、本人がカメラへ侵入中に必要に応じて同じカメラの履歴を確認できます。
+                            </p>
+                            <div class="toggle-container" style="margin-bottom: 16px;">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="setting-camera-history-enabled" onchange="handleCameraHistoryToggle(this)">
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="toggle-label">カメラ静止画履歴を有効にする</span>
+                            </div>
+                            <div class="form-group" style="max-width: 320px;">
+                                <label class="form-label">保存期間（分）</label>
+                                <input type="number" id="setting-camera-history-minutes" min="1" max="60" step="1" placeholder="10" class="form-input">
+                                <p class="form-hint">1〜60分（既定: 10分）。無効時は一時保存されません。</p>
+                            </div>
+                        </section>
+                        <section class="settings-section card">
                             <h3>preferences.json の直接編集</h3>
                             <p class="section-desc">アドオンの設定JSONを直接編集できます。保存前に文法チェックが行われます。</p>
                             <div class="form-group">
