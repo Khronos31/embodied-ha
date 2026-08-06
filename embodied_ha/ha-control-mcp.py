@@ -88,7 +88,7 @@ def ha_call_service(args):
         )
         _record(domain, service, entity_id, data, False, {**action_fields, "reason": reason, "quiet_hours": True})
         return [text(reason)], True
-    payload = dict(data) if entity_optional else {"entity_id": entity_id, **data}
+    payload = dict(data) if entity_optional else {**data, "entity_id": entity_id}
     r = subprocess.run(
         ["curl", "-sf", "--max-time", "10", "-X", "POST",
          "-H", "@-",
