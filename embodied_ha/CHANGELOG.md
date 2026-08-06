@@ -6,6 +6,15 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.8] - 2026-08-06
+
+### Fixed / 修正
+
+- 長い音声区間の音響特徴を解析するとき、必要なサンプルを選ぶ前に区間全体をメモリへ展開していた
+  処理を修正し、常時聴取デーモンの一時的な処理時間とメモリ使用量を削減しました。
+  Reduced transient processing time and memory use in the always-on audio daemon by selecting the required
+  acoustic-analysis samples before materializing a long audio segment.
+
 ## [2.1.7] - 2026-08-06
 
 ### Fixed / 修正
