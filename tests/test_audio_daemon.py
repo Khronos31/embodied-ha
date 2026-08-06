@@ -119,6 +119,30 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertGreater(features["spectral_centroid_hz"], 400.0)
         self.assertLess(features["spectral_centroid_hz"], 480.0)
 
+    def test_analysis_samples_downsamples_before_materializing(self):
+        values = list(range(-40, 40))
+        audio_bytes = b"".join(
+            value.to_bytes(2, byteorder="little", signed=True)
+            for value in values
+        )
+
+        result = self.audio_daemon._analysis_samples(audio_bytes, max_samples=7)
+
+        step = len(values) // 7
+        self.assertEqual(result, values[::step][:7])
+
+    def test_analysis_samples_ignores_incomplete_trailing_sample(self):
+        audio_bytes = (
+            (-123).to_bytes(2, byteorder="little", signed=True)
+            + (456).to_bytes(2, byteorder="little", signed=True)
+            + b"\xff"
+        )
+
+        self.assertEqual(
+            self.audio_daemon._analysis_samples(audio_bytes),
+            [-123, 456],
+        )
+
     def test_should_transcribe_segment_allows_non_fallback(self):
         allowed, reason = self.audio_daemon.should_transcribe_segment(
             "silero",

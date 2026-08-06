@@ -1266,23 +1266,15 @@ def write_wav(path: str, audio_bytes: bytes) -> None:
         wav_file.writeframes(audio_bytes)
 
 
-def _iter_samples(audio_bytes: bytes):
-    if not audio_bytes:
-        return
+def _analysis_samples(audio_bytes: bytes, max_samples: int = SAMPLE_RATE) -> list[int]:
     usable = len(audio_bytes) - (len(audio_bytes) % SAMPLE_WIDTH)
     if usable <= 0:
-        return
-    samples = memoryview(audio_bytes[:usable]).cast("h")
-    for sample in samples:
-        yield int(sample)
-
-
-def _analysis_samples(audio_bytes: bytes, max_samples: int = SAMPLE_RATE) -> list[int]:
-    samples = list(_iter_samples(audio_bytes) or [])
+        return []
+    samples = memoryview(audio_bytes)[:usable].cast("h")
     if len(samples) <= max_samples:
-        return samples
+        return list(samples)
     step = max(1, len(samples) // max_samples)
-    return samples[::step][:max_samples]
+    return list(samples[::step][:max_samples])
 
 
 def _goertzel_power(samples: list[int], freq_hz: float) -> float:
