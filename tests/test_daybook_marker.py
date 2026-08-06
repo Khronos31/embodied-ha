@@ -7,21 +7,34 @@
 経過日数だけを見ていたため、**gap が常に0で警告が原理的に出なかった**。
 """
 import datetime as dt
+import json
 import os
-import runpy
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "embodied_ha" / "daybook_rollup.py"
+EHA_DIR = ROOT / "embodied_ha"
+SCRIPT = EHA_DIR / "daybook_rollup.py"
+sys.path.insert(0, str(EHA_DIR))
 
 
 def _run_rollup(env_extra: dict) -> subprocess.CompletedProcess:
     env = {**os.environ, "PATH": os.environ.get("PATH", ""), **env_extra}
     return subprocess.run([sys.executable, str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
+
+
+def _load_daemon(name: str):
+    source = (EHA_DIR / "daemon.py").read_text(encoding="utf-8").split("# --- 多重起動ガード", 1)[0]
+    module = types.ModuleType(name)
+    module.__file__ = str(EHA_DIR / "daemon.py")
+    with mock.patch.dict(os.environ, {"HA_URL": "http://supervisor/core/api"}, clear=False):
+        exec(compile(source, module.__file__, "exec"), module.__dict__)
+    return module
 
 
 class MarkerAdvanceTests(unittest.TestCase):
@@ -74,18 +87,78 @@ class MarkerAdvanceTests(unittest.TestCase):
 
 
 class LivenessCheckTests(unittest.TestCase):
-    """生存確認が「マーカーの経過日数」だけでなく「日誌ファイルの実在」も見ること。"""
+    """生存確認が、正常な空日と観察を失った異常なmarker先行を区別すること。"""
 
-    def _source(self) -> str:
-        return (ROOT / "embodied_ha" / "daemon.py").read_text(encoding="utf-8")
+    @classmethod
+    def setUpClass(cls):
+        cls.daemon = _load_daemon("daemon_daybook_liveness_test")
 
-    def test_detector_checks_the_artifact_not_only_the_marker(self):
-        src = self._source()
-        marker_block = src[src.index("保守パイプラインの生存確認"):]
-        marker_block = marker_block[: marker_block.index("メインスレッドを生かし続ける")]
-        self.assertIn("daybooks", marker_block,
-                      "マーカーの経過日数しか見ておらず、マーカーだけ進む故障を検知できない")
-        self.assertIn("os.path.exists", marker_block)
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.log_dir = Path(self.tmp.name)
+        (self.log_dir / "memory" / "daybooks").mkdir(parents=True)
+        (self.log_dir / ".last_daybook").write_text("2026-08-05", encoding="utf-8")
+        (self.log_dir / "observations.jsonl").write_text("", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def warning(self):
+        return self.daemon.daybook_liveness_warning(self.log_dir, today=dt.date(2026, 8, 6))
+
+    def write_observation(self, filename: str, day: str):
+        (self.log_dir / filename).write_text(
+            json.dumps({"timestamp": f"{day}T12:00:00+09:00", "private": "fixture"}) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_zero_observation_day_does_not_warn(self):
+        self.assertIsNone(self.warning())
+
+    def test_missing_primary_observation_log_warns(self):
+        (self.log_dir / "observations.jsonl").unlink()
+        self.assertIsNotNone(self.warning())
+
+    def test_malformed_observation_log_warns(self):
+        (self.log_dir / "observations.jsonl").write_text('{"timestamp":', encoding="utf-8")
+        self.assertIsNotNone(self.warning())
+
+    def test_unreadable_observation_log_warns(self):
+        real_open = open
+
+        def fail_observation_open(path, *args, **kwargs):
+            if os.fspath(path).endswith("observations.jsonl"):
+                raise OSError("synthetic read failure")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=fail_observation_open):
+            self.assertIsNotNone(self.warning())
+
+    def test_observation_without_daybook_warns(self):
+        self.write_observation("observations.jsonl", "2026-08-05")
+        warning = self.warning()
+        self.assertIsNotNone(warning)
+        self.assertIn("マーカーだけが進んでいる疑い", warning)
+
+    def test_recovered_observation_without_daybook_warns(self):
+        self.write_observation("observations_recovered.jsonl", "2026-08-05")
+        self.assertIsNotNone(self.warning())
+
+    def test_observation_on_another_day_does_not_require_marker_day_artifact(self):
+        self.write_observation("observations.jsonl", "2026-08-02")
+        self.assertIsNone(self.warning())
+
+    def test_existing_daybook_suppresses_missing_artifact_warning(self):
+        self.write_observation("observations.jsonl", "2026-08-05")
+        (self.log_dir / "memory" / "daybooks" / "2026-08-05.json").write_text("{}\n", encoding="utf-8")
+        self.assertIsNone(self.warning())
+
+    def test_stale_marker_warning_is_unchanged_for_empty_day(self):
+        warning = self.daemon.daybook_liveness_warning(self.log_dir, today=dt.date(2026, 8, 8))
+        self.assertEqual(
+            warning,
+            "[daemon] 警告: daybook が 3 日更新されていません（保守パイプライン停止の疑い）",
+        )
 
 
 if __name__ == "__main__":
