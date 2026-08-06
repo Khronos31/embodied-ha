@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -49,7 +50,9 @@ class TrackLoopOutcomeTests(unittest.TestCase):
         self.daemon.track_loop_outcome(False, trigger_reason="定期実行")
         self.assertEqual(invoke_failure.read_state(self.log_dir).get("consecutive"), 1)
         self.daemon.track_loop_outcome(True, trigger_reason="定期実行")
-        self.assertEqual(invoke_failure.read_state(self.log_dir), {})
+        state = invoke_failure.read_state(self.log_dir)
+        self.assertEqual(state["consecutive"], 0)
+        self.assertTrue(state["last_success_at"])
 
     def test_notifies_once_after_threshold(self):
         threshold = invoke_failure.alert_threshold()
@@ -75,6 +78,21 @@ class TrackLoopOutcomeTests(unittest.TestCase):
             for _ in range(threshold + 1):
                 self.daemon.track_loop_outcome(False, trigger_reason="定期実行")
         self.assertEqual(notify.call_count, 2)
+
+    def test_periodic_check_alerts_after_four_hours_without_success(self):
+        invoke_failure.mark_success(self.log_dir)
+        state_path = Path(self.log_dir) / invoke_failure.STATE_FILE
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["last_success_at"] = (datetime.now().astimezone() - timedelta(hours=5)).isoformat()
+        state["consecutive"] = 1
+        state["first_failed_at"] = (datetime.now().astimezone() - timedelta(minutes=5)).isoformat()
+        state["last_source"] = "loop"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        with mock.patch.object(self.daemon, "notify_loop_failing", return_value=True) as notify:
+            self.daemon.check_loop_failure_liveness()
+            self.daemon.check_loop_failure_liveness()
+        self.assertEqual(notify.call_count, 1)
 
     def test_tracking_error_does_not_propagate(self):
         with mock.patch.object(self.daemon.invoke_failure, "mark_failure", side_effect=OSError("disk full")):

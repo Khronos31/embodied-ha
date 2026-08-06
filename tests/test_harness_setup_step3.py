@@ -282,7 +282,8 @@ class HarnessReadyTests(unittest.TestCase):
 
 class SetupWaitNotificationTests(unittest.TestCase):
     def setUp(self):
-        daemon._setup_wait_notification_sent = False
+        daemon._setup_wait_notification_last_attempt = None
+        daemon._setup_wait_notification_last_success = None
 
     def _notify(self, authenticated):
         response = mock.MagicMock()
@@ -299,7 +300,7 @@ class SetupWaitNotificationTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 1)
         return urlopen.call_args.args[0]
 
-    def test_notification_is_once_and_mentions_reinstall_for_authenticated_claude(self):
+    def test_notification_is_throttled_and_mentions_reinstall_for_authenticated_claude(self):
         request = self._notify(authenticated=True)
         body = json.loads(request.data.decode("utf-8"))
         self.assertIn("記憶は保持されています", body["message"])
@@ -320,10 +321,22 @@ class SetupWaitNotificationTests(unittest.TestCase):
              mock.patch.object(daemon.urllib.request, "urlopen", return_value=response) as urlopen, \
              mock.patch.object(daemon, "harness_ready", side_effect=[False, False, True]), \
              mock.patch.object(daemon, "start_runtime_threads"), \
+             mock.patch.object(daemon, "dismiss_setup_wait_notification") as dismiss, \
              mock.patch.object(daemon.time, "sleep") as sleep:
             daemon.boot_runtime_when_ready()
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(sleep.call_count, 2)
+        dismiss.assert_called_once_with()
+
+    def test_setup_notification_dismiss_uses_fixed_id(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch.object(daemon.urllib.request, "urlopen", return_value=response) as urlopen:
+            self.assertTrue(daemon.dismiss_setup_wait_notification())
+        body = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(body["notification_id"], daemon._SETUP_WAIT_NOTIFICATION_ID)
+        self.assertTrue(urlopen.call_args.args[0].full_url.endswith("/persistent_notification/dismiss"))
 
     def test_failed_notification_retries_until_a_successful_post(self):
         response = mock.MagicMock()
@@ -332,9 +345,21 @@ class SetupWaitNotificationTests(unittest.TestCase):
         with mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
              mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=False), \
              mock.patch.object(daemon.urllib.request, "urlopen", side_effect=[OSError("offline"), response]) as urlopen:
-            daemon.notify_setup_waiting()
-            daemon.notify_setup_waiting()
-            daemon.notify_setup_waiting()
+            daemon.notify_setup_waiting(now_monotonic=0)
+            daemon.notify_setup_waiting(now_monotonic=daemon.SETUP_WAIT_FAILURE_RETRY_INTERVAL - 1)
+            daemon.notify_setup_waiting(now_monotonic=daemon.SETUP_WAIT_FAILURE_RETRY_INTERVAL)
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_successful_notification_is_repeated_after_six_hours(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch.object(daemon.harness_state, "read_selection", return_value=("missing", None)), \
+             mock.patch.object(daemon.claude_setup, "is_authenticated", return_value=False), \
+             mock.patch.object(daemon.urllib.request, "urlopen", return_value=response) as urlopen:
+            daemon.notify_setup_waiting(now_monotonic=0)
+            daemon.notify_setup_waiting(now_monotonic=daemon.SETUP_WAIT_REMINDER_INTERVAL - 1)
+            daemon.notify_setup_waiting(now_monotonic=daemon.SETUP_WAIT_REMINDER_INTERVAL)
         self.assertEqual(urlopen.call_count, 2)
 
     def test_notification_message_follows_selection_and_setup_state(self):
@@ -348,7 +373,8 @@ class SetupWaitNotificationTests(unittest.TestCase):
         )
         for selected, installed, authenticated, expected in cases:
             with self.subTest(selected=selected, installed=installed, authenticated=authenticated):
-                daemon._setup_wait_notification_sent = False
+                daemon._setup_wait_notification_last_attempt = None
+                daemon._setup_wait_notification_last_success = None
                 response = mock.MagicMock()
                 response.__enter__.return_value = response
                 response.__exit__.return_value = False
@@ -371,7 +397,8 @@ class SetupWaitNotificationTests(unittest.TestCase):
         )
         for authenticated, claude_binary, expected in cases:
             with self.subTest(authenticated=authenticated):
-                daemon._setup_wait_notification_sent = False
+                daemon._setup_wait_notification_last_attempt = None
+                daemon._setup_wait_notification_last_success = None
                 response = mock.MagicMock()
                 response.__enter__.return_value = response
                 response.__exit__.return_value = False

@@ -12,7 +12,7 @@
 
 状態は2ファイルに分ける:
 - `invoke_failures.jsonl` … 失敗1件ごとの記録（追記のみ・上限あり）
-- `invoke_failure_state.json` … 連続失敗カウンタ（成功で消える）
+- `invoke_failure_state.json` … 連続失敗カウンタと最後の成功時刻
 """
 import json
 import os
@@ -164,6 +164,7 @@ def mark_failure(log_dir: str, *, source: str, detail: str = "") -> dict:
             "consecutive": consecutive,
             "first_failed_at": state.get("first_failed_at") or _now_iso(),
             "last_failed_at": _now_iso(),
+            "last_success_at": state.get("last_success_at") or "",
             "last_source": source,
             "last_detail": detail,
             "alerted_at": state.get("alerted_at") or "",
@@ -176,15 +177,23 @@ def mark_failure(log_dir: str, *, source: str, detail: str = "") -> dict:
 
 
 def mark_success(log_dir: str) -> None:
-    """1回でも通ったら連続失敗を解除する。"""
+    """連続失敗を解除し、時間ベース監視の基準となる成功時刻を残す。"""
     path = _path(log_dir, STATE_FILE)
-    if not os.path.exists(path):
-        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with file_lock(path):
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        state = {
+            "consecutive": 0,
+            "first_failed_at": "",
+            "last_failed_at": "",
+            "last_success_at": _now_iso(),
+            "last_source": "",
+            "last_detail": "",
+            "alerted_at": "",
+        }
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+        os.replace(tmp, path)
 
 
 def mark_alerted(log_dir: str) -> None:
@@ -210,13 +219,30 @@ def alert_threshold(environ: dict | None = None) -> int:
     return max(1, value)
 
 
-def should_alert(state: dict, *, threshold: int) -> bool:
-    """しきい値に達し、まだこの連続失敗で通知していないか。"""
+def should_alert(
+    state: dict,
+    *,
+    threshold: int,
+    max_silence_seconds: int = 0,
+    now: datetime | None = None,
+) -> bool:
+    """回数または無成功時間がしきい値に達し、未通知なら True。"""
     if not isinstance(state, dict):
         return False
-    if int(state.get("consecutive") or 0) < threshold:
+    consecutive = int(state.get("consecutive") or 0)
+    if consecutive < 1 or (state.get("alerted_at") or ""):
         return False
-    return not (state.get("alerted_at") or "")
+    if consecutive >= threshold:
+        return True
+    if max_silence_seconds <= 0:
+        return False
+    reference = parse_ts(state.get("last_success_at")) or parse_ts(state.get("first_failed_at"))
+    if reference is None:
+        return False
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.astimezone()
+    return (current - reference).total_seconds() >= max_silence_seconds
 
 
 def _notification_field(value, *, max_chars: int = NOTIFICATION_FIELD_CHARS) -> str:
@@ -238,6 +264,8 @@ def alert_message(state: dict, *, failure: dict | None = None) -> str:
         "実行基盤、ハーネス認証、またはCLI設定に問題がある可能性があります。"
         "Web UIでハーネスの状態と設定を確認し、必要に応じて再ログインしてください。"
     )
+    if state.get("last_success_at"):
+        text += f"\n最後の成功: {_notification_field(state.get('last_success_at'))}"
 
     failure = failure if isinstance(failure, dict) else {}
     summary = []

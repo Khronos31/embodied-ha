@@ -77,7 +77,8 @@ class AgentSetupLifecycleE2E(unittest.TestCase):
         # の実在だけで判定させ、本テストを host-hermetic にする。
         self._which = mock.patch.object(claude_setup.shutil, "which", return_value=None)
         self._which.start()
-        daemon._setup_wait_notification_sent = False
+        daemon._setup_wait_notification_last_attempt = None
+        daemon._setup_wait_notification_last_success = None
         self._reset_restart_latch()
 
     def tearDown(self):
@@ -103,7 +104,8 @@ class AgentSetupLifecycleE2E(unittest.TestCase):
         os.chmod(self.binary, 0o755)
 
     def _notify_once(self):
-        daemon._setup_wait_notification_sent = False
+        daemon._setup_wait_notification_last_attempt = None
+        daemon._setup_wait_notification_last_success = None
         with mock.patch.object(daemon.urllib.request, "urlopen", return_value=_mock_response()) as urlopen:
             daemon.notify_setup_waiting()
         self.assertEqual(urlopen.call_count, 1)
@@ -117,10 +119,12 @@ class AgentSetupLifecycleE2E(unittest.TestCase):
         「ready でも runtime を起動しない」退行はここで落ちる(sol finding 2)。
         """
         with mock.patch.object(daemon, "start_runtime_threads") as start, \
+             mock.patch.object(daemon, "dismiss_setup_wait_notification") as dismiss, \
              mock.patch.object(daemon.time, "sleep") as sleep, \
              mock.patch.object(daemon.urllib.request, "urlopen", return_value=_mock_response()):
             daemon.boot_runtime_when_ready()
         start.assert_called_once_with()
+        dismiss.assert_called_once_with()
         sleep.assert_not_called()
 
     # --- シーケンスA: グランドファザー移行 → セットアップ待ち → install → runtime起動 ---
