@@ -54,6 +54,13 @@ MQTT_PASS = os.environ.get("MQTT_PASS", "")
 # ロールアップ/daybookで長くなりうるので余裕を持たせる。
 CHAT_TIMEOUT = 300
 LOOP_TIMEOUT = 600
+LOOP_NO_SUCCESS_ALERT_SECONDS = 4 * 60 * 60
+CHILD_WATCHDOG_ALERT_THRESHOLD = 5
+CHILD_WATCHDOG_STABLE_RESET_SECONDS = 10 * 60
+CHILD_WATCHDOG_RESTART_DELAY = 60
+SETUP_WAIT_REMINDER_INTERVAL = 6 * 60 * 60
+SETUP_WAIT_FAILURE_RETRY_INTERVAL = 15 * 60
+DAYBOOK_LIVENESS_CHECK_INTERVAL = 15 * 60
 ANOMALY_NIGHT_URGENCY_THRESHOLD = 30
 ANOMALY_NIGHT_URGENCY_FACTOR = 0.0
 QUIET_ANOMALY_PERIODS = {"late", "night", "deep_night"}
@@ -67,10 +74,43 @@ _runtime_lock = threading.Lock()
 _runtime_started = threading.Event()
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
-_setup_wait_notification_sent = False
+_setup_wait_notification_last_attempt = None
+_setup_wait_notification_last_success = None
 _setup_wait_notification_lock = threading.Lock()
+_loop_failure_lock = threading.Lock()
 _SETUP_WAIT_NOTIFICATION_ID = f"{MQTT_PREFIX}_harness_setup_required"
 _LOOP_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_loop_invoke_failing"
+_AUDIO_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_audio_daemon_failing"
+_WEB_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_web_server_failing"
+_DAYBOOK_LIVENESS_NOTIFICATION_ID = f"{MQTT_PREFIX}_daybook_liveness_failing"
+_last_daybook_liveness_check = None
+_last_daybook_liveness_observed_warning = None
+_last_daybook_liveness_notified_warning = None
+
+
+class ChildWatchdogFailures:
+    """Track repeated child exits without changing the watchdog restart cadence."""
+
+    def __init__(
+        self,
+        *,
+        threshold: int = CHILD_WATCHDOG_ALERT_THRESHOLD,
+        stable_reset_seconds: int = CHILD_WATCHDOG_STABLE_RESET_SECONDS,
+    ):
+        self.threshold = max(1, int(threshold))
+        self.stable_reset_seconds = max(0, int(stable_reset_seconds))
+        self.consecutive = 0
+        self.alerted = False
+
+    def record_failure(self, runtime_seconds: float) -> tuple[int, bool]:
+        if runtime_seconds >= self.stable_reset_seconds:
+            self.consecutive = 0
+            self.alerted = False
+        self.consecutive += 1
+        return self.consecutive, self.consecutive >= self.threshold and not self.alerted
+
+    def mark_alerted(self) -> None:
+        self.alerted = True
 
 
 def load_enabled_mics() -> list[dict]:
@@ -136,9 +176,9 @@ def get_ha_token():
     return os.environ.get("SUPERVISOR_TOKEN", "")
 
 
-def notify_setup_waiting() -> None:
-    """Create one best-effort HA notification while setup blocks the runtime."""
-    global _setup_wait_notification_sent
+def notify_setup_waiting(*, now_monotonic: float | None = None) -> bool:
+    """Create a throttled best-effort HA reminder while setup blocks runtime."""
+    global _setup_wait_notification_last_attempt, _setup_wait_notification_last_success
     selection_state, selected = harness_state.read_selection()
     if (selection_state == "missing" and claude_setup.is_authenticated()
             and (claude_setup.resolve_claude_bin() is None or not claude_setup.is_installed())):
@@ -175,16 +215,26 @@ def notify_setup_waiting() -> None:
         },
         method="POST",
     )
+    now = time.monotonic() if now_monotonic is None else now_monotonic
     with _setup_wait_notification_lock:
-        if _setup_wait_notification_sent:
-            return
+        if (_setup_wait_notification_last_success is not None
+                and now - _setup_wait_notification_last_success < SETUP_WAIT_REMINDER_INTERVAL):
+            return False
+        if (_setup_wait_notification_last_attempt is not None
+                and now - _setup_wait_notification_last_attempt < SETUP_WAIT_FAILURE_RETRY_INTERVAL):
+            return False
+        # Advance the attempt clock before I/O.  HA outages must not turn the
+        # five-second readiness poll into an HTTP/log retry storm.
+        _setup_wait_notification_last_attempt = now
         try:
             with urllib.request.urlopen(request, timeout=10):
                 pass
         except Exception:
             print("[daemon] setup-wait notification failed", flush=True)
+            return False
         else:
-            _setup_wait_notification_sent = True
+            _setup_wait_notification_last_success = now
+            return True
 
 
 def notify_loop_failing(state: dict) -> bool:
@@ -222,21 +272,69 @@ def notify_loop_failing(state: dict) -> bool:
     return True
 
 
+def notify_child_watchdog_failing(name: str, notification_id: str, consecutive: int) -> bool:
+    """Notify the HA user that a required child process repeatedly exits."""
+    payload = json.dumps({
+        "notification_id": notification_id,
+        "title": f"Embodied HA の{name}が繰り返し停止しています",
+        "message": (
+            f"{name}が{consecutive}回続けて停止し、自動再起動されています。"
+            "アドオンログと設定を確認してください。再起動処理は継続しています。"
+        ),
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/create",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+    except Exception:
+        print(f"[daemon] {name} watchdog notification failed", flush=True)
+        return False
+    return True
+
+
 def track_loop_outcome(success: bool, *, trigger_reason: str) -> None:
     """ループの成否を連続失敗カウンタへ反映し、しきい値を越えたら通知する。"""
     try:
-        if success:
-            invoke_failure.mark_success(_LOG_DIR)
-            return
-        state = invoke_failure.mark_failure(_LOG_DIR, source="loop", detail=trigger_reason)
-        threshold = invoke_failure.alert_threshold()
-        consecutive = int(state.get("consecutive") or 0)
-        print(f"[daemon] loop failed {consecutive} time(s) in a row", flush=True)
-        if invoke_failure.should_alert(state, threshold=threshold) and notify_loop_failing(state):
-            invoke_failure.mark_alerted(_LOG_DIR)
+        with _loop_failure_lock:
+            if success:
+                invoke_failure.mark_success(_LOG_DIR)
+                return
+            state = invoke_failure.mark_failure(_LOG_DIR, source="loop", detail=trigger_reason)
+            threshold = invoke_failure.alert_threshold()
+            consecutive = int(state.get("consecutive") or 0)
+            print(f"[daemon] loop failed {consecutive} time(s) in a row", flush=True)
+            if invoke_failure.should_alert(
+                state,
+                threshold=threshold,
+                max_silence_seconds=LOOP_NO_SUCCESS_ALERT_SECONDS,
+            ) and notify_loop_failing(state):
+                invoke_failure.mark_alerted(_LOG_DIR)
     except Exception as e:
         # 監視の失敗でループ本体を巻き込まない。ただし黙らない。
         print(f"[daemon] loop outcome tracking error: {e}", flush=True)
+
+
+def check_loop_failure_liveness() -> None:
+    """失敗後に新たな実行がなくても、無成功時間のしきい値を検査する。"""
+    try:
+        with _loop_failure_lock:
+            state = invoke_failure.read_state(_LOG_DIR)
+            if invoke_failure.should_alert(
+                state,
+                threshold=invoke_failure.alert_threshold(),
+                max_silence_seconds=LOOP_NO_SUCCESS_ALERT_SECONDS,
+            ) and notify_loop_failing(state):
+                invoke_failure.mark_alerted(_LOG_DIR)
+    except Exception as e:
+        print(f"[daemon] loop liveness check error: {e}", flush=True)
 
 
 def load_schedule():
@@ -724,17 +822,28 @@ def loop_scheduler():
             print(f"[daemon] loop_scheduler error: {e}", flush=True)
         time.sleep(schedule.get("loop_interval", LOOP_INTERVAL))
 
-def audio_daemon_watchdog():
+def _child_process_watchdog(
+    name: str,
+    script: str,
+    notification_id: str,
+    notification_name: str,
+) -> None:
     env = {**os.environ, "PATH": ENV_PATH}
+    failures = ChildWatchdogFailures()
     while True:
         proc = None
+        started_at = time.monotonic()
         try:
-            proc = subprocess.Popen(["python3", AUDIO_DAEMON], env=env)
-            print("[daemon] audio daemon started", flush=True)
+            proc = subprocess.Popen(["python3", script], env=env)
+            print(f"[daemon] {name} started", flush=True)
             rc = proc.wait()
-            print(f"[daemon] audio daemon exited with code {rc}; restarting in 60s", flush=True)
+            print(
+                f"[daemon] {name} exited with code {rc}; "
+                f"restarting in {CHILD_WATCHDOG_RESTART_DELAY}s",
+                flush=True,
+            )
         except Exception as e:
-            print(f"[daemon] audio daemon watchdog error: {e}", flush=True)
+            print(f"[daemon] {name} watchdog error: {e}", flush=True)
         finally:
             if proc and proc.poll() is None:
                 try:
@@ -745,31 +854,26 @@ def audio_daemon_watchdog():
                         proc.kill()
                     except Exception:
                         pass
-        time.sleep(60)
+        runtime = max(0.0, time.monotonic() - started_at)
+        consecutive, should_alert = failures.record_failure(runtime)
+        print(f"[daemon] {name} failure streak: {consecutive}", flush=True)
+        if should_alert and notify_child_watchdog_failing(
+            notification_name, notification_id, consecutive,
+        ):
+            failures.mark_alerted()
+        time.sleep(CHILD_WATCHDOG_RESTART_DELAY)
+
+
+def audio_daemon_watchdog():
+    _child_process_watchdog(
+        "audio daemon", AUDIO_DAEMON, _AUDIO_FAILURE_NOTIFICATION_ID, "音声デーモン",
+    )
 
 
 def web_server_watchdog():
-    env = {**os.environ, "PATH": ENV_PATH}
-    while True:
-        proc = None
-        try:
-            proc = subprocess.Popen(["python3", WEB_SERVER], env=env)
-            print("[daemon] web server started", flush=True)
-            rc = proc.wait()
-            print(f"[daemon] web server exited with code {rc}; restarting in 60s", flush=True)
-        except Exception as e:
-            print(f"[daemon] web server watchdog error: {e}", flush=True)
-        finally:
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-        time.sleep(60)
+    _child_process_watchdog(
+        "web server", WEB_SERVER, _WEB_FAILURE_NOTIFICATION_ID, "Webサーバー",
+    )
 
 
 def start_runtime_threads() -> bool:
@@ -826,9 +930,9 @@ def boot_runtime_when_ready():
     # ポーラが harness_ready() を抜けた直後に1回だけ呼ぶ作りだと、その窓を踏んだときに
     # loop/chat/MQTT が起動しないまま誰も再試行しない(codexレビューP1①)。
     # 実際に runtime が上がるまで回し続ける。
-    notify_setup_waiting()
     announced = False
     while True:
+        notify_setup_waiting()
         if harness_ready():
             if not announced:
                 # 見送りが続くとポーラは5秒ごとに回るので、検出の報告は1回だけにする
@@ -895,6 +999,91 @@ def daybook_liveness_warning(log_dir: str, *, today: dt.date | None = None) -> s
     )
 
 
+def notify_daybook_liveness(warning: str) -> bool:
+    """Send the current daybook fault to HA using one replaceable notification."""
+    message = warning.removeprefix("[daemon] 警告: ")
+    payload = json.dumps({
+        "notification_id": _DAYBOOK_LIVENESS_NOTIFICATION_ID,
+        "title": "Embodied HA の日誌生成が止まっている可能性があります",
+        "message": message,
+    }, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/create",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+    except Exception:
+        print("[daemon] daybook liveness notification failed", flush=True)
+        return False
+    return True
+
+
+def dismiss_daybook_liveness_notification() -> bool:
+    """Remove a stale daybook warning after the maintenance pipeline recovers."""
+    payload = json.dumps({
+        "notification_id": _DAYBOOK_LIVENESS_NOTIFICATION_ID,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/dismiss",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+    except Exception:
+        print("[daemon] daybook liveness notification dismissal failed", flush=True)
+        return False
+    return True
+
+
+def run_maintenance_checks(*, now_monotonic: float | None = None) -> None:
+    """Run liveness checks independently of the configurable autonomous-loop interval."""
+    global _last_daybook_liveness_check
+    global _last_daybook_liveness_observed_warning, _last_daybook_liveness_notified_warning
+
+    # This check is cheap and time-sensitive, so the existing one-minute daemon
+    # keepalive polls it every time.  should_alert() suppresses healthy/no-streak states.
+    check_loop_failure_liveness()
+
+    now = time.monotonic() if now_monotonic is None else now_monotonic
+    if (_last_daybook_liveness_check is not None
+            and now - _last_daybook_liveness_check < DAYBOOK_LIVENESS_CHECK_INTERVAL):
+        return
+    _last_daybook_liveness_check = now
+    try:
+        warning = daybook_liveness_warning(_LOG_DIR)
+    except Exception as e:
+        print(f"[daemon] daybook liveness check error: {e}", flush=True)
+        return
+
+    if warning != _last_daybook_liveness_observed_warning:
+        if warning:
+            print(f"[daemon] daybook liveness warning detected: {warning}", flush=True)
+        elif _last_daybook_liveness_observed_warning:
+            print("[daemon] daybook liveness recovered", flush=True)
+        _last_daybook_liveness_observed_warning = warning
+
+    if warning:
+        if (warning != _last_daybook_liveness_notified_warning
+                and notify_daybook_liveness(warning)):
+            _last_daybook_liveness_notified_warning = warning
+    elif (_last_daybook_liveness_notified_warning
+          and dismiss_daybook_liveness_notification()):
+        _last_daybook_liveness_notified_warning = None
+
+
 # --- 多重起動ガード（flock）---
 # threading.Lock は全部プロセスローカルなので、daemon.py が複数走ると
 # 同じエンティティを各々ポーリングして二重観察・二重トリガーになる（2026-06-22に4重起動を踏んだ）。
@@ -914,15 +1103,9 @@ print("[daemon] web server watchdog enabled", flush=True)
 # その場合もポーラを立てないと誰も再試行しない(codexレビューP1①)。
 if not (harness_ready() and start_runtime_threads()):
     print("[daemon] harness 未準備。Web UI でセットアップ後に runtime を開始します", flush=True)
-    notify_setup_waiting()
     threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
-# 保守パイプラインの生存確認（サイレント停止の早期検知）
-try:
-    warning = daybook_liveness_warning(_LOG_DIR)
-    if warning:
-        print(warning, flush=True)
-except Exception:
-    pass
-# メインスレッドを生かし続ける
+# メインスレッドの既存keepaliveで保守監視も回す。自律ループ間隔はユーザー設定で
+# 長くできるため、loop_scheduler の sleep に載せると15分間隔を保証できない。
 while True:
+    run_maintenance_checks()
     time.sleep(60)
