@@ -840,21 +840,31 @@ def boot_runtime_when_ready():
         time.sleep(5)
 
 
-def _daybook_has_source_entries(log_dir: str, day: str) -> bool:
-    """Return whether the marker day has an observation that requires a daybook."""
+def _daybook_source_entry_status(log_dir: str, day: str) -> bool | None:
+    """Return marker-day input status; ``None`` means source integrity is unknown."""
     for name in ("observations.jsonl", "observations_recovered.jsonl"):
         try:
             with open(os.path.join(log_dir, name), encoding="utf-8") as f:
                 for line in f:
+                    if not line.strip():
+                        continue
                     try:
                         row = json.loads(line)
                     except (json.JSONDecodeError, TypeError):
-                        continue
-                    timestamp = row.get("timestamp") if isinstance(row, dict) else None
+                        return None
+                    if not isinstance(row, dict):
+                        return None
+                    timestamp = row.get("timestamp")
+                    if not isinstance(timestamp, str):
+                        return None
                     if isinstance(timestamp, str) and timestamp[:10] == day:
                         return True
         except FileNotFoundError:
-            continue
+            if name == "observations_recovered.jsonl":
+                continue
+            return None
+        except (OSError, UnicodeError):
+            return None
     return False
 
 
@@ -874,7 +884,10 @@ def daybook_liveness_warning(log_dir: str, *, today: dt.date | None = None) -> s
         return f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）"
 
     daybook = os.path.join(log_dir, "memory", "daybooks", f"{last}.json")
-    if os.path.exists(daybook) or not _daybook_has_source_entries(log_dir, last):
+    if os.path.exists(daybook):
+        return None
+    source_entries = _daybook_source_entry_status(log_dir, last)
+    if source_entries is False:
         return None
     return (
         f"[daemon] 警告: daybook マーカーは {last} ですが、その日の日誌ファイルがありません"

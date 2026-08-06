@@ -98,6 +98,7 @@ class LivenessCheckTests(unittest.TestCase):
         self.log_dir = Path(self.tmp.name)
         (self.log_dir / "memory" / "daybooks").mkdir(parents=True)
         (self.log_dir / ".last_daybook").write_text("2026-08-05", encoding="utf-8")
+        (self.log_dir / "observations.jsonl").write_text("", encoding="utf-8")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -113,6 +114,25 @@ class LivenessCheckTests(unittest.TestCase):
 
     def test_zero_observation_day_does_not_warn(self):
         self.assertIsNone(self.warning())
+
+    def test_missing_primary_observation_log_warns(self):
+        (self.log_dir / "observations.jsonl").unlink()
+        self.assertIsNotNone(self.warning())
+
+    def test_malformed_observation_log_warns(self):
+        (self.log_dir / "observations.jsonl").write_text('{"timestamp":', encoding="utf-8")
+        self.assertIsNotNone(self.warning())
+
+    def test_unreadable_observation_log_warns(self):
+        real_open = open
+
+        def fail_observation_open(path, *args, **kwargs):
+            if os.fspath(path).endswith("observations.jsonl"):
+                raise OSError("synthetic read failure")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=fail_observation_open):
+            self.assertIsNotNone(self.warning())
 
     def test_observation_without_daybook_warns(self):
         self.write_observation("observations.jsonl", "2026-08-05")
