@@ -119,10 +119,12 @@ class AgentSetupLifecycleE2E(unittest.TestCase):
         「ready でも runtime を起動しない」退行はここで落ちる(sol finding 2)。
         """
         with mock.patch.object(daemon, "start_runtime_threads") as start, \
+             mock.patch.object(daemon, "dismiss_setup_wait_notification") as dismiss, \
              mock.patch.object(daemon.time, "sleep") as sleep, \
              mock.patch.object(daemon.urllib.request, "urlopen", return_value=_mock_response()):
             daemon.boot_runtime_when_ready()
         start.assert_called_once_with()
+        dismiss.assert_called_once_with()
         sleep.assert_not_called()
 
     # --- シーケンスA: グランドファザー移行 → セットアップ待ち → install → runtime起動 ---

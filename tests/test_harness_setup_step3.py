@@ -321,10 +321,22 @@ class SetupWaitNotificationTests(unittest.TestCase):
              mock.patch.object(daemon.urllib.request, "urlopen", return_value=response) as urlopen, \
              mock.patch.object(daemon, "harness_ready", side_effect=[False, False, True]), \
              mock.patch.object(daemon, "start_runtime_threads"), \
+             mock.patch.object(daemon, "dismiss_setup_wait_notification") as dismiss, \
              mock.patch.object(daemon.time, "sleep") as sleep:
             daemon.boot_runtime_when_ready()
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(sleep.call_count, 2)
+        dismiss.assert_called_once_with()
+
+    def test_setup_notification_dismiss_uses_fixed_id(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with mock.patch.object(daemon.urllib.request, "urlopen", return_value=response) as urlopen:
+            self.assertTrue(daemon.dismiss_setup_wait_notification())
+        body = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(body["notification_id"], daemon._SETUP_WAIT_NOTIFICATION_ID)
+        self.assertTrue(urlopen.call_args.args[0].full_url.endswith("/persistent_notification/dismiss"))
 
     def test_failed_notification_retries_until_a_successful_post(self):
         response = mock.MagicMock()

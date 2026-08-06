@@ -105,8 +105,10 @@ class SourceContractTests(unittest.TestCase):
         from pathlib import Path
         src = (Path(__file__).resolve().parents[1] / "embodied_ha" / "daemon.py").read_text(encoding="utf-8")
         block = src[src.index("# --- Web UI / runtime 起動 ---"):]
-        self.assertIn("if not (harness_ready() and start_runtime_threads()):", block,
+        self.assertIn("_runtime_started_at_boot = harness_ready() and start_runtime_threads()", block,
                       "ready でも見送られた場合にポーラが立たない")
+        self.assertIn("if _runtime_started_at_boot:", block)
+        self.assertIn("dismiss_setup_wait_notification()", block)
 
 
 if __name__ == "__main__":

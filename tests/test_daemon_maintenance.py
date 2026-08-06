@@ -28,14 +28,29 @@ class MaintenanceCheckTests(unittest.TestCase):
         self.daemon._last_daybook_liveness_check = None
         self.daemon._last_daybook_liveness_observed_warning = None
         self.daemon._last_daybook_liveness_notified_warning = None
+        self.daemon._daybook_liveness_reconciled = False
 
     def test_loop_check_runs_each_keepalive_but_daybook_is_throttled(self):
         with mock.patch.object(self.daemon, "check_loop_failure_liveness") as loop_check, \
-             mock.patch.object(self.daemon, "daybook_liveness_warning", return_value=None) as daybook:
+             mock.patch.object(self.daemon, "daybook_liveness_warning", return_value=None) as daybook, \
+             mock.patch.object(
+                 self.daemon, "dismiss_daybook_liveness_notification", return_value=True,
+             ) as dismiss:
             for now in (0, 60, 899, 900):
                 self.daemon.run_maintenance_checks(now_monotonic=now)
         self.assertEqual(loop_check.call_count, 4)
         self.assertEqual(daybook.call_count, 2)
+        dismiss.assert_called_once_with()
+
+    def test_healthy_first_check_dismisses_warning_left_by_previous_process(self):
+        with mock.patch.object(self.daemon, "check_loop_failure_liveness"), \
+             mock.patch.object(self.daemon, "daybook_liveness_warning", return_value=None), \
+             mock.patch.object(
+                 self.daemon, "dismiss_daybook_liveness_notification", return_value=True,
+             ) as dismiss:
+            self.daemon.run_maintenance_checks(now_monotonic=0)
+            self.daemon.run_maintenance_checks(now_monotonic=900)
+        dismiss.assert_called_once_with()
 
     def test_daybook_notification_is_deduplicated_recovered_and_rearmed(self):
         warning = "[daemon] 警告: daybook が 3 日更新されていません（保守パイプライン停止の疑い）"

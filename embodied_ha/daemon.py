@@ -86,6 +86,7 @@ _DAYBOOK_LIVENESS_NOTIFICATION_ID = f"{MQTT_PREFIX}_daybook_liveness_failing"
 _last_daybook_liveness_check = None
 _last_daybook_liveness_observed_warning = None
 _last_daybook_liveness_notified_warning = None
+_daybook_liveness_reconciled = False
 
 
 class ChildWatchdogFailures:
@@ -298,6 +299,35 @@ def notify_child_watchdog_failing(name: str, notification_id: str, consecutive: 
         print(f"[daemon] {name} watchdog notification failed", flush=True)
         return False
     return True
+
+
+def dismiss_persistent_notification(notification_id: str, *, log_name: str) -> bool:
+    """Best-effort dismissal for a fixed HA persistent-notification ID."""
+    payload = json.dumps({"notification_id": notification_id}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{HA_URL.rstrip('/')}/services/persistent_notification/dismiss",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {get_ha_token()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+    except Exception:
+        print(f"[daemon] {log_name} notification dismissal failed", flush=True)
+        return False
+    return True
+
+
+def dismiss_setup_wait_notification() -> bool:
+    """Clear a setup reminder once runtime readiness has recovered."""
+    return dismiss_persistent_notification(
+        _SETUP_WAIT_NOTIFICATION_ID,
+        log_name="setup-wait",
+    )
 
 
 def track_loop_outcome(success: bool, *, trigger_reason: str) -> None:
@@ -940,6 +970,7 @@ def boot_runtime_when_ready():
                 print("[daemon] ready harness を検出。runtime を開始します", flush=True)
                 announced = True
             if start_runtime_threads():
+                dismiss_setup_wait_notification()
                 return
         time.sleep(5)
 
@@ -1027,31 +1058,17 @@ def notify_daybook_liveness(warning: str) -> bool:
 
 def dismiss_daybook_liveness_notification() -> bool:
     """Remove a stale daybook warning after the maintenance pipeline recovers."""
-    payload = json.dumps({
-        "notification_id": _DAYBOOK_LIVENESS_NOTIFICATION_ID,
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        f"{HA_URL.rstrip('/')}/services/persistent_notification/dismiss",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {get_ha_token()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    return dismiss_persistent_notification(
+        _DAYBOOK_LIVENESS_NOTIFICATION_ID,
+        log_name="daybook liveness",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=10):
-            pass
-    except Exception:
-        print("[daemon] daybook liveness notification dismissal failed", flush=True)
-        return False
-    return True
 
 
 def run_maintenance_checks(*, now_monotonic: float | None = None) -> None:
     """Run liveness checks independently of the configurable autonomous-loop interval."""
     global _last_daybook_liveness_check
     global _last_daybook_liveness_observed_warning, _last_daybook_liveness_notified_warning
+    global _daybook_liveness_reconciled
 
     # This check is cheap and time-sensitive, so the existing one-minute daemon
     # keepalive polls it every time.  should_alert() suppresses healthy/no-streak states.
@@ -1079,9 +1096,15 @@ def run_maintenance_checks(*, now_monotonic: float | None = None) -> None:
         if (warning != _last_daybook_liveness_notified_warning
                 and notify_daybook_liveness(warning)):
             _last_daybook_liveness_notified_warning = warning
+        _daybook_liveness_reconciled = True
     elif (_last_daybook_liveness_notified_warning
           and dismiss_daybook_liveness_notification()):
         _last_daybook_liveness_notified_warning = None
+        _daybook_liveness_reconciled = True
+    elif not _daybook_liveness_reconciled and dismiss_daybook_liveness_notification():
+        # The previous daemon process may have sent the fixed-ID warning.  A
+        # healthy first check must clear it even though process-local state was lost.
+        _daybook_liveness_reconciled = True
 
 
 # --- 多重起動ガード（flock）---
@@ -1101,7 +1124,10 @@ threading.Thread(target=web_server_watchdog, daemon=True).start()
 print("[daemon] web server watchdog enabled", flush=True)
 # ready でも start_runtime_threads() が直前の snapshot で見送ることがある。
 # その場合もポーラを立てないと誰も再試行しない(codexレビューP1①)。
-if not (harness_ready() and start_runtime_threads()):
+_runtime_started_at_boot = harness_ready() and start_runtime_threads()
+if _runtime_started_at_boot:
+    dismiss_setup_wait_notification()
+else:
     print("[daemon] harness 未準備。Web UI でセットアップ後に runtime を開始します", flush=True)
     threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
 # メインスレッドの既存keepaliveで保守監視も回す。自律ループ間隔はユーザー設定で
