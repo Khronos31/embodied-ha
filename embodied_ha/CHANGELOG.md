@@ -6,6 +6,15 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.9] - 2026-08-06
+
+### Fixed / 修正
+
+- 観察が無かった日の処理済みマーカーを、日誌ファイルだけが欠けた故障として起動時に誤警告する問題を
+  修正しました。観察ログが欠損・破損していて正常な空日と確認できない場合は、従来どおり警告します。
+  Fixed a startup false alarm that treated a completed zero-observation day as a missing daybook. The watchdog
+  continues to warn when missing or malformed observation input prevents it from confirming a legitimate empty day.
+
 ## [2.1.8] - 2026-08-06
 
 ### Fixed / 修正
