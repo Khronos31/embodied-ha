@@ -441,12 +441,12 @@ def speak(room, message, host=""):
     elif config.get("type") == "tcp":
         # VoiceS3R 等の TCP スピーカーに raw mono s16le 16kHz PCM を push する。
         # デバイス側がサーバー（port 3334 listen）で、TCP 切断が終了合図。
-        host = (config.get("host") or "").strip()
+        target_host = (config.get("host") or "").strip()
         try:
             port = int(config.get("port") or 3334)
         except Exception:
             port = 3334
-        if not host or port <= 0:
+        if not target_host or port <= 0:
             print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
             return False
 
@@ -480,8 +480,8 @@ def speak(room, message, host=""):
             return False
 
         try:
-            _send_pcm_to_tcp(host, port, pcm_bytes, timeout=5)
-            print(f"[speak] tcp:{room} OK sent={len(pcm_bytes)}B ({host}:{port})")
+            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=5)
+            print(f"[speak] tcp:{room} OK sent={len(pcm_bytes)}B ({target_host}:{port})")
             return True
         except Exception as exc:
             print(f"[speak] tcp:{room} 送信失敗: {exc}", file=sys.stderr)

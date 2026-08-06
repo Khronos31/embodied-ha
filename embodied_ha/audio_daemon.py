@@ -1636,7 +1636,7 @@ def transcribe_wav(path: str, provider: str, language: str, token: str) -> str:
     with open(path, "rb") as f:
         body = f.read()
     request = urllib.request.Request(
-        f"http://supervisor/core/api/stt/{provider}",
+        f"{ha_api_base().rstrip('/')}/stt/{provider}",
         data=body,
         method="POST",
         headers={
@@ -2574,12 +2574,6 @@ def main() -> int:
     cleanup_thread.start()
 
     preferences, sources = wait_for_enabled_mics()
-
-    if any(config.transport == "tcp_pull" for config in sources):
-        log(
-            "deployment prerequisite: development/preview environments must not "
-            "target production VoiceS3R node IPs"
-        )
 
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
     start_tv_states_refresh_thread(preferences)

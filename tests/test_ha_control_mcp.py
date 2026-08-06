@@ -149,6 +149,30 @@ class HaControlServiceValidationTests(unittest.TestCase):
         called_url = mock_run.call_args[0][0][-1]
         self.assertTrue(called_url.endswith("/services/script/viewing_reservation_set"))
 
+    @mock.patch("subprocess.run")
+    def test_explicit_entity_id_cannot_be_overridden_by_data(self, mock_run):
+        mock_run.return_value = mock.Mock(returncode=0, stdout="")
+        with mock.patch.object(self.mcp, "action_fields_for_control", return_value={}), \
+             mock.patch.object(self.mcp, "apply_action_to_body_state"):
+            _, is_error = self._call({
+                "domain": "light",
+                "service": "turn_off",
+                "entity_id": "light.living",
+                "data": {"entity_id": "light.bedroom", "transition": 1},
+            })
+
+        self.assertFalse(is_error)
+        command = mock_run.call_args.args[0]
+        payload = json.loads(command[command.index("-d") + 1])
+        self.assertEqual(payload["entity_id"], "light.living")
+        record = json.loads(
+            (Path(self.tmpdir.name) / "actions.jsonl")
+            .read_text(encoding="utf-8")
+            .strip()
+            .splitlines()[-1]
+        )
+        self.assertEqual(record["entity_id"], payload["entity_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

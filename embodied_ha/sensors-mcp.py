@@ -27,8 +27,9 @@ def get_sensors(args):
         capture_output=True, text=True, timeout=20
     )
     out = (r.stdout or "").strip()
-    if r.returncode != 0 and not out:
-        return [text(f"センサー取得に失敗しました: {(r.stderr or '').strip()}")], True
+    if r.returncode != 0:
+        detail = (r.stderr or "").strip() or out
+        return [text(f"センサー取得に失敗しました: {detail}")], True
     return [text(out if out else "（おもなデバイスは未設定です）")]
 
 
