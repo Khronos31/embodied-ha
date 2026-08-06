@@ -11,6 +11,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,13 +126,54 @@ class ConsecutiveCountTests(unittest.TestCase):
         self.assertEqual(second["first_failed_at"], first["first_failed_at"], "最初の失敗時刻が動いている")
 
         invoke_failure.mark_success(self.log_dir)
-        self.assertEqual(invoke_failure.read_state(self.log_dir), {})
+        success = invoke_failure.read_state(self.log_dir)
+        self.assertEqual(success["consecutive"], 0)
+        self.assertTrue(success["last_success_at"])
 
         after = invoke_failure.mark_failure(self.log_dir, source="loop")
         self.assertEqual(after["consecutive"], 1, "成功後に数え直していない")
 
     def test_mark_success_is_safe_when_no_state(self):
-        invoke_failure.mark_success(self.log_dir)  # 例外を投げない
+        invoke_failure.mark_success(self.log_dir)  # 例外を投げず成功時刻を作る
+        self.assertTrue(invoke_failure.read_state(self.log_dir)["last_success_at"])
+
+    def test_failure_preserves_last_success_for_time_based_alert(self):
+        invoke_failure.mark_success(self.log_dir)
+        last_success = invoke_failure.read_state(self.log_dir)["last_success_at"]
+        failed = invoke_failure.mark_failure(self.log_dir, source="loop")
+        self.assertEqual(failed["last_success_at"], last_success)
+
+    def test_alerts_after_silence_only_during_an_active_failure_streak(self):
+        now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+        healthy = {
+            "consecutive": 0,
+            "last_success_at": (now - timedelta(hours=8)).isoformat(),
+            "alerted_at": "",
+        }
+        self.assertFalse(invoke_failure.should_alert(
+            healthy, threshold=3, max_silence_seconds=4 * 3600, now=now,
+        ))
+
+        failed = {
+            **healthy,
+            "consecutive": 1,
+            "first_failed_at": (now - timedelta(minutes=5)).isoformat(),
+        }
+        self.assertTrue(invoke_failure.should_alert(
+            failed, threshold=3, max_silence_seconds=4 * 3600, now=now,
+        ))
+
+    def test_first_failure_is_time_reference_when_success_is_unknown(self):
+        now = datetime(2026, 8, 6, 12, 0, tzinfo=timezone.utc)
+        failed = {
+            "consecutive": 1,
+            "first_failed_at": (now - timedelta(hours=4)).isoformat(),
+            "last_success_at": "",
+            "alerted_at": "",
+        }
+        self.assertTrue(invoke_failure.should_alert(
+            failed, threshold=3, max_silence_seconds=4 * 3600, now=now,
+        ))
 
     def test_alert_fires_once_per_streak(self):
         threshold = 3

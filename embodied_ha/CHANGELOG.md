@@ -6,6 +6,25 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.10] - 2026-08-07
+
+### Fixed / 修正
+
+- セットアップ待ちをHome Assistantへ定期的に通知し、セットアップ完了後は通知を解除するようにしました。
+  Setup reminders are now repeated at a bounded interval and dismissed after runtime setup recovers.
+- 日誌生成の停止を起動時だけでなく15分ごとに確認し、異常時はHome Assistantへ通知するようにしました。
+  復旧後やアドオン再起動後に残った古い通知も解除します。
+  Daybook liveness is now checked every 15 minutes and reported through Home Assistant, with stale warnings
+  reconciled after recovery and add-on restarts.
+- 音声デーモンまたはWebサーバーが短時間に5回続けて停止した場合に通知するようにしました。
+  自動再起動の間隔は従来どおり変更しません。
+  Repeated audio-daemon or Web-server exits now raise a notification after five short-lived failures without
+  changing the existing restart interval.
+- 自律ループの連続失敗3回に加え、失敗が始まってから最後の成功が4時間以上前になった場合も
+  通知するようにしました。
+  Loop invocation failures now alert after either three consecutive failures or an active failure streak whose
+  last successful invocation was at least four hours ago.
+
 ## [2.1.9] - 2026-08-06
 
 ### Fixed / 修正
