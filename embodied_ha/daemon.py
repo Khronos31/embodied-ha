@@ -15,6 +15,7 @@ import json
 import random
 import fcntl
 import urllib.request
+import datetime as dt
 
 import body_state
 import anomaly_state
@@ -839,6 +840,48 @@ def boot_runtime_when_ready():
         time.sleep(5)
 
 
+def _daybook_has_source_entries(log_dir: str, day: str) -> bool:
+    """Return whether the marker day has an observation that requires a daybook."""
+    for name in ("observations.jsonl", "observations_recovered.jsonl"):
+        try:
+            with open(os.path.join(log_dir, name), encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    timestamp = row.get("timestamp") if isinstance(row, dict) else None
+                    if isinstance(timestamp, str) and timestamp[:10] == day:
+                        return True
+        except FileNotFoundError:
+            continue
+    return False
+
+
+def daybook_liveness_warning(log_dir: str, *, today: dt.date | None = None) -> str | None:
+    """Return the startup warning, allowing marker-only completion for empty days."""
+    marker = os.path.join(log_dir, ".last_daybook")
+    if not os.path.exists(marker):
+        return None
+    with open(marker, encoding="utf-8") as f:
+        last = f.read().strip()
+    if not last:
+        return None
+
+    marker_day = dt.date.fromisoformat(last)
+    gap = ((today or dt.date.today()) - marker_day).days
+    if gap >= 2:
+        return f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）"
+
+    daybook = os.path.join(log_dir, "memory", "daybooks", f"{last}.json")
+    if os.path.exists(daybook) or not _daybook_has_source_entries(log_dir, last):
+        return None
+    return (
+        f"[daemon] 警告: daybook マーカーは {last} ですが、その日の日誌ファイルがありません"
+        "（マーカーだけが進んでいる疑い）"
+    )
+
+
 # --- 多重起動ガード（flock）---
 # threading.Lock は全部プロセスローカルなので、daemon.py が複数走ると
 # 同じエンティティを各々ポーリングして二重観察・二重トリガーになる（2026-06-22に4重起動を踏んだ）。
@@ -862,21 +905,9 @@ if not (harness_ready() and start_runtime_threads()):
     threading.Thread(target=boot_runtime_when_ready, daemon=True).start()
 # 保守パイプラインの生存確認（サイレント停止の早期検知）
 try:
-    marker = os.path.join(_LOG_DIR, ".last_daybook")
-    if os.path.exists(marker):
-        with open(marker, encoding="utf-8") as f:
-            last = f.read().strip()
-        import datetime as _dt
-
-        if last:
-            gap = (_dt.date.today() - _dt.date.fromisoformat(last)).days
-            if gap >= 2:
-                print(f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）", flush=True)
-            # マーカーだけを見ると、マーカーは進むのに日誌ができていない状態を見逃す
-            # （2026-07-05〜07-29 が実際にそうだった）。**成果物の実在**を確かめる。
-            elif not os.path.exists(os.path.join(_LOG_DIR, "memory", "daybooks", f"{last}.json")):
-                print(f"[daemon] 警告: daybook マーカーは {last} ですが、その日の日誌ファイルがありません"
-                      "（マーカーだけが進んでいる疑い）", flush=True)
+    warning = daybook_liveness_warning(_LOG_DIR)
+    if warning:
+        print(warning, flush=True)
 except Exception:
     pass
 # メインスレッドを生かし続ける
