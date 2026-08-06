@@ -74,6 +74,15 @@ class GetSensorsTests(unittest.TestCase):
         self.assertIn("boom", self._json(result))
 
     @mock.patch("subprocess.run")
+    def test_failure_with_partial_stdout_is_still_error(self, mock_run):
+        mock_run.return_value = mock.Mock(
+            returncode=1, stdout="途中までの結果", stderr="boom"
+        )
+        result, is_error = self.sensors_mcp.get_sensors({})
+        self.assertTrue(is_error)
+        self.assertIn("boom", self._json(result))
+
+    @mock.patch("subprocess.run")
     def test_empty_stdout_success_returns_placeholder(self, mock_run):
         mock_run.return_value = mock.Mock(returncode=0, stdout="")
         result = self.sensors_mcp.get_sensors({})

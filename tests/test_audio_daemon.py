@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import math
 import os
@@ -72,6 +73,23 @@ class AudioDaemonTests(unittest.TestCase):
                 default_auditory_events_path(),
                 "/config/embodied-ha/log/auditory_events.jsonl",
             )
+
+    def test_transcribe_wav_uses_configured_ha_url(self):
+        response = io.BytesIO(json.dumps({"text": "聞こえました"}).encode("utf-8"))
+        with tempfile.NamedTemporaryFile() as wav_file, \
+             mock.patch.dict(os.environ, {"HA_URL": "http://ha.test/api"}), \
+             mock.patch.object(
+                 self.audio_daemon.urllib.request,
+                 "urlopen",
+                 return_value=response,
+             ) as urlopen_mock:
+            result = self.audio_daemon.transcribe_wav(
+                wav_file.name, "cloud", "ja-JP", "test-token"
+            )
+
+        self.assertEqual(result, "聞こえました")
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(request.full_url, "http://ha.test/api/stt/cloud")
 
     def _pcm_sine(self, freq_hz: float = 440.0, seconds: float = 1.0, amplitude: float = 0.5) -> bytes:
         samples = int(self.audio_daemon.SAMPLE_RATE * seconds)

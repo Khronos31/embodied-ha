@@ -6,6 +6,21 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.7] - 2026-08-06
+
+### Fixed / 修正
+
+- Home Assistantサービス呼び出しで、追加データ内の`entity_id`が明示した操作対象を上書きし、
+  監査記録と実際の対象が食い違う問題を修正しました。
+  Fixed Home Assistant service calls allowing an `entity_id` in additional data to override the explicit
+  target and diverge from the audit record.
+- センサー描画処理が途中結果を出して異常終了した場合に、成功として扱う問題を修正しました。
+  Fixed sensor rendering failures with partial output being reported as successful results.
+- 音声認識が設定済みのHome Assistant URLを使用するようにし、TCPスピーカーの送信先変数を明確化しました。
+  利用者に関係しないVoiceS3R開発環境向けの起動時注意ログも削除しました。
+  Updated speech recognition to honor the configured Home Assistant URL, clarified TCP speaker target
+  handling, and removed a VoiceS3R development-only startup warning from user logs.
+
 ## [2.1.6] - 2026-08-05
 
 ### Added / 追加
