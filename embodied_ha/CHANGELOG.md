@@ -6,6 +6,19 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.14] - 2026-08-07
+
+### Fixed / 修正
+
+- Home Assistantの操作後に存在しない報告手段を案内していた問題を修正し、現在の身体状態で
+  音声報告できない場合に、報告可能な身体へ移る手順を明記しました。
+  Corrected post-action guidance that referenced an unavailable reporting path and documented how to
+  move to a body capable of reporting when the current embodiment cannot speak.
+- 長期記憶の一部をコンテキストから省略した際、実際には行われていないコア記憶への要約を
+  完了済みと表示していた問題を修正しました。元の記憶データと表示件数は変更しません。
+  Removed an inaccurate claim that omitted long-memory entries had already been summarized into core memory,
+  without changing the stored memories or the number of entries included in context.
+
 ## [2.1.13] - 2026-08-07
 
 ### Fixed / 修正
