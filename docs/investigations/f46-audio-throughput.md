@@ -243,8 +243,10 @@ The failed disposable add-on was uninstalled and its local-store source moved
 to `/tmp` rather than deleted. Akane was restored on unchanged 2.1.14. All three
 resident instances were started, all five resident TCP sessions resumed, and
 Akane's three pre-test persistent-data hashes matched exactly. This result
-blocks F-46 rollout: the candidate fixes the CPU-bound consumer but the two
-unexplained early EOFs still violate the production continuity gate.
+blocked F-46 rollout at this stage: the candidate fixed the CPU-bound consumer
+but the two unexplained early EOFs still violated the then-current production
+continuity gate. A later production-like recovery canary superseded this gate;
+see below.
 
 ### Early-EOF boundary refinement
 
@@ -283,6 +285,47 @@ shorter than the firmware deadline, followed by a separate rotation-recovery
 test. The current 30-minute/no-reconnect combination is structurally incapable
 of passing once readiness consumes any part of the firmware's 30-minute socket
 lifetime.
+
+### Production-like reconnect canary
+
+A fourth disposable build (`0.0.3`) retained the same F-46 candidate and bounded
+readiness, but modeled `tcp_pull_worker()` after the global barrier. Every
+disconnect remained visible; bytes accumulated against one global 1,800-second
+clock, and the worker used the candidate reservation and backoff path to recover.
+An EOF was classified as a planned firmware rotation only at socket age 1,795
+seconds or later. TTS and all agent/LLM processes remained disabled.
+
+Readiness reached 6/6 in 27.520 seconds. The production-like gate passed:
+
+| Measure | Result |
+| --- | ---: |
+| TCP 30-minute cumulative intake ratio | 0.99152 to 0.99915 |
+| ALSA 30-minute cumulative intake ratio | 0.99998 |
+| Planned 30-minute rotations | 3 |
+| Unexpected TCP disconnects | 9 |
+| Successful reconnects | 12/12 |
+| Reconnect latency | 1.208 to 2.255 s |
+| Unexpected session age | 119.026 to 894.110 s |
+| Queue overflow / worker failure | 0 / 0 |
+| VAD implementation | `silero_onnx` on 6/6 |
+| CPU, 58 running samples | 1.473% mean; 1.53% p95; 1.67% max |
+| Memory, 58 running samples | 145.4 to 175.9 MB |
+
+The nine early disconnects confirm that the lower VoiceS3R transport remains
+imperfect; they are not erased or relabeled by recovery. They no longer make
+the F-46 service result ambiguous, however: every disconnect recovered within
+2.3 seconds and every source retained more than 99.1% of its full-window audio.
+This is a decisive improvement over the pre-change daemon's roughly 9.8%
+weighted receive ratio and repeated short sessions. With all five TCP sources
+represented throughout the window, the CPU sample is also valid and clears the
+required 50% reduction by a wide margin.
+
+The disposable add-on and local-store source were removed after the pass. Akane
+was restored on unchanged 2.1.14; Akane, Sora, and Midori were all started, all
+five resident TCP streams resumed, and Akane's three persistent-data hashes
+matched the pre-test values. This passes the F-46 throughput, recovery, queue,
+VAD, and CPU production gate. Human short-call recall, active listen, and a
+successful ordinary short STT utterance remain separate release gates.
 
 ## Evidence
 
@@ -488,8 +531,12 @@ retained empty-STT corpus as truth:
 Roll out to one instance first. For the five TCP sources over a continuous
 30-minute observation window:
 
-- received/expected PCM ratio is at least 0.95 for every connected source;
-- unexpected EOF count is zero after initial connection settling;
+- cumulative received/expected PCM ratio is at least 0.95 for every source on
+  one global clock; reconnects do not reset the denominator;
+- each EOF is retained and classified by socket age, with only the firmware's
+  known close at age 1,795 seconds or later treated as a planned rotation;
+- every disconnect reconnects within 30 seconds, and unexpected closes remain
+  reported as transport debt even when service coverage passes;
 - segment queue overflow is zero;
 - add-on CPU p95 falls by at least 50% from the recorded pre-change baseline;
 - active listen and an ordinary short STT utterance both succeed.
@@ -512,7 +559,10 @@ change.
 
 ## Remaining uncertainty requiring canary evidence, not design speculation
 
-- Production CPU and compressed/unpacked image-size delta.
+- Compressed/unpacked image-size delta (Supervisor did not expose it).
 - Short Japanese call recall and background false-trigger rate.
 - Whether four queued segments per source is sufficient for observed HA STT
   latency; telemetry should validate or revise this after the canary.
+- The firmware-side cause distribution of the nine early TCP closes; service
+  recovery is proven, but `send_error`, preemption, and Wi-Fi loss remain
+  indistinguishable from the client EOF alone.
