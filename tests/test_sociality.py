@@ -1,11 +1,10 @@
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-import sys
 from unittest import mock
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "embodied_ha"))
@@ -219,6 +218,62 @@ class SocialityTests(unittest.TestCase):
             )
         )
         self.assertTrue(allowed["allowed"])
+
+    def test_should_interrupt_schema_requires_explicit_intent_enum(self):
+        with mock.patch.object(self.sociality, "serve") as serve_mock:
+            self.sociality.main()
+
+        tools = serve_mock.call_args.args[2]
+        spec = tools["should_interrupt"]["spec"]
+        schema = spec["inputSchema"]
+        self.assertEqual(schema["required"], ["intent"])
+        self.assertEqual(
+            schema["properties"]["intent"]["enum"],
+            ["speak", "action"],
+        )
+        self.assertIn("発話", schema["properties"]["intent"]["description"])
+        self.assertIn("家電操作", schema["properties"]["intent"]["description"])
+        self.assertIn("intent=speak", spec["description"])
+        self.assertIn("intent=action", spec["description"])
+
+    def test_should_interrupt_missing_intent_fails_closed(self):
+        payload = json.loads(
+            self._text(
+                self.sociality.should_interrupt(
+                    {"person": "alice", "mode": "watch", "hour": 12}
+                )
+            )
+        )
+
+        self.assertFalse(payload["allowed"])
+        self.assertEqual(payload["reason"], "未知のintent: （空）")
+
+    def test_should_interrupt_keeps_speak_and_action_consent_separate(self):
+        self.sociality.record_boundary(
+            {
+                "person": "alice",
+                "consent": {"speak": True, "action": False},
+            }
+        )
+
+        speak = json.loads(
+            self._text(
+                self.sociality.should_interrupt(
+                    {"person": "alice", "mode": "watch", "intent": "speak", "hour": 12}
+                )
+            )
+        )
+        action = json.loads(
+            self._text(
+                self.sociality.should_interrupt(
+                    {"person": "alice", "mode": "watch", "intent": "action", "hour": 12}
+                )
+            )
+        )
+
+        self.assertTrue(speak["allowed"])
+        self.assertFalse(action["allowed"])
+        self.assertIn("consent", action["reason"])
 
     def test_ingest_interaction_updates_turn_taking_state(self):
         self.sociality.ingest_interaction(

@@ -10,16 +10,17 @@ subprocessとして実際に起動し、生成されるmcp設定JSONのenvを検
 (mcp-config.pyはモジュールレベルでos.environを読むため、import経由の
 単体テストより実行経路に忠実なsubprocess呼び出しの方が適している)。
 """
-import json
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "embodied_ha" / "mcp-config.py"
@@ -135,24 +136,64 @@ class McpConfigFormatTests(unittest.TestCase):
     def test_format_agy_adds_include_tools_for_matching_server(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "mcp_config.json"
+            credential_path = Path(tmp) / "agy-credentials.json"
 
             self.run_config(
                 [
                     "--format",
                     "agy",
+                    "--credential-file",
+                    str(credential_path),
                     "--allowed-mcp-tools",
                     "mcp__ha__ha_get",
                     str(out_path),
                     "ha",
-                ]
+                ],
+                env={
+                    "HA_URL": "http://example.invalid",
+                    "SUPERVISOR_TOKEN": "secret-token",
+                },
             )
 
-            config = json.loads(out_path.read_text(encoding="utf-8"))
+            config_text = out_path.read_text(encoding="utf-8")
+            config = json.loads(config_text)
             self.assertEqual(
                 config["mcpServers"]["ha"][GEMINI_OFFICIAL_MCP_ALLOWLIST_KEY],
                 ["ha_get"],
             )
             self.assertEqual(set(config["mcpServers"]), {"ha"})
+            self.assertNotIn("SUPERVISOR_TOKEN", config_text)
+            self.assertNotIn("secret-token", config_text)
+            ha_server = config["mcpServers"]["ha"]
+            self.assertEqual(ha_server["command"], "python3")
+            self.assertEqual(
+                ha_server["args"][:3],
+                [
+                    str(ROOT / "embodied_ha" / "mcp-env-launcher.py"),
+                    str(credential_path),
+                    "ha",
+                ],
+            )
+            credentials = json.loads(credential_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                credentials["servers"]["ha"]["SUPERVISOR_TOKEN"],
+                "secret-token",
+            )
+            self.assertEqual(credential_path.stat().st_mode & 0o777, 0o600)
+
+            request = json.dumps(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+            ) + "\n"
+            launched = subprocess.run(
+                [ha_server["command"], *ha_server["args"]],
+                input=request,
+                capture_output=True,
+                text=True,
+                env=ha_server["env"],
+                check=False,
+            )
+            self.assertEqual(launched.returncode, 0, launched.stderr)
+            self.assertIn('"name": "ha_get"', launched.stdout)
 
     def test_format_codex_writes_profile_toml_with_enabled_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -317,10 +358,13 @@ class McpConfigFormatTests(unittest.TestCase):
     def test_allowed_mcp_tools_must_cover_all_selected_servers(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "mcp_config.json"
+            credential_path = Path(tmp) / "agy-credentials.json"
             result = self.run_config_no_check(
                 [
                     "--format",
                     "agy",
+                    "--credential-file",
+                    str(credential_path),
                     "--allowed-mcp-tools",
                     "mcp__ha__ha_get",
                     str(out_path),
@@ -386,6 +430,18 @@ class ServerSpecsTests(unittest.TestCase):
                 server["env"]["EHA_GITHUB_APP_PEM"],
                 env["EHA_GITHUB_APP_PEM"],
             )
+
+    def test_sociality_server_receives_only_its_required_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            module, env = self.load_module(tmp)
+            with mock.patch.dict(os.environ, env, clear=False):
+                server_env = module.SERVER_SPECS["sociality"].build()["env"]
+
+            self.assertEqual(server_env["EHA_LOG_DIR"], env["EHA_LOG_DIR"])
+            self.assertEqual(server_env["PATH"], env["PATH"])
+            self.assertNotIn("SUPERVISOR_TOKEN", server_env)
+            self.assertNotIn("EHA_DATA_DIR", server_env)
+            self.assertNotIn("EHA_PREFS_FILE", server_env)
 
     def test_audio_server_exposes_concentrate_hearing_only_to_antigravity(self):
         for harness in ("claude", "codex", "agy"):
