@@ -86,6 +86,50 @@ The compressed/unpacked image delta was not exposed by the available Supervisor
 metadata. The labeled short-call canary, production CPU, TCP intake ratio, and
 EOF gate remain unverified release requirements.
 
+## Isolated live-hardware canary (2026-08-07)
+
+A disposable one-shot add-on ran the candidate audio path against the actual
+study ALSA input and five VoiceS3R TCP sources. The resident Akane 2.1.14 add-on
+was stopped first because each firmware endpoint accepts only one microphone
+client. The disposable add-on mounted `/config` read-only, derived a sanitized
+preferences copy under its own `/tmp`, disabled wake handling, and started only
+the finite audio harness—not `daemon.py`, MQTT, Web, or autonomous loops.
+
+The 90-second no-TTS preflight passed:
+
+| Measure | Result |
+| --- | ---: |
+| Sources ready and completed | 6/6 |
+| TCP intake ratio range | 0.99413 to 0.99989 |
+| ALSA intake ratio | 1.00287 |
+| Early EOF / stream error | 0 |
+| Queue overflow / worker failure | 0 / 0 |
+| VAD implementation | `silero_onnx` on 6/6 |
+| Maximum concurrent VAD call | 55.589 ms |
+
+The isolated single-source image gate had required a VAD call below 10 ms. The
+six-source live run showed occasional scheduler-latency spikes up to 55.589 ms,
+but sustained intake remained at least 0.994x and the production processing-lag
+criterion is 500 ms. This does not fail the transport gate, but it is retained
+as production CPU/scheduling evidence.
+
+The subsequent planned 30-minute TTS run did not become a valid observation.
+One TCP endpoint completed its handshake but delivered zero PCM and hit the
+10-second read timeout about 16 seconds into setup. The finite harness then
+aborted all other sources as designed. No TTS stimulus had yet played (`0/12`),
+so no transcript or TTS-contamination evidence was produced. The endpoint
+reconnected after restoration of the resident add-on, but the cause of the
+one-off no-data connection was not established. The 30-minute intake, TTS, STT,
+and unexpected-EOF gates therefore remain **unverified**, not failed or passed.
+
+Akane was restored on unchanged 2.1.14 after the abort. Akane, Sora, and Midori
+were all started, all five resident TCP connections resumed, and Akane's
+`preferences.json`, `character.md`, and `body_location.json` hashes matched the
+pre-test values. Stopping the current resident image produces Supervisor state
+`error` because its process does not handle SIGTERM and exits with status 143;
+Supervisor nevertheless confirmed that the container was not running before
+the disposable client started. Graceful add-on shutdown is a separate finding.
+
 ## Evidence
 
 ### Current production behavior
