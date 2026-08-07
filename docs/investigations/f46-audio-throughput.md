@@ -132,12 +132,57 @@ global abort. Readiness reached 5/6 and TTS again remained `0/12`.
 
 Immediately after restoration, the resident 2.1.14 add-on established streaming
 sessions to all five endpoints, including the endpoint that had produced no PCM
-for the disposable client. The 60-second cooldown and retry disprove the initial
-simple stale-session explanation. The cause of disposable-client startup
-instability is not established, so further blind retries are not acceptance
-evidence. The 30-minute/TTS release gate remains blocked pending a test topology
-that can establish all sources reliably or equivalent observation on the exact
-resident candidate.
+for the disposable client. A fixed 60-second cooldown plus one retry was
+insufficient; it did not establish the cause. Further blind retries are not
+acceptance evidence. The 30-minute/TTS release gate remains blocked pending a
+test topology that can establish all sources reliably or equivalent observation
+on the exact resident candidate.
+
+### Raw-TCP boundary probe
+
+A second disposable add-on removed the candidate audio stack entirely: no ONNX,
+STT, TTS, audio device, HA API, MQTT, or agent process. It loaded the five
+endpoints from a read-only preferences mount and only opened sockets and drained
+raw PCM. Akane was stopped and Supervisor-confirmed not running, followed by a
+60-second settling interval. LAN ICMP checks immediately beforehand showed 0%
+loss across all five nodes and 2.3-to-8.3 ms average RTT.
+
+The finite probe ran 18 rounds and 37 endpoint samples:
+
+| Topology | Connection result |
+| --- | ---: |
+| First one-at-a-time pass | 3/5 connected; 2 TCP handshakes timed out |
+| Second one-at-a-time pass | 5/5 connected |
+| Three two-at-a-time samples | 6/6 connected |
+| Two three-at-a-time samples | 6/6 connected |
+| Three five-at-a-time rounds | 15/15 connected; no EOF |
+
+Successful sessions began delivering PCM after about 0.25 to 1.33 seconds. The
+probe's nominal short-window ratio included that first-byte delay and therefore
+flagged several 3-to-5-second rows below 0.90. After accounting for startup, the
+bytes delivered in the three five-node rounds were consistent with the expected
+32,000 B/s stream rate. Those short-window flags are not evidence of a sustained
+throughput deficit.
+
+This moves the failure boundary below F-46 inference and segment processing:
+
+- A first-attempt failure occurred even with one endpoint and no audio code, so
+  ONNX/STT and five-way concurrency are not required to reproduce startup
+  failure.
+- Every endpoint subsequently worked, and five-way raw concurrency passed three
+  times, so the issue is not a fixed failed node or a general simultaneous-stream
+  limit.
+- The resident add-on also re-established all five sessions after restoration.
+
+The remaining lower-layer cause is a transient client-handoff/startup condition
+in the firmware accept/session path or the HAOS add-on bridge/NAT path; this test
+does not distinguish those two owners. The immediate canary defect is now clear:
+its setup gate allowed only one retry and treated a transient cold-start failure
+as a candidate verdict, while the production `tcp_pull_worker()` intentionally
+retries with exponential backoff. A valid release canary should use the same
+bounded-backoff behavior during a separate readiness phase, require all sources
+to deliver PCM continuously before starting the observation clock, and allow no
+reconnect to hide a failure after that clock starts.
 
 Akane was restored on unchanged 2.1.14 after the abort. Akane, Sora, and Midori
 were all started, all five resident TCP connections resumed, and Akane's
