@@ -82,6 +82,56 @@ class CameraMcpTests(unittest.TestCase):
         self.assertEqual(context["direction"], "left")
         self.assertTrue(context["timestamp"])
 
+    def test_same_room_camera_context_without_projection_remains_direct(self):
+        camera_mcp = load_camera_mcp_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prefs = root / "preferences.json"
+            location = root / "body_location.json"
+            graph = root / "floorplan_room_graph_draft.json"
+            prefs.write_text(
+                json.dumps(
+                    {
+                        "cameras": [
+                            {
+                                "source": "camera.study",
+                                "label": "スタディカメラ",
+                                "room": "study",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            location.write_text(
+                json.dumps({"current_room": "study"}), encoding="utf-8"
+            )
+            graph.write_text(
+                json.dumps(
+                    {
+                        "rooms": {"study": {"display_name": "スタディ"}},
+                        "edges": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(location),
+                    "EHA_ROOM_GRAPH_FILE": str(graph),
+                },
+                clear=False,
+            ):
+                context = camera_mcp.camera_context("camera.study")
+
+        self.assertEqual(context["sensory_origin"], "direct")
+        self.assertEqual(context["access_mode"], "direct")
+        self.assertEqual(context["action_mode"], "direct_in_room")
+
     def test_handle_ptz_uses_camera_specific_button_mapping(self):
         camera_mcp = load_camera_mcp_module()
         camera = {
@@ -107,6 +157,7 @@ class CameraMcpTests(unittest.TestCase):
         camera = {"source": "capture_tv"}
         with mock.patch.object(camera_mcp, "fetch_frame", return_value=b"jpeg-bytes") as fetch_mock, \
              mock.patch.object(camera_mcp, "camera_context", return_value={"source": "capture_tv", "timestamp": "2026-06-26T10:00:00+09:00"}), \
+             mock.patch.object(camera_mcp, "_camera_projection_still_active", return_value=True), \
              mock.patch.object(camera_mcp, "get_ha_token", return_value=""):
             content, is_error = unpack_mcp_result(
                 camera_mcp._handle_capture(
@@ -120,6 +171,133 @@ class CameraMcpTests(unittest.TestCase):
         self.assertFalse(is_error)
         self.assertEqual(content[0]["type"], "text")
         self.assertEqual(content[1]["type"], "image")
+
+    def test_projected_camera_capture_preserves_projection_state(self):
+        camera_mcp = load_camera_mcp_module()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            prefs = root / "preferences.json"
+            location = root / "body_location.json"
+            state = root / "body_state.json"
+            graph = root / "floorplan_room_graph_draft.json"
+            prefs.write_text(
+                json.dumps(
+                    {
+                        "cameras": [
+                            {
+                                "source": "camera.study",
+                                "label": "スタディカメラ",
+                                "room": "study",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            location.write_text(
+                json.dumps(
+                    {
+                        "current_room": "study",
+                        "projected_room": "study",
+                        "current_entity": "camera.study",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before = {
+                "remote_mode": "remote_avatar",
+                "remote_room": "study",
+                "remote_since": "2026-08-07T10:00:00+09:00",
+                "remote_avatar_host": "camera.study",
+                "embodiment_tension": 0.4,
+                "return_to_body_pressure": 0.5,
+            }
+            state.write_text(json.dumps(before), encoding="utf-8")
+            graph.write_text(
+                json.dumps(
+                    {
+                        "rooms": {"study": {"display_name": "スタディ"}},
+                        "edges": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(location),
+                    "EHA_BODY_STATE_FILE": str(state),
+                    "EHA_ROOM_GRAPH_FILE": str(graph),
+                },
+                clear=False,
+            ), mock.patch.object(
+                camera_mcp, "fetch_frame", return_value=b"jpeg-bytes"
+            ), mock.patch.object(camera_mcp, "get_ha_token", return_value=""):
+                content, is_error = unpack_mcp_result(
+                    camera_mcp._handle_use_device_camera(
+                        {"action": "capture"},
+                        "http://supervisor/core/api",
+                        "http://homeassistant.local:1984",
+                    )
+                )
+
+            self.assertFalse(is_error)
+            context = json.loads(content[0]["text"])["camera_context"]
+            self.assertEqual(context["sensory_origin"], "cyber_direct")
+            self.assertEqual(context["access_mode"], "cyber_direct")
+            self.assertEqual(context["action_mode"], "cyber_in_room")
+            saved = json.loads(state.read_text(encoding="utf-8"))
+            for key, value in before.items():
+                self.assertEqual(saved[key], value)
+
+    def test_capture_rejects_projection_change_after_frame_fetch(self):
+        camera_mcp = load_camera_mcp_module()
+        camera = {"source": "camera.study"}
+        with mock.patch.object(
+            camera_mcp, "fetch_frame", return_value=b"jpeg-bytes"
+        ), mock.patch.object(
+            camera_mcp, "_camera_projection_still_active", return_value=False
+        ), mock.patch.object(camera_mcp, "apply_action_to_body_state") as apply_mock:
+            content, is_error = unpack_mcp_result(
+                camera_mcp._handle_capture(
+                    camera,
+                    "camera.study",
+                    "http://supervisor/core/api",
+                    "http://homeassistant.local:1984",
+                )
+            )
+
+        self.assertTrue(is_error)
+        self.assertIn("侵入状態が変わりました", content[0]["text"])
+        self.assertFalse(any(block.get("type") == "image" for block in content))
+        apply_mock.assert_not_called()
+
+    def test_capture_rejects_current_entity_without_projected_room(self):
+        camera_mcp = load_camera_mcp_module()
+        camera = {"source": "camera.study"}
+        with mock.patch.object(
+            camera_mcp,
+            "_load_current_camera",
+            return_value=(
+                {"current_entity": "camera.study", "projected_room": ""},
+                "camera.study",
+                camera,
+            ),
+        ), mock.patch.object(camera_mcp, "fetch_frame") as fetch_mock:
+            content, is_error = unpack_mcp_result(
+                camera_mcp._handle_use_device_camera(
+                    {"action": "capture"},
+                    "http://supervisor/core/api",
+                    "http://homeassistant.local:1984",
+                )
+            )
+
+        self.assertTrue(is_error)
+        self.assertIn("物理体モード", content[0]["text"])
+        fetch_mock.assert_not_called()
 
     def test_handle_watch_media_resolves_single_video_media_without_invasion(self):
         camera_mcp = load_camera_mcp_module()
@@ -254,6 +432,7 @@ class CameraMcpTests(unittest.TestCase):
             root = Path(tmpdir) / "history"
             prefs = Path(tmpdir) / "preferences.json"
             body = Path(tmpdir) / "body_location.json"
+            body_state = Path(tmpdir) / "body_state.json"
             prefs.write_text(
                 json.dumps(
                     {
@@ -269,8 +448,23 @@ class CameraMcpTests(unittest.TestCase):
                 encoding="utf-8",
             )
             body.write_text(
-                json.dumps({"current_entity": "camera.living"}), encoding="utf-8"
+                json.dumps(
+                    {
+                        "projected_room": "living_room",
+                        "current_entity": "camera.living",
+                    }
+                ),
+                encoding="utf-8",
             )
+            before = {
+                "remote_mode": "remote_avatar",
+                "remote_room": "living_room",
+                "remote_since": "2026-08-07T10:00:00+09:00",
+                "remote_avatar_host": "camera.living",
+                "embodiment_tension": 0.4,
+                "return_to_body_pressure": 0.5,
+            }
+            body_state.write_text(json.dumps(before), encoding="utf-8")
             camera_mcp.camera_history.store_frame(
                 root, "camera.living", jpeg, captured_at=time.time() - 30
             )
@@ -282,6 +476,7 @@ class CameraMcpTests(unittest.TestCase):
                 {
                     "EHA_PREFS_FILE": str(prefs),
                     "EHA_BODY_LOCATION_FILE": str(body),
+                    "EHA_BODY_STATE_FILE": str(body_state),
                     "EHA_CAMERA_HISTORY_ENABLED": "1",
                     "EHA_CAMERA_HISTORY_DIR": str(root),
                 },
@@ -303,6 +498,63 @@ class CameraMcpTests(unittest.TestCase):
             ]
             self.assertEqual(context["source"], "camera.living")
             self.assertNotIn("study_capture", content[0]["text"])
+            saved = json.loads(body_state.read_text(encoding="utf-8"))
+            self.assertEqual(saved["last_action_mode"], "cyber_in_room")
+            for key, value in before.items():
+                self.assertEqual(saved[key], value)
+
+    def test_history_rejects_projection_change_before_returning_frames(self):
+        camera_mcp = load_camera_mcp_module()
+        jpeg = b"\xff\xd8" + (b"history" * 40) + b"\xff\xd9"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "history"
+            prefs = Path(tmpdir) / "preferences.json"
+            location = Path(tmpdir) / "body_location.json"
+            prefs.write_text(
+                json.dumps(
+                    {
+                        "camera_history_enabled": True,
+                        "camera_history_minutes": 10,
+                        "cameras": [{"source": "camera.living", "label": "リビング"}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            location.write_text(
+                json.dumps(
+                    {
+                        "projected_room": "living_room",
+                        "current_entity": "camera.living",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            camera_mcp.camera_history.store_frame(
+                root, "camera.living", jpeg, captured_at=time.time() - 30
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "EHA_PREFS_FILE": str(prefs),
+                    "EHA_BODY_LOCATION_FILE": str(location),
+                    "EHA_CAMERA_HISTORY_ENABLED": "1",
+                    "EHA_CAMERA_HISTORY_DIR": str(root),
+                },
+                clear=False,
+            ), mock.patch.object(
+                camera_mcp, "_camera_projection_still_active", return_value=False
+            ), mock.patch.object(camera_mcp, "apply_action_to_body_state") as apply_mock:
+                content, is_error = unpack_mcp_result(
+                    camera_mcp._handle_review_camera_history(
+                        {"start_seconds_ago": 30, "max_frames": 1}
+                    )
+                )
+
+        self.assertTrue(is_error)
+        self.assertIn("侵入状態が変わりました", content[0]["text"])
+        self.assertFalse(any(block.get("type") == "image" for block in content))
+        apply_mock.assert_not_called()
 
     def test_history_tool_rejects_physical_body_and_disabled_direct_call(self):
         camera_mcp = load_camera_mcp_module()
@@ -371,7 +623,14 @@ class CameraMcpTests(unittest.TestCase):
         with mock.patch.object(
             camera_mcp,
             "_load_current_camera",
-            return_value=({}, "camera.living", {"source": "camera.living"}),
+            return_value=(
+                {
+                    "projected_room": "living_room",
+                    "current_entity": "camera.living",
+                },
+                "camera.living",
+                {"source": "camera.living"},
+            ),
         ), mock.patch.object(
             camera_mcp, "fetch_frame", side_effect=RuntimeError("synthetic capture failure")
         ):
