@@ -22,11 +22,12 @@ env: HA_URL, GO2RTC_BASE, SUPERVISOR_TOKEN,
      LOUNGE_APP_ID, LOUNGE_INSTALLATION_ID
 """
 import argparse
-from dataclasses import dataclass
 import json
 import os
 import re
 import sys
+import tempfile
+from dataclasses import dataclass
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -41,6 +42,11 @@ _ENV_KEYS = (
     "EHA_TOOLS_PATH", "EHA_CAMERA_HISTORY_DIR", "EHA_GITHUB_APP_PEM", "EHA_ACTOR", "EHA_MQTT_PREFIX", "PATH",
 )
 COMMON_ENV = {k: os.environ[k] for k in _ENV_KEYS if k in os.environ}
+
+
+def _only_env(*keys):
+    """Return the MCP environment subset required by one server."""
+    return {key: COMMON_ENV[key] for key in keys if key in COMMON_ENV}
 
 # game-mcp は CPU 戦(WordVec)で invoke-agent.sh 経由に選択ハーネスを再起動する唯一の MCP
 # サーバー。MCP サーバーは COMMON_ENV(明示 env)からのみ起動され親環境を継承しないため、
@@ -203,7 +209,13 @@ SERVER_SPECS = {
         "consolidate_memory",
     )),
     "sensors": ServerSpec(lambda: _server("sensors-mcp.py"), ("get_sensors",)),
-    "sociality": ServerSpec(lambda: _server("sociality-mcp.py"), (
+    # sociality reads only its persistent log directory.  In particular it has
+    # no HA API role, so never place SUPERVISOR_TOKEN in its process/config env.
+    "sociality": ServerSpec(
+        lambda: _server(
+            "sociality-mcp.py",
+            base_env=_only_env("EHA_LOG_DIR", "PATH"),
+        ), (
         "get_relationship",
         "update_relationship",
         "get_narrative",
@@ -292,6 +304,57 @@ def _json_config(servers, allowed_tools=None, *, include_tools=False):
     return config
 
 
+_SENSITIVE_ENV_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "SUPERVISOR_TOKEN",
+}
+
+
+def _write_private_json_atomic(path, value):
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
+            f.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _externalize_agy_credentials(servers, credential_path):
+    """Remove direct secrets from Antigravity's model-readable MCP config."""
+    credentials = {"version": 1, "servers": {}}
+    launcher = os.path.join(DIR, "mcp-env-launcher.py")
+    for name, server in servers.items():
+        env = server.get("env") or {}
+        secret_env = {
+            key: env.pop(key)
+            for key in list(env)
+            if key in _SENSITIVE_ENV_KEYS
+        }
+        if not secret_env:
+            continue
+        credentials["servers"][name] = secret_env
+        original_command = server["command"]
+        original_args = list(server.get("args") or [])
+        server["command"] = "python3"
+        server["args"] = [
+            launcher,
+            credential_path,
+            name,
+            original_command,
+            *original_args,
+        ]
+    _write_private_json_atomic(credential_path, credentials)
+
+
 def _toml_string(value):
     return json.dumps(str(value), ensure_ascii=False)
 
@@ -364,11 +427,17 @@ def main():
     )
     parser.add_argument("--format", choices=("claude", "codex", "agy"), default="claude")
     parser.add_argument("--allowed-mcp-tools")
+    parser.add_argument("--credential-file")
     parser.add_argument("output_path")
     parser.add_argument("servers", nargs="*")
     args = parser.parse_args()
     out = args.output_path
     names = args.servers
+
+    if args.credential_file and args.format != "agy":
+        _fail("--credential-file is supported only with --format agy")
+    if args.format == "agy" and not args.credential_file:
+        _fail("--format agy requires --credential-file")
 
     duplicate_names = sorted({n for n in names if names.count(n) > 1})
     if duplicate_names:
@@ -383,6 +452,8 @@ def main():
         _validate_claude_allowed_tools(allowed_tools)
 
     servers = {n: SERVER_SPECS[n].build() for n in names}
+    if args.format == "agy":
+        _externalize_agy_credentials(servers, args.credential_file)
     out_dir = os.path.dirname(out)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
