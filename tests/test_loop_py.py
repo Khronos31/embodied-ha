@@ -114,6 +114,16 @@ class LoopPyUnreadChatTests(unittest.TestCase):
 
 
 class LoopPyModeSelectionTests(unittest.TestCase):
+    def test_explore_has_post_action_reporting_and_recovery_tools(self):
+        allowed = set(loop.mode_config("explore").allowed_tools.split(","))
+
+        self.assertTrue({
+            "mcp__audio__speak",
+            "mcp__audio__use_device_speaker",
+            "mcp__body__move_cyber",
+            "mcp__body__return_to_body",
+        }.issubset(allowed))
+
     def test_choose_mode_respects_explicit_mode(self):
         self.assertEqual(loop.choose_mode({"MODE": "reflect"}), "reflect")
 

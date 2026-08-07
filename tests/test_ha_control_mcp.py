@@ -28,6 +28,17 @@ def load_ha_control_module():
     return module
 
 
+class HaControlToolDescriptionTests(unittest.TestCase):
+    def test_post_action_reporting_uses_reachable_tools_and_recovery_path(self):
+        tool_spec = load_ha_control_module().TOOLS["ha_call_service"]["spec"]
+        description = tool_spec["description"]
+
+        self.assertNotIn("reply", description)
+        self.assertIn("speak / use_device_speaker", description)
+        self.assertIn("move_cyber", description)
+        self.assertIn("return_to_body", description)
+
+
 class _FakeDatetime(datetime.datetime):
     fixed_hour = 12
 

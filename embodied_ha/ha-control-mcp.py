@@ -129,7 +129,10 @@ TOOLS = {
                 "例: 視聴予約 → domain=script, service=viewing_reservation_set, "
                 "data={\"reservation_time\": \"...\", \"reservation_channel\": \"フジテレビ\"}\n"
                 "entity_id は ha_get で実在を確認してから指定すること。\n"
-                "操作したら必ずユーザーに事後報告すること（speak / reply）。"
+                "操作後は必ず音声ツール（speak / use_device_speaker）で"
+                "ユーザーに事後報告すること。\n"
+                "侵入先で利用できない場合は、move_cyber でスピーカーへ移るか "
+                "return_to_body で物理体へ戻ってから報告すること。"
             ),
             "inputSchema": {
                 "type": "object",
