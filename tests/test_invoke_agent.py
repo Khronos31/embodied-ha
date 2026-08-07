@@ -7,7 +7,6 @@ import textwrap
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "embodied_ha" / "invoke-agent.sh"
 MEMORY_ALLOWLIST = ",".join(
@@ -45,6 +44,9 @@ class InvokeAgentTests(unittest.TestCase):
         run_env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": os.environ.get("HOME", ""),
+            # run.sh always supplies HA_URL.  The Antigravity schema-manifest
+            # preflight now starts selected MCP servers for tools/list.
+            "HA_URL": "http://example.invalid",
             **env,
         }
         return subprocess.run(
@@ -1405,9 +1407,32 @@ class InvokeAgentTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             site_dir = workdir / "explore"
-            config = json.loads((site_dir / ".agents" / "mcp_config.json").read_text(encoding="utf-8"))
+            config_path = site_dir / ".agents" / "mcp_config.json"
+            config_text = config_path.read_text(encoding="utf-8")
+            config = json.loads(config_text)
             self.assertEqual(config["mcpServers"]["ha"]["includeTools"], ["ha_get"])
-            self.assertEqual(config["mcpServers"]["ha"]["env"]["SUPERVISOR_TOKEN"], "secret-token")
+            self.assertNotIn("SUPERVISOR_TOKEN", config_text)
+            self.assertNotIn("secret-token", config_text)
+            credential_path = Path(config["mcpServers"]["ha"]["args"][1])
+            self.assertEqual(
+                credential_path.parent,
+                agy_home
+                / ".gemini"
+                / "antigravity-cli"
+                / "eha-mcp-credentials",
+            )
+            self.assertEqual(credential_path.parent.stat().st_mode & 0o777, 0o700)
+            self.assertFalse(credential_path.exists())
+            manifest_path = site_dir / ".eha-mcp-tool-schemas.json"
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            manifest = json.loads(manifest_text)
+            self.assertEqual(
+                [(item["server"], item["name"]) for item in manifest["tools"]],
+                [("ha", "ha_get")],
+            )
+            self.assertNotIn("SUPERVISOR_TOKEN", manifest_text)
+            self.assertNotIn("secret-token", manifest_text)
+            self.assertEqual(manifest_path.stat().st_mode & 0o777, 0o600)
             project_id = (site_dir / ".eha_project_id").read_text(encoding="utf-8").strip()
             self.assertTrue(project_id.startswith("explore-"))
             self.assertEqual(global_config.read_text(encoding="utf-8"), '{"global":true}')
@@ -1417,6 +1442,10 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(records[0]["cwd"], str(site_dir))
             prompt = records[0]["args"][-1]
             self.assertIn("【Antigravity headlessでのツール利用】", prompt)
+            self.assertIn(f"@{manifest_path}", prompt)
+            self.assertIn("required・enum・型を厳守", prompt)
+            self.assertIn(".agents/mcp_config.json", prompt)
+            self.assertIn("調査対象にしないでください", prompt)
             self.assertIn("native command、write_file、shell、terminal", prompt)
             self.assertIn("read_file、WebSearch等", prompt)
             self.assertIn("確認できない事実は推測で補わず", prompt)
@@ -1921,6 +1950,7 @@ class InvokeAgentTests(unittest.TestCase):
             base_env = {
                 "PATH": os.environ.get("PATH", ""),
                 "HOME": os.environ.get("HOME", ""),
+                "HA_URL": "http://example.invalid",
                 "EHA_AGENT_HARNESS": "agy",
                 "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
                 "EHA_ANTIGRAVITY_HOME": agy_home.as_posix(),

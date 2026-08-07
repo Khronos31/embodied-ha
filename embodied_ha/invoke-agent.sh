@@ -877,6 +877,7 @@ run_agy() {
   fi
   ensure_agy_native_safety_policy "$agy_home"
   local site_dir=""
+  local schema_manifest_path=""
   local project_arg=()
   if [[ -n "$mcp_servers" && -z "$agent_site" ]]; then
     die "--agent-site is required for agy MCP config"
@@ -898,11 +899,22 @@ run_agy() {
     local server_args=()
     read -r -a server_args <<< "$mcp_servers"
     local gen_cmd=(python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-config.py" --format agy)
+    local credential_dir="$agy_home/.gemini/antigravity-cli/eha-mcp-credentials"
+    mkdir -p "$credential_dir"
+    chmod 700 "$credential_dir"
+    local credential_file
+    credential_file="$(mktemp "$credential_dir/${agent_site}.XXXXXX.json")"
+    TEMP_FILES+=("$credential_file")
+    gen_cmd+=(--credential-file "$credential_file")
     if [[ "$allowed_mcp_tools_set" == "true" ]]; then
       gen_cmd+=(--allowed-mcp-tools "$allowed_mcp_tools")
     fi
     gen_cmd+=("$site_dir/.agents/mcp_config.json" "${server_args[@]}")
     "${gen_cmd[@]}"
+    schema_manifest_path="$site_dir/.eha-mcp-tool-schemas.json"
+    python3 "$(dirname "${BASH_SOURCE[0]}")/mcp-schema-manifest.py" \
+      "$site_dir/.agents/mcp_config.json" \
+      "$schema_manifest_path"
 
     # headless実行の実行承認グラントを、接続サーバー単位のワイルドカード
     # mcp(server/*)で導出する。完全一致(mcp(server/tool))にしない理由:
@@ -939,7 +951,7 @@ run_agy() {
     # agy headless は未承認の native command/write_file をモデルが選ぶと、確認を出せず
     # ターン全体を空応答で終了する。接続済みMCPへ直行させ、許可済みの
     # read_file/WebSearch等まで禁止しない。ツール失敗時の補完も防ぐ。
-    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"必要な操作には、接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（read_file、WebSearch等）を直接使用してください。native command、write_file、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
+    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"接続済みMCPツールの正規description/inputSchemaは、秘密を除いた次のmanifestにあります: @${schema_manifest_path}"$'\n'"MCPツールを呼ぶ前にmanifestの該当項目を確認し、required・enum・型を厳守してください。.agents/mcp_config.jsonはserver起動配線でありSchemaの正本ではないため、調査対象にしないでください。必要な操作には、manifestに掲載された接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（read_file、WebSearch等）を直接使用してください。native command、write_file、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
   fi
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
