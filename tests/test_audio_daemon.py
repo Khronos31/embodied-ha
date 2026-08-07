@@ -6,9 +6,9 @@ import os
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -542,13 +542,250 @@ class AudioDaemonTests(unittest.TestCase):
         ):
             with self.assertRaises(RuntimeError):
                 module.run_audio_stream_session(
-                    config, "token", read_chunk, None, "fallback"
+                    config,
+                    "token",
+                    read_chunk,
+                    None,
+                    "fallback",
+                    mock.Mock(),
                 )
 
         self.assertTrue(
             any(cid == "req1" and err is not None for cid, err in calls),
             "active_listen capture should be finalized with error on exception",
         )
+
+    def _segment_task(self, marker: bytes = b"segment"):
+        module = self.audio_daemon
+        return module.SegmentTask(
+            config=self._tcp_config(),
+            audio_bytes=marker,
+            provider="stt.test",
+            language="ja-JP",
+            token="token",
+            wake_words=("sample",),
+            stt_enabled=True,
+            diagnostics={"vad_mode": "silero_onnx"},
+        )
+
+    def test_segment_processor_preserves_fifo_while_handler_is_blocked(self):
+        module = self.audio_daemon
+        handler_started = module.threading.Event()
+        release_handler = module.threading.Event()
+        processed = []
+
+        def slow_handler(task):
+            handler_started.set()
+            release_handler.wait(timeout=2)
+            processed.append(task.audio_bytes)
+
+        processor = module.SegmentProcessor("test", handler=slow_handler)
+        try:
+            self.assertTrue(processor.submit(self._segment_task(b"one")))
+            self.assertTrue(handler_started.wait(timeout=1))
+            self.assertTrue(processor.submit(self._segment_task(b"two")))
+            self.assertTrue(processor.submit(self._segment_task(b"three")))
+            self.assertEqual(processor.snapshot()["depth"], 2)
+            release_handler.set()
+            self.assertTrue(processor.close(timeout=2))
+        finally:
+            release_handler.set()
+            processor.close(timeout=2)
+
+        self.assertEqual(processed, [b"one", b"two", b"three"])
+        self.assertEqual(processor.snapshot()["processed"], 3)
+
+    def test_segment_processor_overflow_is_explicit_and_bounded(self):
+        module = self.audio_daemon
+        overflows = []
+        processor = module.SegmentProcessor(
+            "test",
+            max_queue=4,
+            handler=mock.Mock(),
+            overflow_handler=lambda task, depth: overflows.append(
+                (task.audio_bytes, depth)
+            ),
+            autostart=False,
+        )
+
+        for index in range(4):
+            self.assertTrue(processor.submit(self._segment_task(bytes([index]))))
+        self.assertFalse(processor.submit(self._segment_task(b"overflow")))
+
+        self.assertEqual(overflows, [(b"overflow", 4)])
+        snapshot = processor.snapshot()
+        self.assertEqual(snapshot["depth"], 4)
+        self.assertGreaterEqual(snapshot["oldest_age_ms"], 0)
+        self.assertEqual(snapshot["submitted"], 4)
+        self.assertEqual(snapshot["processed"], 0)
+        self.assertEqual(snapshot["failures"], 0)
+        self.assertEqual(snapshot["overflows"], 1)
+        self.assertTrue(processor.close())
+
+    def test_segment_processor_overflow_writes_structured_audio_log(self):
+        module = self.audio_daemon
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "audio.jsonl"
+            processor = module.SegmentProcessor(
+                "test",
+                max_queue=1,
+                handler=mock.Mock(),
+                autostart=False,
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"EHA_AUDIO_LOG_FILE": str(log_path)},
+                clear=False,
+            ):
+                self.assertTrue(processor.submit(self._segment_task(b"first")))
+                self.assertFalse(
+                    processor.submit(self._segment_task(b"overflow"))
+                )
+
+            rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+            self.assertEqual(rows[-1]["error"], "segment_queue_overflow")
+            self.assertEqual(rows[-1]["queue_depth"], 1)
+            self.assertEqual(rows[-1]["vad_mode"], "silero_onnx")
+            self.assertTrue(processor.close())
+
+    def test_stream_intake_continues_while_segment_handler_is_blocked(self):
+        module = self.audio_daemon
+        handler_started = module.threading.Event()
+        release_handler = module.threading.Event()
+
+        def slow_handler(_task):
+            handler_started.set()
+            release_handler.wait(timeout=2)
+
+        processor = module.SegmentProcessor("test", handler=slow_handler)
+        config = self._tcp_config()
+        settings = module.RuntimeSettings(
+            config=config,
+            provider="stt.test",
+            language="ja-JP",
+            wake_words=["sample"],
+            stt_enabled=True,
+        )
+        chunks = [b"\x00" * module.CHUNK_BYTES for _ in range(4)]
+
+        def read_chunk():
+            return chunks.pop(0) if chunks else b""
+
+        try:
+            with mock.patch.object(module, "MAX_SEGMENT_SECONDS", 0.032), \
+                 mock.patch.object(module, "detect_voice", return_value=1.0), \
+                 mock.patch.object(module, "load_runtime_settings", return_value=settings), \
+                 mock.patch.object(
+                     module,
+                     "_service_active_listen_requests",
+                     side_effect=lambda _config, _chunk, _requests, last_scan: last_scan,
+                 ):
+                stats = module.run_audio_stream_session(
+                    config,
+                    "token",
+                    read_chunk,
+                    mock.Mock(),
+                    "silero_onnx",
+                    processor,
+                )
+
+            self.assertTrue(handler_started.wait(timeout=1))
+            self.assertEqual(stats["chunks"], 4)
+            self.assertEqual(stats["bytes"], 4 * module.CHUNK_BYTES)
+            self.assertEqual(stats["segments_queued"], 2)
+            self.assertEqual(stats["segment_overflows"], 0)
+        finally:
+            release_handler.set()
+            processor.close(timeout=2)
+
+    def test_six_sources_drain_ten_minutes_each_during_slow_stt(self):
+        module = self.audio_daemon
+        chunk_count = int(600 * module.SAMPLE_RATE / module.CHUNK_SAMPLES)
+        pcm_chunk = b"\x00" * module.CHUNK_BYTES
+        release_handlers = module.threading.Event()
+        processors = []
+
+        class OneSegmentDetector:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, _chunk):
+                self.calls += 1
+                return 1.0 if self.calls <= 2 else 0.0
+
+            def reset(self):
+                return None
+
+        def settings_for(config):
+            return module.RuntimeSettings(
+                config=config,
+                provider="stt.test",
+                language="ja-JP",
+                wake_words=["sample"],
+                stt_enabled=True,
+            )
+
+        def run_source(index):
+            config = module.AudioSourceConfig(
+                source=f"tcp://voice-{index}.test:3333",
+                label=f"Voice {index}",
+                retention_hours=24,
+                wake_word_enabled=True,
+                room=f"room-{index}",
+                transport="tcp_pull",
+                host=f"voice-{index}.test",
+                port=3333,
+            )
+            processor = module.SegmentProcessor(
+                config.label,
+                handler=lambda _task: release_handlers.wait(timeout=30),
+            )
+            processors.append(processor)
+            remaining = chunk_count
+
+            def read_chunk():
+                nonlocal remaining
+                if remaining <= 0:
+                    return b""
+                remaining -= 1
+                return pcm_chunk
+
+            return module.run_audio_stream_session(
+                config,
+                "token",
+                read_chunk,
+                OneSegmentDetector(),
+                "silero_onnx",
+                processor,
+            )
+
+        try:
+            with mock.patch.object(
+                module,
+                "load_runtime_settings",
+                side_effect=settings_for,
+            ), mock.patch.object(
+                module,
+                "_service_active_listen_requests",
+                side_effect=lambda _config, _chunk, _requests, last_scan: last_scan,
+            ):
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    stats = list(executor.map(run_source, range(6)))
+
+            for source_stats in stats:
+                self.assertEqual(source_stats["chunks"], chunk_count)
+                self.assertEqual(
+                    source_stats["bytes"],
+                    chunk_count * module.CHUNK_BYTES,
+                )
+                self.assertEqual(source_stats["segments_queued"], 1)
+                self.assertEqual(source_stats["segment_overflows"], 0)
+            self.assertEqual(len(processors), 6)
+            self.assertTrue(all(p.snapshot()["overflows"] == 0 for p in processors))
+        finally:
+            release_handlers.set()
+            for processor in processors:
+                processor.close(timeout=5)
 
     def test_audio_daemon_flock_rejects_second_instance(self):
         with tempfile.TemporaryDirectory() as tmpdir:

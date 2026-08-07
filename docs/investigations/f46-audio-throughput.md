@@ -33,6 +33,46 @@ also avoids a second queue, shutdown protocol, and ordering boundary. If the
 image-level benchmark does not retain at least a 10x real-time margin, split raw
 intake into its own stage before release.
 
+## Implementation result (2026-08-07)
+
+The recommended first-stage design is implemented on the dedicated branch. It
+has not been built as a Home Assistant add-on image, deployed, or run against a
+production microphone.
+
+- `silero_onnx_vad.py` implements the official 512-sample Silero ONNX state and
+  64-sample context without importing Torch.
+- The Dockerfile pins `onnxruntime==1.28.0` and installs
+  `silero-vad==6.2.1` with `--no-deps`; only package metadata is used to locate
+  the model, avoiding the package root's Torch import.
+- Every audio source owns a bounded four-segment FIFO worker. Runtime settings
+  and wake words are copied when the segment closes, preserving capture-time
+  behavior and per-source order.
+- STT and background-segment processing run in that worker. Socket/pipe read,
+  active-listen capture, VAD, levels, and segmentation stay on the real-time
+  source worker.
+- Queue saturation appends a structured `segment_queue_overflow` audio-log row
+  and increments telemetry; no queued item is overwritten.
+- Rolling logs expose intake ratio, total/maximum VAD time, queue depth, oldest
+  queued age, and overflow count.
+
+Mechanical evidence:
+
+| Check | Result |
+| --- | --- |
+| Full repository suite | 1,095 tests passed in 51.0 s |
+| Audio + ONNX focused suite | 72 tests passed |
+| Static/syntax/diff checks | Ruff F/E9/I, `py_compile`, and `git diff --check` passed |
+| Six-source slow-STT stress | 10 minutes/source, 112,500 chunks and 115,200,000 bytes drained, overflow 0 |
+| Real ONNX adapter hot path | 60.0 s PCM in 0.551 s wall time (109x real time) |
+| Maximum measured VAD call | 3.287 ms, below the 10 ms gate |
+| Runtime dependency smoke test | model found, inference succeeded, Torch absent |
+| Python 3.11 wheel check | ONNX Runtime 1.28.0 cp311 manylinux wheel available |
+
+The local runtime checks used the host's Python 3.13 rather than the add-on's
+Python 3.11. Therefore the disposable image build, compressed image delta,
+labeled short-call canary, production CPU, TCP intake ratio, and EOF gate remain
+unverified release requirements.
+
 ## Evidence
 
 ### Current production behavior

@@ -9,6 +9,7 @@ import itertools
 import json
 import math
 import os
+import queue
 import random
 import socket
 import subprocess
@@ -16,29 +17,34 @@ import sys
 import tempfile
 import threading
 import time
-import uuid
 import urllib.error
 import urllib.request
-from urllib.parse import quote, urlparse
-from typing import Any
+import uuid
 import wave
 from collections import deque
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote, urlparse
 
-from auditory_context import append_auditory_event
 import concentrate_hearing_files
-from spatial_context import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
+from auditory_context import append_auditory_event
+from spatial_context import (
+    area_for_entity,
+    classify_sensory_origin,
+    infer_room_from_text,
+    resolve_room,
+)
 from speak import play_pcm_file
 from state_utils import clean, now, parse_ts, read_json
 
 _SILERO_IMPORT_ERROR = ""
 try:
-    from pysilero_vad import SileroVoiceActivityDetector
+    from silero_onnx_vad import SileroOnnxVoiceActivityDetector
 except Exception as exc:  # pragma: no cover - exercised through fallback path
-    SileroVoiceActivityDetector = None
+    SileroOnnxVoiceActivityDetector = None
     _SILERO_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
@@ -75,6 +81,8 @@ TCP_PULL_BACKOFF_BASE_SECONDS = 1.0
 TCP_PULL_BACKOFF_MAX_SECONDS = 30.0
 TCP_PULL_BACKOFF_JITTER_RATIO = 0.25
 TCP_PULL_STABLE_SESSION_SECONDS = 30.0
+SEGMENT_QUEUE_MAXSIZE = 4
+AUDIO_THROUGHPUT_LOG_INTERVAL_SECONDS = 60.0
 DEFAULT_AUDIO_DAEMON_LOCK_FILE = "/tmp/embodied-ha/audio-daemon.lock"
 _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
@@ -131,6 +139,18 @@ class RuntimeSettings:
     language: str
     wake_words: list[str]
     stt_enabled: bool
+
+
+@dataclass(frozen=True)
+class SegmentTask:
+    config: AudioSourceConfig
+    audio_bytes: bytes
+    provider: str | None
+    language: str
+    token: str
+    wake_words: tuple[str, ...]
+    stt_enabled: bool
+    diagnostics: dict[str, Any]
 
 
 class TcpPullState(Enum):
@@ -2088,21 +2108,185 @@ def process_segment(
                 pass
 
 
+def record_segment_queue_overflow(task: SegmentTask, queue_depth: int) -> None:
+    duration_sec = len(task.audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH)
+    entry = {
+        "timestamp": now().isoformat(timespec="seconds"),
+        "source": task.config.label,
+        "duration_sec": round(duration_sec, 2),
+        "error": "segment_queue_overflow",
+        "queue_depth": queue_depth,
+        **dict(task.diagnostics),
+    }
+    try:
+        append_audio_log(entry, task.config.retention_hours, task.config.label)
+    except Exception as exc:
+        log(
+            "failed to persist segment queue overflow for "
+            f"{task.config.label}: {type(exc).__name__}: {exc}"
+        )
+    log(
+        "segment queue overflow for "
+        f"{task.config.label}: depth={queue_depth} duration={duration_sec:.2f}s"
+    )
+
+
+_SEGMENT_PROCESSOR_STOP = object()
+
+
+class SegmentProcessor:
+    """Ordered, bounded completed-segment worker for one audio source."""
+
+    def __init__(
+        self,
+        source_label: str,
+        *,
+        max_queue: int = SEGMENT_QUEUE_MAXSIZE,
+        handler=None,
+        overflow_handler=None,
+        autostart: bool = True,
+    ) -> None:
+        self.source_label = source_label
+        self.max_queue = max(1, int(max_queue))
+        self._queue: queue.Queue = queue.Queue(maxsize=self.max_queue)
+        self._handler = handler
+        self._overflow_handler = overflow_handler or record_segment_queue_overflow
+        self._stats_lock = threading.Lock()
+        self._queue_times: deque[float] = deque()
+        self._submitted = 0
+        self._processed = 0
+        self._failures = 0
+        self._overflows = 0
+        self._last_background_log_at = 0.0
+        self._started = False
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name=f"audio-segments:{source_label}",
+        )
+        if autostart:
+            self.start()
+
+    def start(self) -> None:
+        if self._started:
+            return
+        if self._closed:
+            raise RuntimeError("segment processor is closed")
+        self._started = True
+        self._thread.start()
+
+    def submit(self, task: SegmentTask) -> bool:
+        if self._closed:
+            raise RuntimeError("segment processor is closed")
+        with self._stats_lock:
+            try:
+                self._queue.put_nowait(task)
+            except queue.Full:
+                self._overflows += 1
+                queue_depth = self._queue.qsize()
+            else:
+                self._queue_times.append(time.monotonic())
+                self._submitted += 1
+                queue_depth = -1
+        if queue_depth >= 0:
+            self._overflow_handler(task, queue_depth)
+            return False
+        return True
+
+    def _process_task(self, task: SegmentTask) -> None:
+        if self._handler is not None:
+            self._handler(task)
+            return
+        if task.stt_enabled:
+            process_segment(
+                task.config,
+                task.audio_bytes,
+                task.provider,
+                task.language,
+                task.token,
+                list(task.wake_words),
+                diagnostics=dict(task.diagnostics),
+            )
+        elif task.config.background_only:
+            self._last_background_log_at = maybe_record_background_audio(
+                task.config,
+                task.audio_bytes,
+                clean(task.diagnostics.get("vad_mode")) or "unknown",
+                dict(task.diagnostics),
+                self._last_background_log_at,
+            )
+
+    def _run(self) -> None:
+        while True:
+            task = self._queue.get()
+            try:
+                if task is _SEGMENT_PROCESSOR_STOP:
+                    return
+                with self._stats_lock:
+                    if self._queue_times:
+                        self._queue_times.popleft()
+                try:
+                    self._process_task(task)
+                except Exception as exc:
+                    with self._stats_lock:
+                        self._failures += 1
+                    log(
+                        "segment worker failed for "
+                        f"{self.source_label}: {type(exc).__name__}: {exc}"
+                    )
+                finally:
+                    with self._stats_lock:
+                        self._processed += 1
+            finally:
+                self._queue.task_done()
+
+    def snapshot(self) -> dict[str, int]:
+        with self._stats_lock:
+            oldest_age_ms = (
+                max(0, int((time.monotonic() - self._queue_times[0]) * 1000))
+                if self._queue_times
+                else 0
+            )
+            return {
+                "depth": self._queue.qsize(),
+                "oldest_age_ms": oldest_age_ms,
+                "submitted": self._submitted,
+                "processed": self._processed,
+                "failures": self._failures,
+                "overflows": self._overflows,
+            }
+
+    def close(self, timeout: float = 5.0) -> bool:
+        if self._closed:
+            return not self._thread.is_alive()
+        if not self._started:
+            self._closed = True
+            return True
+        try:
+            self._queue.put(_SEGMENT_PROCESSOR_STOP, timeout=max(0.0, timeout))
+        except queue.Full:
+            return False
+        self._closed = True
+        self._thread.join(timeout=max(0.0, timeout))
+        return not self._thread.is_alive()
+
+
 def new_vad():
-    if SileroVoiceActivityDetector is None:
+    if SileroOnnxVoiceActivityDetector is None:
         reason = f" ({_SILERO_IMPORT_ERROR})" if _SILERO_IMPORT_ERROR else ""
         log(
-            "pysilero_vad unavailable"
+            "Silero ONNX VAD unavailable"
             f"{reason}; using "
             f"{FALLBACK_DB_THRESHOLD:.0f}dB fallback VAD "
             f"(speech_ratio>={FALLBACK_SEGMENT_MIN_SPEECH_RATIO}, peak>={FALLBACK_SEGMENT_MIN_PEAK_DB}dB)"
         )
         return None, "fallback"
     try:
-        return SileroVoiceActivityDetector(), "silero"
+        return SileroOnnxVoiceActivityDetector(), "silero_onnx"
     except Exception as exc:
         log(
-            "failed to initialize pysilero_vad; using fallback VAD: "
+            "failed to initialize Silero ONNX VAD; using fallback VAD: "
             f"{exc} (threshold={FALLBACK_DB_THRESHOLD:.0f}dB, "
             f"speech_ratio>={FALLBACK_SEGMENT_MIN_SPEECH_RATIO}, peak>={FALLBACK_SEGMENT_MIN_PEAK_DB}dB)"
         )
@@ -2156,13 +2340,13 @@ def run_audio_stream_session(
     read_chunk,
     detector,
     vad_mode: str,
+    segment_processor: SegmentProcessor,
 ) -> dict[str, int]:
     prebuffer_chunks = max(1, math.ceil(PREBUFFER_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
     max_silence_chunks = max(1, math.ceil(SILENCE_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
     max_segment_chunks = max(1, math.ceil(MAX_SEGMENT_SECONDS * SAMPLE_RATE / CHUNK_SAMPLES))
 
     last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
-    last_background_log_at = 0.0
     active_listen_requests: dict[str, dict] = {}
     last_request_scan_at = 0.0
     prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
@@ -2171,7 +2355,40 @@ def run_audio_stream_session(
     segment_speech_chunks = 0
     silence_chunks = 0
     active = False
-    stats = {"chunks": 0, "bytes": 0}
+    stats = {
+        "chunks": 0,
+        "bytes": 0,
+        "segments_queued": 0,
+        "segment_overflows": 0,
+        "vad_us": 0,
+        "vad_max_us": 0,
+    }
+    throughput_started_at = time.monotonic()
+    throughput_bytes = 0
+    throughput_vad_us = 0
+    throughput_vad_max_us = 0
+
+    def submit_segment(
+        settings: RuntimeSettings,
+        audio_bytes: bytes,
+        diagnostics: dict,
+    ) -> None:
+        if not settings.stt_enabled and not settings.config.background_only:
+            return
+        task = SegmentTask(
+            config=settings.config,
+            audio_bytes=audio_bytes,
+            provider=settings.provider,
+            language=settings.language,
+            token=token,
+            wake_words=tuple(settings.wake_words),
+            stt_enabled=settings.stt_enabled,
+            diagnostics=dict(diagnostics),
+        )
+        if segment_processor.submit(task):
+            stats["segments_queued"] += 1
+        else:
+            stats["segment_overflows"] += 1
 
     try:
         while True:
@@ -2180,6 +2397,7 @@ def run_audio_stream_session(
                 break
             stats["chunks"] += 1
             stats["bytes"] += len(chunk)
+            throughput_bytes += len(chunk)
             last_request_scan_at = _service_active_listen_requests(
                 config,
                 chunk,
@@ -2187,9 +2405,35 @@ def run_audio_stream_session(
                 last_request_scan_at,
             )
 
+            vad_started_at = time.monotonic()
             voice_prob = detect_voice(chunk, detector)
+            vad_elapsed_us = max(0, int((time.monotonic() - vad_started_at) * 1_000_000))
+            stats["vad_us"] += vad_elapsed_us
+            stats["vad_max_us"] = max(stats["vad_max_us"], vad_elapsed_us)
+            throughput_vad_us += vad_elapsed_us
+            throughput_vad_max_us = max(throughput_vad_max_us, vad_elapsed_us)
             is_speech = voice_prob > VAD_THRESHOLD
             level_db = chunk_db(chunk)
+
+            throughput_now = time.monotonic()
+            throughput_elapsed = throughput_now - throughput_started_at
+            if throughput_elapsed >= AUDIO_THROUGHPUT_LOG_INTERVAL_SECONDS:
+                audio_seconds = throughput_bytes / float(SAMPLE_RATE * SAMPLE_WIDTH)
+                queue_stats = segment_processor.snapshot()
+                log(
+                    "audio throughput for "
+                    f"{config.label}: elapsed={throughput_elapsed:.1f}s "
+                    f"audio={audio_seconds:.1f}s ratio={audio_seconds / throughput_elapsed:.3f} "
+                    f"vad_total_ms={throughput_vad_us / 1000.0:.1f} "
+                    f"vad_max_ms={throughput_vad_max_us / 1000.0:.2f} "
+                    f"queue_depth={queue_stats['depth']} "
+                    f"queue_oldest_ms={queue_stats['oldest_age_ms']} "
+                    f"queue_overflows={queue_stats['overflows']}"
+                )
+                throughput_started_at = throughput_now
+                throughput_bytes = 0
+                throughput_vad_us = 0
+                throughput_vad_max_us = 0
 
             if active:
                 segment_chunks.append(chunk)
@@ -2211,31 +2455,10 @@ def run_audio_stream_session(
                         "peak_db": peak_db,
                         "mean_db": mean_db,
                     }
-                    if not settings.stt_enabled:
-                        if settings.config.background_only:
-                            last_background_log_at = maybe_record_background_audio(
-                                settings.config,
-                                b"".join(segment_chunks),
-                                vad_mode,
-                                diagnostics,
-                                last_background_log_at,
-                            )
-                        segment_chunks = []
-                        segment_levels = []
-                        segment_speech_chunks = 0
-                        silence_chunks = 0
-                        active = False
-                        prebuffer.clear()
-                        reset_vad(detector)
-                        continue
-                    process_segment(
-                        settings.config,
+                    submit_segment(
+                        settings,
                         b"".join(segment_chunks),
-                        settings.provider,
-                        settings.language,
-                        token,
-                        settings.wake_words,
-                        diagnostics=diagnostics,
+                        diagnostics,
                     )
                     segment_chunks = []
                     segment_levels = []
@@ -2270,24 +2493,7 @@ def run_audio_stream_session(
                 "peak_db": peak_db,
                 "mean_db": mean_db,
             }
-            if settings.stt_enabled:
-                process_segment(
-                    settings.config,
-                    b"".join(segment_chunks),
-                    settings.provider,
-                    settings.language,
-                    token,
-                    settings.wake_words,
-                    diagnostics=diagnostics,
-                )
-            elif settings.config.background_only:
-                maybe_record_background_audio(
-                    settings.config,
-                    b"".join(segment_chunks),
-                    vad_mode,
-                    diagnostics,
-                    last_background_log_at,
-                )
+            submit_segment(settings, b"".join(segment_chunks), diagnostics)
 
     finally:
         for request in list(active_listen_requests.values()):
@@ -2299,6 +2505,7 @@ def audio_worker(
     config: AudioSourceConfig,
     token: str,
 ) -> None:
+    segment_processor = SegmentProcessor(config.label)
     while True:
         proc: subprocess.Popen | None = None
         detector, vad_mode = new_vad()
@@ -2319,6 +2526,7 @@ def audio_worker(
                 lambda: read_exact(proc.stdout, CHUNK_BYTES),
                 detector,
                 vad_mode,
+                segment_processor,
             )
             rc = proc.wait(timeout=2)
             log(
@@ -2396,6 +2604,7 @@ def run_tcp_pull_session(
     config: AudioSourceConfig,
     token: str,
     reservation: TcpPullReservation,
+    segment_processor: SegmentProcessor | None = None,
     *,
     sleep_fn=None,
     connector=None,
@@ -2422,12 +2631,15 @@ def run_tcp_pull_session(
             f"generation={reservation.generation} "
             f"read_timeout={TCP_PULL_READ_TIMEOUT_SECONDS:.1f}s vad={vad_mode}"
         )
+        if segment_processor is None:
+            raise RuntimeError("segment processor is required for streaming")
         stats = run_audio_stream_session(
             config,
             token,
             lambda: read_exact_socket(conn, CHUNK_BYTES),
             detector,
             vad_mode,
+            segment_processor,
         )
         reason = "eof"
     except socket.timeout as exc:
@@ -2504,31 +2716,37 @@ def tcp_pull_worker(
     sleep_fn = sleep_fn or time.sleep
     failure_streak = 0
     completed_sessions = 0
+    segment_processor = SegmentProcessor(config.label)
 
-    while max_sessions is None or completed_sessions < max_sessions:
-        reservation = reserve_tcp_pull_connection(config)
-        result = run_tcp_pull_session(
-            config,
-            token,
-            reservation,
-            sleep_fn=sleep_fn,
-        )
-        stable = (
-            result.connected_seconds >= TCP_PULL_STABLE_SESSION_SECONDS
-            and result.stats["bytes"] > 0
-        )
-        failure_streak = 0 if stable else failure_streak + 1
-        retry_delay = tcp_pull_retry_delay(max(1, failure_streak))
-        completed_sessions += 1
+    try:
+        while max_sessions is None or completed_sessions < max_sessions:
+            reservation = reserve_tcp_pull_connection(config)
+            result = run_tcp_pull_session(
+                config,
+                token,
+                reservation,
+                segment_processor,
+                sleep_fn=sleep_fn,
+            )
+            stable = (
+                result.connected_seconds >= TCP_PULL_STABLE_SESSION_SECONDS
+                and result.stats["bytes"] > 0
+            )
+            failure_streak = 0 if stable else failure_streak + 1
+            retry_delay = tcp_pull_retry_delay(max(1, failure_streak))
+            completed_sessions += 1
 
-        log(
-            f"tcp pull state={TcpPullState.RETRY_WAIT.value} label={config.label} "
-            f"generation={result.generation} reason={result.reason} "
-            f"stable={'yes' if stable else 'no'} failure_streak={failure_streak} "
-            f"retry_in={retry_delay:.2f}s"
-        )
-        # run_tcp_pull_session owns and closes the socket before returning.
-        sleep_fn(retry_delay)
+            log(
+                f"tcp pull state={TcpPullState.RETRY_WAIT.value} label={config.label} "
+                f"generation={result.generation} reason={result.reason} "
+                f"stable={'yes' if stable else 'no'} failure_streak={failure_streak} "
+                f"retry_in={retry_delay:.2f}s"
+            )
+            # run_tcp_pull_session owns and closes the socket before returning.
+            sleep_fn(retry_delay)
+    finally:
+        if max_sessions is not None:
+            segment_processor.close()
 
 
 def wait_for_enabled_mics(*, load_fn=None, sleep_fn=None) -> tuple[dict, list[AudioSourceConfig]]:
