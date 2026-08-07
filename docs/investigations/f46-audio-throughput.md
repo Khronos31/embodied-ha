@@ -122,6 +122,23 @@ reconnected after restoration of the resident add-on, but the cause of the
 one-off no-data connection was not established. The 30-minute intake, TTS, STT,
 and unexpected-EOF gates therefore remain **unverified**, not failed or passed.
 
+A user-approved retry revised readiness to require the first complete PCM chunk,
+allowed one reconnect during setup only, and waited 60 seconds after stopping
+Akane before opening any canary connection. It still stopped before measurement:
+a different TCP endpoint completed two handshakes but delivered zero PCM on both
+attempts. A second endpoint required one setup retry and then streamed normally;
+the other three TCP sources and ALSA source were near 1.0x intake until the
+global abort. Readiness reached 5/6 and TTS again remained `0/12`.
+
+Immediately after restoration, the resident 2.1.14 add-on established streaming
+sessions to all five endpoints, including the endpoint that had produced no PCM
+for the disposable client. The 60-second cooldown and retry disprove the initial
+simple stale-session explanation. The cause of disposable-client startup
+instability is not established, so further blind retries are not acceptance
+evidence. The 30-minute/TTS release gate remains blocked pending a test topology
+that can establish all sources reliably or equivalent observation on the exact
+resident candidate.
+
 Akane was restored on unchanged 2.1.14 after the abort. Akane, Sora, and Midori
 were all started, all five resident TCP connections resumed, and Akane's
 `preferences.json`, `character.md`, and `body_location.json` hashes matched the
