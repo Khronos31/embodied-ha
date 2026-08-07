@@ -65,6 +65,28 @@ class McpLibTests(unittest.TestCase):
             self.assertEqual(reply["error"], {"code": -32602, "message": "Invalid params"})
         self.assertIn("tools", replies[3]["result"])
 
+    def test_invalid_tool_name_types_return_error_and_server_continues(self):
+        malformed_names = [None, [], {}, 1, True]
+        requests = [
+            {
+                "jsonrpc": "2.0",
+                "id": index,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": {}},
+            }
+            for index, name in enumerate(malformed_names, start=1)
+        ]
+        requests.append(
+            {"jsonrpc": "2.0", "id": 6, "method": "tools/list", "params": {}}
+        )
+
+        replies, _ = run_server(requests)
+
+        self.assertEqual([reply["id"] for reply in replies], [1, 2, 3, 4, 5, 6])
+        for reply in replies[:5]:
+            self.assertEqual(reply["error"], {"code": -32602, "message": "Invalid params"})
+        self.assertIn("tools", replies[5]["result"])
+
     def test_handler_exception_is_sanitized_and_server_continues(self):
         sentinel = "secret-like-/config/private/path"
 
