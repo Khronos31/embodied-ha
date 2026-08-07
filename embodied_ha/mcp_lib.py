@@ -100,6 +100,10 @@ def serve(name, version, tools):
                     _send_error(id_, -32602, "Invalid params")
                 continue
             tool_name = params.get("name", "")
+            if not isinstance(tool_name, str):
+                if id_ is not None:
+                    _send_error(id_, -32602, "Invalid params")
+                continue
             call_args = params.get("arguments", {})
             if call_args is None:
                 call_args = {}
