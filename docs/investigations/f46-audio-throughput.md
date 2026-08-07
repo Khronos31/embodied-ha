@@ -192,6 +192,52 @@ pre-test values. Stopping the current resident image produces Supervisor state
 Supervisor nevertheless confirmed that the container was not running before
 the disposable client started. Graceful add-on shutdown is a separate finding.
 
+### Bounded-readiness 30-minute canary
+
+A third disposable build (`0.0.2`) used the candidate's production TCP
+reservation, connection, and exponential-backoff helpers during a separate
+three-minute readiness phase. All six sources had to deliver PCM continuously
+for ten seconds before one global measurement barrier opened. Reconnects were
+allowed only before that barrier. TTS was disabled, so this run did not call an
+LLM and did not depend on the Claude rate limit.
+
+Readiness succeeded for all six sources in 35.516 seconds, after one to three
+connection attempts per source. The exact 1,800-second measurement then failed
+the TCP continuity gate:
+
+| Measure | Result |
+| --- | ---: |
+| ALSA source | 1/1 completed 1,800 s; intake ratio 0.99997 |
+| TCP sources without unexpected EOF | 0/5 |
+| TCP session durations | 7.497 to 1,790.102 s |
+| TCP audio/full-window ratio | 0.00356 to 0.99451 |
+| Queue overflow | 0 |
+| Segment worker failure counter | 0 |
+| VAD implementation | `silero_onnx` on 6/6 |
+| CPU, 59 samples | 1.247% mean; 1.43% p95; 1.52% max |
+| Memory, 59 samples | 133.8 to 172.8 MB |
+
+The earliest TCP endpoint returned EOF about 7.5 seconds after the barrier.
+Another lasted about 1,601 seconds, and the remaining three returned EOF in the
+last 21 seconds. No reconnect occurred after the barrier, so later successful
+sessions could not hide those failures. The CPU numbers are useful descriptive
+evidence for the ONNX path, but they do **not** pass the CPU acceptance gate:
+most of the observation did not retain all five TCP streams, making a comparison
+with the six-source pre-change baseline invalid.
+
+HA Cloud STT also returned three transient HTTP 502 responses near the end of
+the run. They did not stop intake or increment the bounded worker failure
+counter, and they are independent of Claude/LLM availability, but they remain a
+separate service-reliability observation. No transcript or household audio
+content was retained in this report.
+
+The failed disposable add-on was uninstalled and its local-store source moved
+to `/tmp` rather than deleted. Akane was restored on unchanged 2.1.14. All three
+resident instances were started, all five resident TCP sessions resumed, and
+Akane's three pre-test persistent-data hashes matched exactly. This result
+blocks F-46 rollout: the candidate fixes the CPU-bound consumer but does not
+meet the no-unexpected-EOF production gate.
+
 ## Evidence
 
 ### Current production behavior
