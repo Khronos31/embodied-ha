@@ -1,8 +1,9 @@
 # F-46: audio throughput and VoiceS3R EOF investigation
 
 Date: 2026-08-07
-Scope: read-only production observation plus local, transient benchmarks. No add-on
-settings, persistent state, source code, or running service was changed.
+Scope: read-only production observation, local benchmarks, implementation on a
+dedicated branch, and an isolated disposable-image smoke test. No resident add-on
+settings, persistent state, or production service was changed.
 
 ## Executive result
 
@@ -36,8 +37,8 @@ intake into its own stage before release.
 ## Implementation result (2026-08-07)
 
 The recommended first-stage design is implemented on the dedicated branch. It
-has not been built as a Home Assistant add-on image, deployed, or run against a
-production microphone.
+has been built and exercised as an isolated Home Assistant add-on image, but has
+not been deployed to a resident instance or run against a production microphone.
 
 - `silero_onnx_vad.py` implements the official 512-sample Silero ONNX state and
   64-sample context without importing Torch.
@@ -67,11 +68,23 @@ Mechanical evidence:
 | Maximum measured VAD call | 3.287 ms, below the 10 ms gate |
 | Runtime dependency smoke test | model found, inference succeeded, Torch absent |
 | Python 3.11 wheel check | ONNX Runtime 1.28.0 cp311 manylinux wheel available |
+| Disposable HA add-on image | built, installed, and exited successfully under Python 3.11.15 |
+| In-image 60 s generated-PCM replay | 0.525 s wall time (114.3x real time), 1,875 chunks |
+| In-image maximum VAD call | 7.049 ms, below the 10 ms gate |
+| In-image FIFO smoke | ordered delivery passed; Torch remained absent |
 
-The local runtime checks used the host's Python 3.13 rather than the add-on's
-Python 3.11. Therefore the disposable image build, compressed image delta,
-labeled short-call canary, production CPU, TCP intake ratio, and EOF gate remain
-unverified release requirements.
+The disposable image used the candidate source and Dockerfile, with only its
+manifest and final command replaced by a finite generated-PCM smoke harness. It
+had no audio/device mappings, Supervisor or Home Assistant API access, services,
+Ingress, host networking, or configured network ports. It did not auto-start,
+ran once, and stopped normally. Afterward it was uninstalled, removed from the
+local store, and its source was moved to `/tmp` rather than deleted. All three
+resident instances remained started on 2.1.14 and their `preferences.json`
+hashes were unchanged.
+
+The compressed/unpacked image delta was not exposed by the available Supervisor
+metadata. The labeled short-call canary, production CPU, TCP intake ratio, and
+EOF gate remain unverified release requirements.
 
 ## Evidence
 
@@ -252,7 +265,7 @@ cheap only because it is repeatedly disconnected.
 ### Disposable image canary
 
 1. Build the real Python 3.11 add-on image; verify the ONNX model loads without
-   Torch and record compressed/unpacked image delta.
+   Torch and record compressed/unpacked image delta when the runtime exposes it.
 2. Replay the same PCM inside the image. VAD wall time must be at most 0.1x audio
    duration (10x real-time margin) and no chunk may exceed 10 ms in the steady
    state.
@@ -301,7 +314,7 @@ change.
 
 ## Remaining uncertainty requiring canary evidence, not design speculation
 
-- Exact ONNX CPU and image-size delta in the Python 3.11 production image.
+- Production CPU and compressed/unpacked image-size delta.
 - Short Japanese call recall and background false-trigger rate.
 - Whether four queued segments per source is sufficient for observed HA STT
   latency; telemetry should validate or revise this after the canary.
