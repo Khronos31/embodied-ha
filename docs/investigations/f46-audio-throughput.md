@@ -355,6 +355,67 @@ plus five TCP sources. The six-source instance is not six times higher because
 its TCP streams process only about one tenth of incoming audio before
 backpressure closes them; CPU is being limited by failure, not by efficiency.
 
+#### Labeled ordinary-background baseline
+
+On 2026-08-07, the unchanged 2.1.14 detector was observed for 30 continuous
+minutes during ordinary television viewing. The resident confirmed that there
+were no intentional calls to the agent during the window. Only aggregate
+counts were retained for this comparison; transcript content was not copied
+into the canary result.
+
+| Measure | Result |
+| --- | ---: |
+| Intentional calls | 0 |
+| STT submissions | 60 |
+| Non-empty STT results | 47 |
+| Empty transcriptions | 13 |
+| Other STT errors | 0 |
+| Living-room microphones | 56 submissions; 47 non-empty |
+| Other microphones | 4 submissions; 0 non-empty |
+
+These are false STT submissions, not 60 false wake-word activations: the
+daemon transcribes a VAD segment before it can test the transcript for a wake
+word. This labeled window is the current-detector baseline for the candidate
+comparison required by the human audio canary.
+
+#### Candidate ordinary-background screen
+
+On 2026-08-08, the candidate was run in a disposable, output-disabled add-on
+against the same five TCP microphones. The resident add-on was stopped for the
+measurement. Wake handling, LLM/TTS, MQTT, and persistent-data writes were
+disabled; only aggregate STT counts were retained. All five sources passed a
+10-second stable-readiness gate before measurement began.
+
+The run used a safety cap of 72 cloud STT submissions. The candidate reached
+that cap after about 340 seconds and the 73rd submission was blocked before it
+could leave the add-on. The queues were then drained before the result was
+recorded.
+
+| Measure | Result |
+| --- | ---: |
+| Actual cloud STT submissions | 72 |
+| Blocked submission attempts | 1 |
+| Non-empty STT results | 59 |
+| Empty transcriptions | 13 |
+| Other STT errors | 0 |
+| Segment/queue overflows | 0 |
+| Final queue depth | 0 for all five sources |
+| TCP audio intake | 99.199%--99.999% by source |
+
+This screen is **inconclusive**, not a candidate failure and not a release
+pass. The unchanged baseline consumed only about 9.8% of the available TCP
+audio while the candidate consumed more than 99%, so comparing the raw count
+of 72 candidate submissions with 60 baseline submissions would compare very
+different audio exposure. The per-source `aborted`/disconnect entries in the
+terminal aggregate were produced by the deliberate safety-cap shutdown; each
+processor closed cleanly with processed count equal to submitted count.
+
+The required next comparison must feed the current and candidate detectors the
+same non-retained PCM stream, or otherwise match their audio exposure, before
+F-46 can pass its background false-submission gate. After this screen, the
+disposable add-on was removed and the resident 2.1.14 add-on was restored with
+its options and persistent-file hashes unchanged.
+
 ### Code path
 
 `run_audio_stream_session()` currently performs these operations serially for
