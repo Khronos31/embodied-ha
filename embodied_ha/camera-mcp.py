@@ -11,11 +11,11 @@ import datetime
 import json
 import os
 import subprocess
-import sys
 import time
 
 import camera_history
 from embodied_action import action_fields_for_sensory, apply_action_to_body_state
+from mcp_lib import image, serve, text
 from media_capture import fetch_frame
 from media_registry import resolve_media_item
 from spatial_context import classify_sensory_origin
@@ -223,10 +223,6 @@ def press_button(entity_id, ha_url):
     return r.returncode == 0
 
 
-def send(obj):
-    print(json.dumps(obj, ensure_ascii=False), flush=True)
-
-
 def _load_current_camera():
     loc = _load_body_location()
     current_entity = clean(loc.get("current_entity"))
@@ -245,11 +241,10 @@ def _camera_supports_ptz(camera: dict, current_entity: str) -> bool:
     return bool(camera.get("ptz"))
 
 
-def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: str, req_id):
+def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: str):
     source = _camera_source_for_capture(camera, current_entity)
     if not source:
-        send({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "カメラソースが見つかりません"}], "isError": True}})
-        return
+        return [text("カメラソースが見つかりません")], True
     frame = fetch_frame(source, ha_url=ha_url, go2rtc_url=go2rtc_url, token=get_ha_token())
     if frame:
         b64 = base64.b64encode(frame).decode()
@@ -264,21 +259,19 @@ def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: 
             )
         except Exception:
             pass
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [
-                {"type": "text", "text": json.dumps({"camera_context": context}, ensure_ascii=False)},
-                {"type": "image", "data": b64, "mimeType": "image/jpeg"},
-            ]
-        }})
-    else:
-        url = f"{ha_url.rstrip('/')}/camera_proxy/{source}" if "." in source else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={source}"
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [{"type": "text", "text": f"取得失敗: {source}（タイムアウトまたは未起動）\nURL: {url}"}],
-            "isError": True
-        }})
+        return [
+            text(json.dumps({"camera_context": context}, ensure_ascii=False)),
+            image(b64),
+        ]
+    url = (
+        f"{ha_url.rstrip('/')}/camera_proxy/{source}"
+        if "." in source
+        else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={source}"
+    )
+    return [text(f"取得失敗: {source}（タイムアウトまたは未起動）\nURL: {url}")], True
 
 
-def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id):
+def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str):
     prefs = _load_prefs()
     item, resolved_source, _ = resolve_media_item(prefs, source, buckets=("video_media",), allow_single=True)
     if not item:
@@ -286,17 +279,16 @@ def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id
             err = f"その映像ソースは未登録です（video_media に追加してください）: {clean(source)}"
         else:
             err = "watch_media に使える video_media が見つかりません"
-        send({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": err}], "isError": True}})
-        return
+        return [text(err)], True
 
     frame = fetch_frame(resolved_source, ha_url=ha_url, go2rtc_url=go2rtc_url, token=get_ha_token())
     if not frame:
-        url = f"{ha_url.rstrip('/')}/camera_proxy/{resolved_source}" if "." in resolved_source else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={resolved_source}"
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [{"type": "text", "text": f"取得失敗: {resolved_source}（タイムアウトまたは未起動）\nURL: {url}"}],
-            "isError": True
-        }})
-        return
+        url = (
+            f"{ha_url.rstrip('/')}/camera_proxy/{resolved_source}"
+            if "." in resolved_source
+            else go2rtc_url.rstrip("/") + f"/api/frame.jpeg?src={resolved_source}"
+        )
+        return [text(f"取得失敗: {resolved_source}（タイムアウトまたは未起動）\nURL: {url}")], True
 
     context = {
         "id": clean(item.get("id")),
@@ -305,24 +297,15 @@ def _handle_watch_media(source: str | None, ha_url: str, go2rtc_url: str, req_id
         "room": clean(item.get("room")),
         "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
-    send({"jsonrpc": "2.0", "id": req_id, "result": {
-        "content": [
-            {"type": "text", "text": json.dumps({"media_context": context}, ensure_ascii=False)},
-            {"type": "image", "data": base64.b64encode(frame).decode(), "mimeType": "image/jpeg"},
-            {"type": "text", "text": '観た内容を残すなら record_episode(kind="media_watch", ...) を使ってよい。'},
-        ]
-    }})
+    return [
+        text(json.dumps({"media_context": context}, ensure_ascii=False)),
+        image(base64.b64encode(frame).decode()),
+        text('観た内容を残すなら record_episode(kind="media_watch", ...) を使ってよい。'),
+    ]
 
 
-def _history_error(req_id, message: str) -> None:
-    send({
-        "jsonrpc": "2.0",
-        "id": req_id,
-        "result": {
-            "content": [{"type": "text", "text": message}],
-            "isError": True,
-        },
-    })
+def _history_error(message: str):
+    return [text(message)], True
 
 
 def _bounded_history_arguments(arguments: dict, retention_minutes: int) -> tuple[int, int, int]:
@@ -344,23 +327,19 @@ def _bounded_history_arguments(arguments: dict, retention_minutes: int) -> tuple
     return start, end, max_frames
 
 
-def _handle_review_camera_history(arguments: dict, req_id) -> None:
+def _handle_review_camera_history(arguments: dict):
     if not _history_tool_enabled():
-        _history_error(req_id, "カメラ履歴は無効です。高度な設定で有効にしてください。")
-        return
+        return _history_error("カメラ履歴は無効です。高度な設定で有効にしてください。")
 
     _, current_entity, camera = _load_current_camera()
     if not current_entity:
-        _history_error(req_id, "物理体モードではカメラ履歴を使用できません。カメラデバイスに侵入してください。")
-        return
+        return _history_error("物理体モードではカメラ履歴を使用できません。カメラデバイスに侵入してください。")
     if not camera:
-        _history_error(req_id, f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")
-        return
+        return _history_error(f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")
 
     source = _camera_source_for_capture(camera, current_entity)
     if not source:
-        _history_error(req_id, "現在侵入中のカメラソースを解決できません。")
-        return
+        return _history_error("現在侵入中のカメラソースを解決できません。")
     _, retention_minutes = camera_history.history_settings(_load_prefs())
     try:
         start, end, max_frames = _bounded_history_arguments(arguments, retention_minutes)
@@ -375,8 +354,7 @@ def _handle_review_camera_history(arguments: dict, req_id) -> None:
             now=requested_at,
         )
     except (TypeError, ValueError) as exc:
-        _history_error(req_id, str(exc))
-        return
+        return _history_error(str(exc))
 
     frames: list[tuple[camera_history.FrameRecord, bytes]] = []
     for record in records:
@@ -385,8 +363,7 @@ def _handle_review_camera_history(arguments: dict, req_id) -> None:
         except OSError:
             continue
     if not frames:
-        _history_error(req_id, "指定した時刻付近に利用できるカメラ履歴がありません。")
-        return
+        return _history_error("指定した時刻付近に利用できるカメラ履歴がありません。")
 
     context = camera_context(source)
     try:
@@ -415,131 +392,65 @@ def _handle_review_camera_history(arguments: dict, req_id) -> None:
         "retention_minutes": retention_minutes,
         "frames": frame_contexts,
     }
-    content = [
-        {
-            "type": "text",
-            "text": json.dumps({"camera_history_context": history_context}, ensure_ascii=False),
-        }
-    ]
+    content = [text(json.dumps({"camera_history_context": history_context}, ensure_ascii=False))]
     for frame_context, (_, frame) in zip(frame_contexts, frames):
         content.extend([
-            {
-                "type": "text",
-                "text": (
-                    "これはライブ映像ではなく、過去のカメラ履歴です。"
-                    f" 撮影時刻: {frame_context['captured_at']}"
-                ),
-            },
-            {
-                "type": "image",
-                "data": base64.b64encode(frame).decode(),
-                "mimeType": "image/jpeg",
-            },
+            text(
+                "これはライブ映像ではなく、過去のカメラ履歴です。"
+                f" 撮影時刻: {frame_context['captured_at']}"
+            ),
+            image(base64.b64encode(frame).decode()),
         ])
-    send({"jsonrpc": "2.0", "id": req_id, "result": {"content": content}})
+    return content
 
 
-def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str, req_id):
+def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str):
     if not _camera_supports_ptz(camera, current_entity):
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [{"type": "text", "text": f"現在侵入中のカメラデバイス（{current_entity}）は PTZ 非対応です。"}],
-            "isError": True
-        }})
-        return
+        return [text(f"現在侵入中のカメラデバイス（{current_entity}）は PTZ 非対応です。")], True
     entity_id = (camera.get("ptz") or {}).get(direction)
     if not entity_id:
-        send({"jsonrpc": "2.0", "id": req_id, "result": {
-            "content": [{"type": "text", "text": f"このカメラはPTZ非対応です。 direction={direction}"}],
-            "isError": True
-        }})
-        return
+        return [text(f"このカメラはPTZ非対応です。 direction={direction}")], True
     ok = press_button(entity_id, ha_url)
     msg = f"カメラを{direction}に向けました" if ok else f"PTZ操作失敗 ({entity_id})"
-    send({"jsonrpc": "2.0", "id": req_id, "result": {
-        "content": [{"type": "text", "text": msg}],
-        "isError": not ok
-    }})
+    return [text(msg)], not ok
+
+
+def _handle_use_device_camera(arguments: dict, ha_url: str, go2rtc_url: str):
+    action = _clean(arguments.get("action")) or "capture"
+    _, current_entity, camera = _load_current_camera()
+    if not current_entity:
+        return [text("物理体モードではカメラを使用できません。カメラデバイスに侵入してください。")], True
+    if not camera:
+        return [text(f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")], True
+    if action == "capture":
+        return _handle_capture(camera, current_entity, ha_url, go2rtc_url)
+    if action in {"ptz_left", "ptz_right", "ptz_up", "ptz_down"}:
+        return _handle_ptz(camera, current_entity, ha_url, action.removeprefix("ptz_"))
+    return [text(f"不明な action: {action}")], True
+
+
+def _tool_registry(ha_url: str, go2rtc_url: str) -> dict:
+    tools = {
+        "use_device_camera": {
+            "spec": TOOL_USE_DEVICE_CAMERA,
+            "handler": lambda arguments: _handle_use_device_camera(arguments, ha_url, go2rtc_url),
+        },
+        "watch_media": {
+            "spec": TOOL_WATCH_MEDIA,
+            "handler": lambda arguments: _handle_watch_media(arguments.get("source"), ha_url, go2rtc_url),
+        },
+    }
+    if _history_tool_enabled():
+        tools["review_camera_history"] = {
+            "spec": TOOL_REVIEW_CAMERA_HISTORY,
+            "handler": _handle_review_camera_history,
+        }
+    return tools
 
 
 def main():
     args = parse_args()
-
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except Exception:
-            continue
-
-        method = req.get("method", "")
-        id_ = req.get("id")
-
-        if method == "initialize":
-            send({"jsonrpc": "2.0", "id": id_, "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "camera-mcp", "version": "3.1"}
-            }})
-
-        elif method == "notifications/initialized":
-            pass
-
-        elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": id_, "result": {"tools": _available_tools()}})
-
-        elif method == "tools/call":
-            tool_name = req["params"]["name"]
-            call_args = req["params"].get("arguments", {})
-            if tool_name == "watch_media":
-                _handle_watch_media(call_args.get("source"), args.ha_url, args.go2rtc_url, id_)
-                continue
-            if tool_name == "review_camera_history":
-                _handle_review_camera_history(call_args, id_)
-                continue
-            if tool_name != "use_device_camera":
-                send({"jsonrpc": "2.0", "id": id_, "result": {
-                    "content": [{"type": "text", "text": f"未知のツール: {tool_name}"}],
-                    "isError": True
-                }})
-                continue
-
-            action = _clean(call_args.get("action")) or "capture"
-            loc, current_entity, camera = _load_current_camera()
-            if not current_entity:
-                send({"jsonrpc": "2.0", "id": id_, "result": {
-                    "content": [{"type": "text", "text": "物理体モードではカメラを使用できません。カメラデバイスに侵入してください。"}],
-                    "isError": True
-                }})
-                continue
-            if not camera:
-                send({"jsonrpc": "2.0", "id": id_, "result": {
-                    "content": [{"type": "text", "text": f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。"}],
-                    "isError": True
-                }})
-                continue
-
-            if action == "capture":
-                _handle_capture(camera, current_entity, args.ha_url, args.go2rtc_url, id_)
-            elif action in {"ptz_left", "ptz_right", "ptz_up", "ptz_down"}:
-                _handle_ptz(camera, current_entity, args.ha_url, action.removeprefix("ptz_"), id_)
-            else:
-                send({"jsonrpc": "2.0", "id": id_, "result": {
-                    "content": [{"type": "text", "text": f"不明な action: {action}"}],
-                    "isError": True
-                }})
-
-        elif id_ is not None:
-            # 未対応メソッドには JSON-RPC エラーを返す（通知にはなにもしない）
-            send({
-                "jsonrpc": "2.0",
-                "id": id_,
-                "error": {
-                    "code": -32601,
-                    "message": f"Method not found: {method}",
-                },
-            })
+    serve("camera-mcp", "3.1", _tool_registry(args.ha_url, args.go2rtc_url))
 
 
 if __name__ == "__main__":
