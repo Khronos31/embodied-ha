@@ -208,7 +208,8 @@ the TCP continuity gate:
 | Measure | Result |
 | --- | ---: |
 | ALSA source | 1/1 completed 1,800 s; intake ratio 0.99997 |
-| TCP sources without unexpected EOF | 0/5 |
+| Expected firmware absolute-deadline closes | 3/5 |
+| Unexplained early EOF | 2/5 |
 | TCP session durations | 7.497 to 1,790.102 s |
 | TCP audio/full-window ratio | 0.00356 to 0.99451 |
 | Queue overflow | 0 |
@@ -217,13 +218,20 @@ the TCP continuity gate:
 | CPU, 59 samples | 1.247% mean; 1.43% p95; 1.52% max |
 | Memory, 59 samples | 133.8 to 172.8 MB |
 
-The earliest TCP endpoint returned EOF about 7.5 seconds after the barrier.
-Another lasted about 1,601 seconds, and the remaining three returned EOF in the
-last 21 seconds. No reconnect occurred after the barrier, so later successful
-sessions could not hide those failures. The CPU numbers are useful descriptive
-evidence for the ONNX path, but they do **not** pass the CPU acceptance gate:
-most of the observation did not retain all five TCP streams, making a comparison
-with the six-source pre-change baseline invalid.
+The earliest TCP endpoint returned EOF about 7.5 seconds after the barrier and
+another lasted about 1,601 seconds. The remaining three returned EOF in the last
+21 seconds. Firmware source inspection after the run showed that those three
+end times are expected: `EHA_MIC_SESSION_MAX_MS` closes every microphone socket
+30 minutes after it was accepted. Their readiness connection ages predict the
+observed measurement durations to within about 0.4 seconds. The canary had
+incorrectly classified the known rotations as unexpected because its 30-minute
+clock started 10 to 21 seconds after those sockets were accepted.
+
+No reconnect occurred after the barrier, so the two genuinely early closures
+could not be hidden. The CPU numbers are useful descriptive evidence for the
+ONNX path, but they do **not** pass the CPU acceptance gate: most of the
+observation did not retain all five TCP streams, making a comparison with the
+six-source pre-change baseline invalid.
 
 HA Cloud STT also returned three transient HTTP 502 responses near the end of
 the run. They did not stop intake or increment the bounded worker failure
@@ -235,8 +243,46 @@ The failed disposable add-on was uninstalled and its local-store source moved
 to `/tmp` rather than deleted. Akane was restored on unchanged 2.1.14. All three
 resident instances were started, all five resident TCP sessions resumed, and
 Akane's three pre-test persistent-data hashes matched exactly. This result
-blocks F-46 rollout: the candidate fixes the CPU-bound consumer but does not
-meet the no-unexpected-EOF production gate.
+blocks F-46 rollout: the candidate fixes the CPU-bound consumer but the two
+unexplained early EOFs still violate the production continuity gate.
+
+### Early-EOF boundary refinement
+
+The firmware closes a microphone session for one of four explicit reasons:
+peer closure, immediate preemption by a newly accepted client, send failure, or
+Wi-Fi disconnection; its 30-minute absolute deadline is a fifth planned reason.
+The cleanup reason and counters are emitted only to the device's serial log, so
+the two early closures cannot be classified retrospectively from the client EOF
+alone.
+
+Known duplicate clients were ruled out. Sora and Midori contain no TCP
+microphone sources and emitted no TCP-pull connection logs. The completed mock
+readiness test had no socket file descriptor, and no calibration or diagnostic
+client remained active. This does not exclude an external port probe, but there
+was no configured resident client competing with the canary.
+
+The strongest remaining code-level hypothesis is the firmware's 500 ms
+`SO_SNDTIMEO`. The same firmware documents observed Wi-Fi/repeater jitter from
+hundreds of milliseconds into the two-second range for its audio path. A single
+send stall beyond 500 ms increments `g_stream_send_failures` and deliberately
+closes the microphone socket, producing exactly the clean EOF visible to the
+client. The built firmware's lwIP send buffer is only 5,760 bytes, or 0.18
+seconds at the 32,000 B/s PCM rate. It can therefore fill quickly during an ACK
+outage, after which the 500 ms send timeout permits a sub-second network stall
+to end the session despite the documented multi-second jitter. This is
+consistent with the observations but not yet proven; immediate preemption and
+Wi-Fi disconnect remain alternatives until the firmware cleanup reason is
+captured.
+
+A valid follow-up should therefore capture the firmware-side cleanup reason
+instead of repeating the same opaque client test. It should also treat only a
+close near 1,800 seconds of socket age as the planned rotation, require a
+bounded successful reconnect after that rotation, and forbid reconnect after
+an earlier close. Alternatively, a no-reconnect continuity subtest must be
+shorter than the firmware deadline, followed by a separate rotation-recovery
+test. The current 30-minute/no-reconnect combination is structurally incapable
+of passing once readiness consumes any part of the firmware's 30-minute socket
+lifetime.
 
 ## Evidence
 
