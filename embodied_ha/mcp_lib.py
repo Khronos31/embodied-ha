@@ -25,8 +25,8 @@ stdio JSON-RPC (MCP) のボイラープレートをまとめ、各サーバー�
 重要: ハンドラ内では絶対に print() で標準出力に書かないこと
 （stdout は JSON-RPC 専用。ログは stderr へ）。
 """
-import sys
 import json
+import sys
 
 
 def text(s):
@@ -55,6 +55,10 @@ def _send_result(id_, content, is_error=False):
     _send({"jsonrpc": "2.0", "id": id_, "result": result})
 
 
+def _send_error(id_, code, message):
+    _send({"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}})
+
+
 def serve(name, version, tools):
     """stdio JSON-RPC ループを回す。
 
@@ -69,6 +73,8 @@ def serve(name, version, tools):
         try:
             req = json.loads(line)
         except Exception:
+            continue
+        if not isinstance(req, dict):
             continue
 
         method = req.get("method", "")
@@ -88,8 +94,23 @@ def serve(name, version, tools):
             _send({"jsonrpc": "2.0", "id": id_, "result": {"tools": specs}})
 
         elif method == "tools/call":
-            tool_name = req.get("params", {}).get("name", "")
-            call_args = req.get("params", {}).get("arguments", {}) or {}
+            params = req.get("params", {})
+            if not isinstance(params, dict):
+                if id_ is not None:
+                    _send_error(id_, -32602, "Invalid params")
+                continue
+            tool_name = params.get("name", "")
+            if not isinstance(tool_name, str):
+                if id_ is not None:
+                    _send_error(id_, -32602, "Invalid params")
+                continue
+            call_args = params.get("arguments", {})
+            if call_args is None:
+                call_args = {}
+            elif not isinstance(call_args, dict):
+                if id_ is not None:
+                    _send_error(id_, -32602, "Invalid params")
+                continue
             tool = tools.get(tool_name)
             if not tool:
                 _send_result(id_, [text(f"未知のツール: {tool_name}")], True)
@@ -102,9 +123,9 @@ def serve(name, version, tools):
                     content, is_error = out, False
                 _send_result(id_, content, is_error)
             except Exception as e:
-                _send_result(id_, [text(f"ツール実行エラー（{tool_name}）: {e}")], True)
+                log(f"Tool handler failed ({tool_name}): {type(e).__name__}: {e}")
+                _send_result(id_, [text(f"ツール実行エラー（{tool_name}）")], True)
 
         elif id_ is not None:
             # 未対応メソッドには JSON-RPC エラーを返す（通知にはなにもしない）
-            _send({"jsonrpc": "2.0", "id": id_,
-                   "error": {"code": -32601, "message": f"Method not found: {method}"}})
+            _send_error(id_, -32601, f"Method not found: {method}")

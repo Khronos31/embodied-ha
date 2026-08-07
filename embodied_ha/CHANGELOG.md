@@ -6,6 +6,17 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.11] - 2026-08-07
+
+### Fixed / 修正
+
+- カメラMCPを共通のJSON-RPC処理へ統合し、不正なツール呼び出しやカメラ処理中の想定外例外で
+  MCPサーバー全体が停止しないようにしました。共通処理でも入力型を検証し、内部の例外詳細は
+  エージェントへ返さずアドオンのローカルログだけへ記録します。
+  Migrated the camera MCP server to the shared JSON-RPC loop so malformed tool calls and unexpected camera
+  handler errors no longer terminate the server. The shared boundary now validates structured inputs and keeps
+  internal exception details in local add-on logs instead of returning them to the agent.
+
 ## [2.1.10] - 2026-08-07
 
 ### Fixed / 修正
