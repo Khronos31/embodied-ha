@@ -6,6 +6,15 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.12] - 2026-08-07
+
+### Fixed / 修正
+
+- カメラへの投射中にライブ画像や履歴画像を見ると、投射状態と身体へ戻りたくなる圧力が消えていた問題を
+  修正しました。画像取得中に投射先が変わった場合（同じカメラへ再侵入した場合を含む）は画像を返しません。
+  Fixed live and historical camera viewing so it no longer clears active camera projection state or return-to-body
+  pressure. Images are withheld if the projection changes during acquisition, including re-entry into the same camera.
+
 ## [2.1.11] - 2026-08-07
 
 ### Fixed / 修正

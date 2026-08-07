@@ -94,6 +94,10 @@ TOOL_REVIEW_CAMERA_HISTORY = {
     },
 }
 
+PROJECTION_CHANGED_MESSAGE = (
+    "カメラへの侵入状態が変わりました。現在の投射先を確認して、もう一度試してください。"
+)
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -128,13 +132,54 @@ def _history_tool_enabled() -> bool:
 
 
 def _load_body_location() -> dict:
-    path = clean(os.environ.get("EHA_BODY_LOCATION_FILE")) or "/config/embodied-ha/body_location.json"
+    location, _ = _load_body_location_snapshot()
+    return location
+
+
+def _body_location_path() -> str:
+    return clean(os.environ.get("EHA_BODY_LOCATION_FILE")) or "/config/embodied-ha/body_location.json"
+
+
+def _load_body_location_snapshot() -> tuple[dict, tuple[int, int, int, int, int] | None]:
+    """Read one atomic body-location generation and return its file identity.
+
+    body-mcp writes this file through os.replace().  The opened descriptor therefore
+    stays attached to one complete generation even if another process replaces the
+    path while it is being read.  The identity lets camera operations reject ABA
+    transitions that leave and later re-enter the same camera during frame access.
+    """
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(_body_location_path(), encoding="utf-8") as f:
             data = json.load(f)
+            stat = os.fstat(f.fileno())
     except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, None
+    token = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    return (data if isinstance(data, dict) else {}), token
+
+
+def _is_active_camera_projection(location: dict, expected_entity: str = "") -> bool:
+    current_entity = clean(location.get("current_entity"))
+    projected_room = clean(location.get("projected_room"))
+    expected = clean(expected_entity)
+    return bool(
+        current_entity
+        and projected_room
+        and (not expected or current_entity == expected)
+    )
+
+
+def _camera_projection_still_active(expected_entity: str, expected_token=None) -> bool:
+    location, token = _load_body_location_snapshot()
+    return bool(
+        expected_token is not None
+        and token == expected_token
+        and _is_active_camera_projection(location, expected_entity)
+    )
+
+
+def _projection_changed_error():
+    return [text(PROJECTION_CHANGED_MESSAGE)], True
 
 
 def _load_camera_devices() -> list[dict]:
@@ -193,6 +238,14 @@ def camera_context(source):
     return context
 
 
+def _projected_camera_context(source: str) -> dict:
+    context = camera_context(source)
+    context["sensory_origin"] = "cyber_direct"
+    context["access_mode"] = "cyber_direct"
+    context.update(action_fields_for_sensory(context, host=source))
+    return context
+
+
 # pan_left/right の命名注意:
 #   pan_left ボタン = 上から見て時計回り回転 → 部屋の右側が映る
 #   pan_right ボタン = 上から見て反時計回り回転 → 部屋の左側が映る
@@ -217,13 +270,13 @@ def press_button(entity_id, ha_url):
 
 
 def _load_current_camera():
-    loc = _load_body_location()
+    loc, projection_token = _load_body_location_snapshot()
     current_entity = clean(loc.get("current_entity"))
     if not current_entity:
-        return loc, current_entity, None
+        return loc, current_entity, None, projection_token
     prefs = _load_prefs()
     caps = get_device_capabilities(current_entity, prefs)
-    return loc, current_entity, caps.get("camera")
+    return loc, current_entity, caps.get("camera"), projection_token
 
 
 def _camera_source_for_capture(camera: dict, current_entity: str) -> str:
@@ -234,14 +287,22 @@ def _camera_supports_ptz(camera: dict, current_entity: str) -> bool:
     return bool(camera.get("ptz"))
 
 
-def _handle_capture(camera: dict, current_entity: str, ha_url: str, go2rtc_url: str):
+def _handle_capture(
+    camera: dict,
+    current_entity: str,
+    projection_token,
+    ha_url: str,
+    go2rtc_url: str,
+):
     source = _camera_source_for_capture(camera, current_entity)
     if not source:
         return [text("カメラソースが見つかりません")], True
     frame = fetch_frame(source, ha_url=ha_url, go2rtc_url=go2rtc_url, token=get_ha_token())
     if frame:
         b64 = base64.b64encode(frame).decode()
-        context = camera_context(source)
+        context = _projected_camera_context(source)
+        if not _camera_projection_still_active(current_entity, projection_token):
+            return _projection_changed_error()
         try:
             apply_action_to_body_state(
                 action_mode=context.get("action_mode"),
@@ -324,8 +385,8 @@ def _handle_review_camera_history(arguments: dict):
     if not _history_tool_enabled():
         return _history_error("カメラ履歴は無効です。高度な設定で有効にしてください。")
 
-    _, current_entity, camera = _load_current_camera()
-    if not current_entity:
+    location, current_entity, camera, projection_token = _load_current_camera()
+    if not _is_active_camera_projection(location):
         return _history_error("物理体モードではカメラ履歴を使用できません。カメラデバイスに侵入してください。")
     if not camera:
         return _history_error(f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")
@@ -358,18 +419,7 @@ def _handle_review_camera_history(arguments: dict):
     if not frames:
         return _history_error("指定した時刻付近に利用できるカメラ履歴がありません。")
 
-    context = camera_context(source)
-    try:
-        apply_action_to_body_state(
-            action_mode=context.get("action_mode"),
-            action_cost=context.get("action_cost"),
-            target_room=context.get("source_room"),
-            target_host=context.get("target_host"),
-            move_cost=context.get("move_cost"),
-        )
-    except Exception:
-        pass
-
+    context = _projected_camera_context(source)
     frame_contexts = [
         {
             "captured_at": datetime.datetime.fromtimestamp(record.captured_at).astimezone().isoformat(timespec="milliseconds"),
@@ -394,6 +444,18 @@ def _handle_review_camera_history(arguments: dict):
             ),
             image(base64.b64encode(frame).decode()),
         ])
+    if not _camera_projection_still_active(current_entity, projection_token):
+        return _projection_changed_error()
+    try:
+        apply_action_to_body_state(
+            action_mode=context.get("action_mode"),
+            action_cost=context.get("action_cost"),
+            target_room=context.get("source_room"),
+            target_host=context.get("target_host"),
+            move_cost=context.get("move_cost"),
+        )
+    except Exception:
+        pass
     return content
 
 
@@ -410,13 +472,13 @@ def _handle_ptz(camera: dict, current_entity: str, ha_url: str, direction: str):
 
 def _handle_use_device_camera(arguments: dict, ha_url: str, go2rtc_url: str):
     action = _clean(arguments.get("action")) or "capture"
-    _, current_entity, camera = _load_current_camera()
-    if not current_entity:
+    location, current_entity, camera, projection_token = _load_current_camera()
+    if not _is_active_camera_projection(location):
         return [text("物理体モードではカメラを使用できません。カメラデバイスに侵入してください。")], True
     if not camera:
         return [text(f"現在侵入中のデバイス（{current_entity}）はカメラデバイスではありません。")], True
     if action == "capture":
-        return _handle_capture(camera, current_entity, ha_url, go2rtc_url)
+        return _handle_capture(camera, current_entity, projection_token, ha_url, go2rtc_url)
     if action in {"ptz_left", "ptz_right", "ptz_up", "ptz_down"}:
         return _handle_ptz(camera, current_entity, ha_url, action.removeprefix("ptz_"))
     return [text(f"不明な action: {action}")], True
