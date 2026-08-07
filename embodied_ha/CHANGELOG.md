@@ -6,6 +6,21 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.13] - 2026-08-07
+
+### Fixed / 修正
+
+- `should_interrupt` の `intent` を `speak` / `action` の必須選択として明文化し、
+  省略時も暗黙に発話扱いせず安全側へ拒否するようにしました。
+  Made `should_interrupt.intent` an explicit required choice between `speak` and `action`,
+  with omitted values denied instead of being silently treated as speech.
+- AntigravityへMCPツールの正規Schemaを秘密情報なしのmanifestとして渡し、
+  MCP起動用の資格情報をmodel可読設定から分離しました。資格情報は権限を限定した
+  呼び出し単位の一時ファイルから専用launcherだけが読み、終了時に削除します。
+  Added a secret-free MCP schema manifest for Antigravity and moved MCP launch credentials out of
+  model-readable configuration into restricted per-invocation files consumed only by a dedicated launcher
+  and removed when the invocation ends.
+
 ## [2.1.12] - 2026-08-07
 
 ### Fixed / 修正
