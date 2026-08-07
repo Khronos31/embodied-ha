@@ -28,8 +28,8 @@ import os
 import uuid
 from typing import Any
 
-from mcp_lib import log, serve, text
 import sociality_state as ss
+from mcp_lib import log, serve, text
 from state_utils import file_lock
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
@@ -403,7 +403,7 @@ def record_consent(args: dict[str, Any]):
 def should_interrupt(args: dict[str, Any]):
     person = _clean(args.get("person"))
     mode = _clean(args.get("mode")) or "loop"
-    intent = _clean(args.get("intent")) or "speak"
+    intent = _clean(args.get("intent"))
     hour = args.get("hour", 12)
     metadata = _json_load(args.get("metadata") or args.get("metadata_json") or {})
     body_state = _json_load(args.get("body_state") or args.get("body_state_json") or {})
@@ -667,20 +667,30 @@ def main() -> None:
                 "name": "should_interrupt",
                 "description": (
                     "quiet_window / consent / turn-taking / shared_focus / body_state を見て、"
-                    "今 speak / intervene すべきか判定する。"
+                    "今、発話（intent=speak）または家電操作などの外界への操作"
+                    "（intent=action）で割り込んでよいか判定する。"
+                    "intent には speak / action のいずれかを必ず指定する。"
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "person": {"type": "string"},
                         "mode": {"type": "string"},
-                        "intent": {"type": "string"},
+                        "intent": {
+                            "type": "string",
+                            "enum": ["speak", "action"],
+                            "description": (
+                                "境界を確認する行為の種類。"
+                                "発話・呼びかけは speak、家電操作などは action。"
+                            ),
+                        },
                         "hour": {"type": "integer"},
                         "metadata": {"type": "object"},
                         "metadata_json": {"type": "string"},
                         "body_state": {"type": "object"},
                         "body_state_json": {"type": "string"},
                     },
+                    "required": ["intent"],
                 },
             },
             "handler": should_interrupt,
