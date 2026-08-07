@@ -217,13 +217,11 @@ class CameraMcpTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                tool_names = {tool["name"] for tool in camera_mcp._available_tools()}
-                self.assertIn("review_camera_history", tool_names)
-                history_tool = next(
-                    tool
-                    for tool in camera_mcp._available_tools()
-                    if tool["name"] == "review_camera_history"
+                registry = camera_mcp._tool_registry(
+                    "http://supervisor/core/api", "http://homeassistant.local:1984"
                 )
+                self.assertIn("review_camera_history", registry)
+                history_tool = registry["review_camera_history"]["spec"]
                 properties = history_tool["inputSchema"]["properties"]
                 self.assertNotIn("source", properties)
                 self.assertNotIn("path", properties)
@@ -239,9 +237,14 @@ class CameraMcpTests(unittest.TestCase):
                 prefs.write_text(
                     json.dumps({"camera_history_enabled": False}), encoding="utf-8"
                 )
+                # A running MCP process keeps its startup registry; the next
+                # invocation creates a new process and reloads preferences.
+                self.assertIn("review_camera_history", registry)
                 self.assertNotIn(
                     "review_camera_history",
-                    {tool["name"] for tool in camera_mcp._available_tools()},
+                    camera_mcp._tool_registry(
+                        "http://supervisor/core/api", "http://homeassistant.local:1984"
+                    ),
                 )
 
     def test_history_tool_returns_only_current_camera_frames(self):
@@ -379,7 +382,7 @@ class CameraMcpTests(unittest.TestCase):
         self.assertTrue(sent[0]["result"]["isError"])
         self.assertEqual(
             sent[0]["result"]["content"][0]["text"],
-            "ツール実行エラー（use_device_camera）: synthetic capture failure",
+            "ツール実行エラー（use_device_camera）",
         )
         self.assertEqual(sent[1]["id"], 2)
         self.assertIn("tools", sent[1]["result"])

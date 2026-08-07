@@ -127,13 +127,6 @@ def _history_tool_enabled() -> bool:
     return _env_enabled("EHA_CAMERA_HISTORY_ENABLED") and enabled
 
 
-def _available_tools() -> list[dict]:
-    tools = [TOOL_USE_DEVICE_CAMERA, TOOL_WATCH_MEDIA]
-    if _history_tool_enabled():
-        tools.append(TOOL_REVIEW_CAMERA_HISTORY)
-    return tools
-
-
 def _load_body_location() -> dict:
     path = clean(os.environ.get("EHA_BODY_LOCATION_FILE")) or "/config/embodied-ha/body_location.json"
     try:
@@ -430,6 +423,8 @@ def _handle_use_device_camera(arguments: dict, ha_url: str, go2rtc_url: str):
 
 
 def _tool_registry(ha_url: str, go2rtc_url: str) -> dict:
+    # invoke-agent starts a fresh MCP process for each LLM invocation, so tool
+    # visibility is intentionally a session-start snapshot of the preferences.
     tools = {
         "use_device_camera": {
             "spec": TOOL_USE_DEVICE_CAMERA,
