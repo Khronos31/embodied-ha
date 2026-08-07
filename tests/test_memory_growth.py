@@ -249,6 +249,31 @@ class MemoryGrowthTests(unittest.TestCase):
         self.assertIn("日次要約", out)
         self.assertIn("重要な出来事", out)
 
+    def test_mem_context_reports_omission_without_claiming_summarization(self):
+        memory_md = self.log_dir / "memory.md"
+        memory_md.write_text(
+            "## コア記憶\n\n核心は保持\n\n---\n\n## 最近の気づき\n\n"
+            "- 古い気づき1\n- 古い気づき2\n- 新しい気づき3\n- 新しい気づき4\n",
+            encoding="utf-8",
+        )
+        before = memory_md.read_bytes()
+
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "embodied_ha" / "mem-context.py"), str(memory_md), "2"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        self.assertEqual(memory_md.read_bytes(), before)
+        self.assertIn("核心は保持", result.stdout)
+        self.assertIn("（古い2件は表示していません）", result.stdout)
+        self.assertNotIn("コア記憶に要約済み", result.stdout)
+        self.assertNotIn("古い気づき1", result.stdout)
+        self.assertNotIn("古い気づき2", result.stdout)
+        self.assertIn("新しい気づき3", result.stdout)
+        self.assertIn("新しい気づき4", result.stdout)
+
     def test_episode_is_indexed_to_fts_and_recall_uses_it(self):
         episode = memory_state.save_episode(
             self.tmpdir.name,

@@ -51,7 +51,7 @@ def _legacy_memory_text(content: str, n: int) -> str:
     out = core.rstrip()
     if kept:
         omitted = len(recent_entries) - len(kept)
-        note = f"（古い{omitted}件は省略。コア記憶に要約済み）\n" if omitted > 0 else ""
+        note = f"（古い{omitted}件は表示していません）\n" if omitted > 0 else ""
         out += "\n\n---\n\n## 最近の気づき\n\n" + note + "\n".join(kept)
     return out.strip()
 
