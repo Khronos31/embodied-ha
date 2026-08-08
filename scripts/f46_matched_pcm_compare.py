@@ -24,10 +24,11 @@ import signal
 import socket
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterator
+from typing import Any, Self
 from urllib.parse import urlparse
 
 DEFAULT_AUDIO_SECONDS = 180
@@ -77,7 +78,7 @@ class LockedPcmBuffer:
             self._libc.munlock(ctypes.c_void_p(self._address), self.size)
             self.locked = False
 
-    def __enter__(self) -> LockedPcmBuffer:
+    def __enter__(self) -> Self:
         self.lock()
         return self
 
@@ -121,7 +122,7 @@ class _NoWriteDirectory:
 class _NoFile:
     name = None
 
-    def __enter__(self) -> _NoFile:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:

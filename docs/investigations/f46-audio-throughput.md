@@ -452,10 +452,37 @@ current-detector attempt end positions as zero; it does not affect the total of
 output. The counter-position wrapper was fixed after the run. No block-level
 claim is made from this result.
 
-Both handoffs restored resident 2.1.14 with Web HTTP 200 and all five TCP
-sources observed streaming. The remaining human-audio gate is short-call
-recall plus either a larger valid matched-background denominator or an explicit
-decision that the equal 17-versus-17 screen is sufficient evidence.
+A second 180-second window was then run with the fixed counter-position
+wrapper. The source reconnected three times during capture, extending wall time
+to 187.741 seconds, but the complete 5,760,000-byte buffer was assembled before
+replay. Both detectors consumed that same fixed buffer and matching
+detector-boundary digest, so transport reconnects did not create unequal audio
+exposure between them.
+
+| Measure | Current detector | Candidate detector |
+| --- | ---: | ---: |
+| Input chunks | 5,625 | 5,625 |
+| Input bytes | 5,760,000 | 5,760,000 |
+| Detector-boundary digest | matched | matched |
+| STT-attempt boundary count | 21 | 22 |
+| Replay wall time | 1,452.103 s | 1.537 s |
+| External STT calls | 0 | 0 |
+| PCM file writes | 0 | 0 |
+
+The second window independently met the declared minimum current-detector
+denominator of 20. Its candidate/current count ratio was 1.04762, below the
+1.20 rejection threshold, and the valid block bootstrap lower bound was
+0.90476. The screen therefore returned `continue_to_full_matched_canary`; it is
+a screening pass, not the final human-audio release gate. Across the two
+completed matched windows, the aggregate counts were 38 current versus 39
+candidate, a ratio of 1.02632 (+2.63%). The first window's block positions
+remain invalid and were not combined into a block-level inference.
+
+All matched-screen handoffs restored resident 2.1.14 with Web HTTP 200 and all
+five TCP sources observed streaming. Resident options and the three protected
+persistent-file hashes were unchanged. The remaining human-audio gates are the
+labeled short-call recall checks and the full matched-background canary; the
+small matched screen no longer blocks proceeding to them.
 
 ### Code path
 
