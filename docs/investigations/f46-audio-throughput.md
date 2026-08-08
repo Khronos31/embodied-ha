@@ -484,6 +484,38 @@ persistent-file hashes were unchanged. The remaining human-audio gates are the
 labeled short-call recall checks and the full matched-background canary; the
 small matched screen no longer blocks proceeding to them.
 
+#### Deferred labeled short-call canary
+
+On 2026-08-09, a disposable short-call harness was added to compare six
+scheduled utterances per microphone against one in-memory buffer. It uses
+absolute JST timestamps, rejects any TCP disconnect instead of concatenating
+wall-clock gaps, independently checks that each scheduled window contains an
+energy stimulus, and scores paired current-hit/candidate-miss losses rather
+than allowing candidate-only gains to cancel regressions. The primary buffer
+is mlocked and wiped; deliberate PCM writes, external STT, and network output
+remain disabled. Python/native transient copies are not claimed to be
+non-pageable or forensically zeroized because HAOS swap is enabled and the
+process memlock limit is 8 MiB.
+
+No valid human-audio result was produced. Several schedules were invalidated
+before capture because the readiness or image/mode preconditions were not met.
+After the resident was deliberately held stopped for more than a minute, a
+shortened 64-second attempt against the selected living-room node still timed
+out while establishing the TCP connection. It emitted neither
+`F46_MATCHED_CAPTURE_COMPLETE` nor a result marker; the user's scheduled speech
+therefore is not canary evidence. The failure occurred before VAD inference
+and does not reject the candidate detector.
+
+Repeated direct-client handoff attempts were stopped because VoiceS3R's
+single-client transport instability had become the dominant cost and confounder.
+The human short-call gate is deferred until a stable capture path is available,
+such as the proposed single-owner VoiceS3R-to-RTSP fan-out gateway or another
+exposure-matched source. This gate blocks merging or releasing the F-46 audio
+candidate, but it does not block unrelated implementation work. The disposable
+add-on was uninstalled and its source was moved to `/tmp` rather than deleted.
+Resident 2.1.14 was restored with Web HTTP 200, five fresh TCP streams, and
+matching pre-stop options and protected-file hashes.
+
 ### Code path
 
 `run_audio_stream_session()` currently performs these operations serially for
