@@ -125,7 +125,7 @@ class F46MatchedPcmCompareTests(unittest.TestCase):
         )
         self.assertEqual(result["outcome"], "inconclusive_low_baseline_count")
 
-    def test_one_extra_attempt_cannot_reject(self):
+    def test_one_extra_attempt_only_continues_to_full_canary(self):
         baseline = list(range(10, 210, 10))
         result = self.compare.evaluate_screen(
             baseline,
@@ -133,7 +133,7 @@ class F46MatchedPcmCompareTests(unittest.TestCase):
             total_chunks=240,
             chunks_per_block=60,
         )
-        self.assertEqual(result["outcome"], "inconclusive_small_absolute_difference")
+        self.assertEqual(result["outcome"], "continue_to_full_matched_canary")
 
     def test_consistent_large_increase_rejects_candidate(self):
         baseline = []

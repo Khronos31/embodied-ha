@@ -416,6 +416,47 @@ F-46 can pass its background false-submission gate. After this screen, the
 disposable add-on was removed and the resident 2.1.14 add-on was restored with
 its options and persistent-file hashes unchanged.
 
+#### Matched-PCM background screens
+
+Two follow-up screens used one in-memory PCM buffer for both detectors. The
+buffer was locked against swap, core dumps were disabled, and the real
+`process_segment()` eligibility path was exercised with WAV creation,
+persistence, and STT replaced by local counters. No transcript or PCM file was
+retained.
+
+The first attempt captured 240 audio-seconds without a disconnect, but the
+current detector did not finish within the declared 45-minute replay budget.
+The in-process signal timer did not reliably interrupt the native VAD call, so
+the disposable add-on was stopped externally. This attempt produced no
+comparison result and is classified as inconclusive.
+
+The retry used an external replay guard, aggregate progress markers, candidate-
+first ordering, and a 180-second input. The resident add-on was restored as
+soon as capture completed; detector replay continued in the disposable add-on.
+
+| Measure | Current detector | Candidate detector |
+| --- | ---: | ---: |
+| Input chunks | 5,625 | 5,625 |
+| Input bytes | 5,760,000 | 5,760,000 |
+| Detector-boundary digest | matched | matched |
+| STT-attempt boundary count | 17 | 17 |
+| Replay wall time | 1,468.445 s | 1.470 s |
+| External STT calls | 0 | 0 |
+| PCM file writes | 0 | 0 |
+
+The candidate therefore showed **no count increase in this matched window**.
+The predeclared screen still remains inconclusive because the current-detector
+denominator was 17, below the minimum of 20. A harness defect also recorded all
+current-detector attempt end positions as zero; it does not affect the total of
+17 or the matched input digest, but it invalidates the per-time-block bootstrap
+output. The counter-position wrapper was fixed after the run. No block-level
+claim is made from this result.
+
+Both handoffs restored resident 2.1.14 with Web HTTP 200 and all five TCP
+sources observed streaming. The remaining human-audio gate is short-call
+recall plus either a larger valid matched-background denominator or an explicit
+decision that the equal 17-versus-17 screen is sufficient evidence.
+
 ### Code path
 
 `run_audio_stream_session()` currently performs these operations serially for

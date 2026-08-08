@@ -16,9 +16,13 @@ curl_bin="${CURL_BIN:-curl}"
 start_grace_seconds="${START_GRACE_SECONDS:-30}"
 restore_timeout_seconds="${RESTORE_TIMEOUT_SECONDS:-120}"
 poll_seconds="${POLL_SECONDS:-2}"
+restore_not_before_epoch="${RESTORE_NOT_BEFORE_EPOCH:-0}"
 
 case "$max_capture_seconds" in
   *[!0-9]*|'') echo "MAX_CAPTURE_SECONDS must be an integer" >&2; exit 2 ;;
+esac
+case "$restore_not_before_epoch" in
+  *[!0-9]*|'') echo "RESTORE_NOT_BEFORE_EPOCH must be an integer" >&2; exit 2 ;;
 esac
 
 mkdir -p "$(dirname "$receipt_file")"
@@ -83,6 +87,12 @@ if [ "${trigger:-}" = "" ]; then
 fi
 
 echo "$(timestamp) RESTORE_TRIGGER reason=$trigger"
+if [ "$(date +%s)" -lt "$restore_not_before_epoch" ]; then
+  echo "$(timestamp) RESTORE_DEFERRED until_epoch=$restore_not_before_epoch"
+fi
+while [ "$(date +%s)" -lt "$restore_not_before_epoch" ]; do
+  sleep "$poll_seconds"
+done
 "$ha_bin" addons start "$resident_slug" || true
 restore_deadline=$(( $(date +%s) + restore_timeout_seconds ))
 while [ "$(date +%s)" -lt "$restore_deadline" ]; do

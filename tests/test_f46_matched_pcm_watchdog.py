@@ -2,6 +2,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -57,7 +58,13 @@ class F46MatchedPcmWatchdogTests(unittest.TestCase):
         curl.chmod(0o755)
         return ha, curl
 
-    def run_watchdog(self, canary_state: str, emit_marker: bool):
+    def run_watchdog(
+        self,
+        canary_state: str,
+        emit_marker: bool,
+        *,
+        restore_not_before_epoch: int = 0,
+    ):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             ha, curl = self.make_fake_commands(directory, canary_state, emit_marker)
@@ -69,6 +76,7 @@ class F46MatchedPcmWatchdogTests(unittest.TestCase):
                 "START_GRACE_SECONDS": "0",
                 "RESTORE_TIMEOUT_SECONDS": "2",
                 "POLL_SECONDS": "0",
+                "RESTORE_NOT_BEFORE_EPOCH": str(restore_not_before_epoch),
             }
             result = subprocess.run(
                 [str(WATCHDOG), "canary", "resident", "2", str(receipt)],
@@ -94,6 +102,18 @@ class F46MatchedPcmWatchdogTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(resident_started)
         self.assertIn("RESTORE_TRIGGER reason=canary_never_started", receipt)
+        self.assertIn("RESTORE_PASS state=started web=200 tcp_sources=5", receipt)
+
+    def test_restore_can_be_deferred_after_capture(self):
+        restore_at = int(time.time()) + 1
+        result, receipt, resident_started = self.run_watchdog(
+            "started",
+            True,
+            restore_not_before_epoch=restore_at,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(resident_started)
+        self.assertIn(f"RESTORE_DEFERRED until_epoch={restore_at}", receipt)
         self.assertIn("RESTORE_PASS state=started web=200 tcp_sources=5", receipt)
 
 

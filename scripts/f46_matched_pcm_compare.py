@@ -30,7 +30,7 @@ from types import ModuleType
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
-DEFAULT_AUDIO_SECONDS = 240
+DEFAULT_AUDIO_SECONDS = 180
 DEFAULT_BLOCK_SECONDS = 30
 DEFAULT_REPLAY_TIMEOUT_SECONDS = 2700
 MIN_BASELINE_ATTEMPTS = 20
@@ -198,14 +198,17 @@ def harden_process() -> None:
         raise ComparisonError(f"PR_SET_DUMPABLE failed: errno={errno}")
 
 
-def constrain_cpu() -> int:
+def constrain_cpu() -> list[int]:
     allowed = sorted(os.sched_getaffinity(0))
     if not allowed:
         raise ComparisonError("no CPU is available to the comparison process")
-    selected = allowed[-1]
-    os.sched_setaffinity(0, {selected})
-    os.nice(15)
-    return selected
+    # Both selected VAD implementations are single-stream here. Keep their
+    # internal thread counts at one, but allow the scheduler to move that work
+    # away from a busy core; pinning plus nice=15 made the first replay exceed
+    # its external 45-minute budget.
+    os.sched_setaffinity(0, set(allowed))
+    os.nice(5)
+    return allowed
 
 
 @contextlib.contextmanager
@@ -306,6 +309,8 @@ def run_detector(
     source_id: str,
     source_url: str,
     pcm: bytearray,
+    *,
+    progress_interval_chunks: int = 250,
 ) -> DetectorRun:
     reader = _DigestReader(source_id, pcm, module.CHUNK_BYTES)
     counter = BoundaryCounter()
@@ -323,16 +328,39 @@ def run_detector(
     )
     original_detect_voice = module.detect_voice
     original_reset_vad = module.reset_vad
+    original_process_segment = module.process_segment
     original_load_settings = module.load_runtime_settings
     original_active_listen = module._service_active_listen_requests
 
     def detect_voice(chunk: bytes, selected_detector) -> float:
         reader.note_detector_call(chunk)
-        return original_detect_voice(chunk, selected_detector)
+        probability = original_detect_voice(chunk, selected_detector)
+        if progress_interval_chunks > 0 and reader.index % progress_interval_chunks == 0:
+            print(
+                "F46_MATCHED_REPLAY_PROGRESS "
+                + json.dumps(
+                    {
+                        "detector": detector_name,
+                        "chunks": reader.index,
+                        "total_chunks": len(pcm) // module.CHUNK_BYTES,
+                        "attempts": len(counter.attempts),
+                        "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+        return probability
 
     def reset_vad(selected_detector) -> None:
         reset_chunks.append(reader.index)
         original_reset_vad(selected_detector)
+
+    def process_segment(*args, **kwargs) -> None:
+        # The baseline calls process_segment directly; the candidate reaches
+        # the same wrapper through its synchronous comparison processor.
+        counter.current_chunk = reader.index
+        original_process_segment(*args, **kwargs)
 
     def load_settings(selected_config):
         return module.RuntimeSettings(
@@ -347,6 +375,7 @@ def run_detector(
     try:
         module.detect_voice = detect_voice
         module.reset_vad = reset_vad
+        module.process_segment = process_segment
         module.load_runtime_settings = load_settings
         module._service_active_listen_requests = (
             lambda selected_config, chunk, requests, last_scan: last_scan
@@ -373,6 +402,7 @@ def run_detector(
     finally:
         module.detect_voice = original_detect_voice
         module.reset_vad = original_reset_vad
+        module.process_segment = original_process_segment
         module.load_runtime_settings = original_load_settings
         module._service_active_listen_requests = original_active_listen
 
@@ -448,10 +478,10 @@ def evaluate_screen(
 
     if baseline < MIN_BASELINE_ATTEMPTS:
         outcome = "inconclusive_low_baseline_count"
-    elif candidate - baseline < MIN_EXCESS_ATTEMPTS:
-        outcome = "inconclusive_small_absolute_difference"
     elif ratio is None or ratio <= REJECTION_RATIO:
         outcome = "continue_to_full_matched_canary"
+    elif candidate - baseline < MIN_EXCESS_ATTEMPTS:
+        outcome = "inconclusive_small_absolute_difference"
     elif lower_bound is not None and lower_bound > REJECTION_RATIO:
         outcome = "reject_candidate_background_gate"
     else:
@@ -557,7 +587,7 @@ def resolve_source(args: argparse.Namespace) -> tuple[str, str]:
 def main() -> int:
     args = parse_args()
     harden_process()
-    selected_cpu = constrain_cpu()
+    allowed_cpus = constrain_cpu()
     source_url, source_label = resolve_source(args)
     if args.audio_seconds <= 0 or args.block_seconds <= 0:
         raise ComparisonError("durations must be positive")
@@ -593,18 +623,30 @@ def main() -> int:
             if candidate_mode != "silero_onnx" or candidate_detector is None:
                 raise ComparisonError(f"unexpected candidate VAD: {candidate_mode}")
 
-            baseline_run = run_detector(
-                baseline,
-                baseline_detector,
-                baseline_mode,
-                source_id,
-                source_url,
-                locked.data,
-            )
             candidate_run = run_detector(
                 candidate,
                 candidate_detector,
                 candidate_mode,
+                source_id,
+                source_url,
+                locked.data,
+            )
+            print(
+                "F46_MATCHED_CANDIDATE_COMPLETE "
+                + json.dumps(
+                    {
+                        "attempts": len(candidate_run.attempts),
+                        "chunks": candidate_run.chunks,
+                        "elapsed_seconds": candidate_run.elapsed_seconds,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            baseline_run = run_detector(
+                baseline,
+                baseline_detector,
+                baseline_mode,
                 source_id,
                 source_url,
                 locked.data,
@@ -667,8 +709,8 @@ def main() -> int:
                 "result_contains_transcripts": False,
             },
             "resource_limits": {
-                "cpu_affinity": [selected_cpu],
-                "nice": 15,
+                "cpu_affinity": allowed_cpus,
+                "nice": 5,
                 "replay_timeout_seconds": args.replay_timeout_seconds,
             },
         }
