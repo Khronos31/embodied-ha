@@ -6,6 +6,28 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.15] - 2026-08-10
+
+### Changed / 変更
+
+- 身体的なマイク入力をRTSPストリームへ統一し、アドオン内でALSA機器や独自TCPマイクへ
+  直接接続する経路を廃止しました。旧設定は消去せず、RTSPへ置き換えるまで使用しません。
+  Standardized embodied microphone input on RTSP streams and removed direct add-on connections to
+  ALSA devices and proprietary TCP microphones. Legacy settings are retained but inactive until replaced.
+- 発話先をHome Assistantの`media_player`エンティティへ統一しました。通常読み上げは選択した
+  `tts.*`エンティティのHA側設定を使うTTS Media Sourceとして再生し、アドオン固有の
+  VOICEVOX話者・速度・音量設定を廃止しました。
+  Standardized speech output on Home Assistant `media_player` entities. Normal speech now plays as a TTS
+  Media Source using the selected `tts.*` entity's Home Assistant settings, removing add-on-specific
+  VOICEVOX voice, speed, and volume overrides.
+- アドオンのホスト音声権限を削除し、音声ファイルをHome Assistant Media Sourceへ渡すための
+  `media:rw`マウントへ置き換えました。
+  Removed host audio access and replaced it with a `media:rw` mount for Home Assistant Media Source playback.
+- 起動時に全マイク・スピーカー・TTS経路を検査し、旧ALSA/TCP設定や無効なHAエンティティを
+  英語のアドオンログで具体的に報告するようにしました。
+  Added startup validation for every microphone, speaker, and TTS route, with actionable English add-on log
+  messages for legacy ALSA/TCP settings and invalid Home Assistant entities.
+
 ## [2.1.14] - 2026-08-07
 
 ### Fixed / 修正
