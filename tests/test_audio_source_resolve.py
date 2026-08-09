@@ -23,22 +23,21 @@ class AudioSourceResolveTests(unittest.TestCase):
     def setUp(self):
         self.resolver = load_audio_source_resolve_module()
 
-    def test_physical_body_prefers_current_room_tcp_source(self):
+    def test_physical_body_uses_current_room_rtsp_source(self):
         body_loc = {"current_entity": "", "current_room": "study"}
         sources = [
             {"source": "rtsp://example.local/living", "room": "living"},
-            {"source": "tcp://192.168.1.50:3333", "room": "study"},
-            {"source": "alsa://default", "room": "study"},
+            {"source": "rtsp://example.local/study", "room": "study"},
         ]
-        self.assertEqual(self.resolver.resolve_audio_source(body_loc, sources), "tcp://192.168.1.50:3333")
+        self.assertEqual(self.resolver.resolve_audio_source(body_loc, sources), "rtsp://example.local/study")
 
-    def test_tcp_body_prefers_same_host_source(self):
+    def test_legacy_projected_state_resolves_rtsp_by_room(self):
         body_loc = {"current_entity": "tcp://192.168.1.50:3333", "current_room": "study", "projected_room": "living"}
         sources = [
-            {"source": "tcp://192.168.1.50:3333", "room": "study"},
+            {"source": "rtsp://example.local/study", "room": "study"},
             {"source": "rtsp://example.local/living", "room": "living"},
         ]
-        self.assertEqual(self.resolver.resolve_audio_source(body_loc, sources), "tcp://192.168.1.50:3333")
+        self.assertEqual(self.resolver.resolve_audio_source(body_loc, sources), "rtsp://example.local/living")
 
     def test_room_miss_falls_back_to_first_source(self):
         body_loc = {"current_entity": "camera.kitchen", "current_room": "hallway", "projected_room": "kitchen"}

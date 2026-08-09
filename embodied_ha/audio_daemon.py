@@ -9,8 +9,6 @@ import itertools
 import json
 import math
 import os
-import random
-import socket
 import subprocess
 import sys
 import tempfile
@@ -19,19 +17,18 @@ import time
 import uuid
 import urllib.error
 import urllib.request
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from typing import Any
 import wave
 from collections import deque
 from dataclasses import dataclass
 from datetime import timedelta
-from enum import Enum
 from pathlib import Path
 
 from auditory_context import append_auditory_event
 import concentrate_hearing_files
 from spatial_context import area_for_entity, classify_sensory_origin, infer_room_from_text, resolve_room
-from speak import play_pcm_file
+from speak import play_audio_file
 from state_utils import clean, now, parse_ts, read_json
 
 _SILERO_IMPORT_ERROR = ""
@@ -68,20 +65,10 @@ BACKGROUND_LOG_MIN_INTERVAL_SECONDS = 300
 NON_SPEECH_AUDIO_RETENTION_HOURS = 24
 NON_SPEECH_MAX_CLIP_SECONDS = 8.0
 BACKGROUND_LOG_RETENTION_HOURS = 24
-TCP_PULL_CONNECT_GAP_SECONDS = 2.0
-TCP_PULL_CONNECT_TIMEOUT_SECONDS = 10.0
-TCP_PULL_READ_TIMEOUT_SECONDS = 10.0
-TCP_PULL_BACKOFF_BASE_SECONDS = 1.0
-TCP_PULL_BACKOFF_MAX_SECONDS = 30.0
-TCP_PULL_BACKOFF_JITTER_RATIO = 0.25
-TCP_PULL_STABLE_SESSION_SECONDS = 30.0
 DEFAULT_AUDIO_DAEMON_LOCK_FILE = "/tmp/embodied-ha/audio-daemon.lock"
 _LOG_LOCK = threading.Lock()
 _BACKGROUND_LOG_LOCK = threading.Lock()
 _NON_SPEECH_LOCK = threading.Lock()
-_TCP_PULL_CONNECT_LOCK = threading.Lock()
-_tcp_pull_next_connect_at = 0.0
-_TCP_PULL_SESSION_GEN = itertools.count(1)
 _HA_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": []}
 _TV_STATES_CACHE: dict[str, object] = {"expires_at": 0.0, "states": None}
 _TV_STATES_LOCK = threading.Lock()
@@ -116,12 +103,6 @@ class AudioSourceConfig:
     background_only: bool = False
     room: str = ""
     note: str = ""
-    transport: str = "alsa"
-    host: str = ""
-    port: int = 0
-    sample_rate: int = SAMPLE_RATE
-    channels: int = CHANNELS
-    audio_format: str = "s16le"
 
 
 @dataclass(frozen=True)
@@ -131,27 +112,6 @@ class RuntimeSettings:
     language: str
     wake_words: list[str]
     stt_enabled: bool
-
-
-class TcpPullState(Enum):
-    CONNECTING = "connecting"
-    STREAMING = "streaming"
-    CLOSING = "closing"
-    RETRY_WAIT = "retry_wait"
-
-
-@dataclass(frozen=True)
-class TcpPullReservation:
-    generation: int
-    connect_at: float
-
-
-@dataclass(frozen=True)
-class TcpPullSessionResult:
-    generation: int
-    reason: str
-    stats: dict[str, int]
-    connected_seconds: float
 
 
 def log(message: str) -> None:
@@ -256,8 +216,7 @@ def non_speech_audio_retention_hours() -> int:
 
 
 def canonical_source(value: str) -> str:
-    source = clean(value)
-    return "alsa://default" if source in {"", "alsa", "default"} else source
+    return clean(value)
 
 
 def log_dir_path() -> str:
@@ -738,7 +697,7 @@ def _audio_source_entry_by_source(preferences: dict | None, source: str) -> dict
     for item in raw_sources:
         if not isinstance(item, dict):
             continue
-        if _source_identity(item, infer_transport(item)) == target:
+        if normalize_source_uri(item.get("source")) == target:
             return item
     return None
 
@@ -774,17 +733,6 @@ def update_current_room_from_audio_source(config: AudioSourceConfig, preferences
     print(f"[audio] wake word: user location_belief → {room}")
 
 
-def default_active_listen_request_dir() -> str:
-    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
-    if data_dir:
-        return os.path.join(data_dir, "runtime", "active_listen_requests")
-    return "/config/embodied-ha/runtime/active_listen_requests"
-
-
-def active_listen_request_dir() -> str:
-    return clean(os.environ.get("EHA_ACTIVE_LISTEN_REQUEST_DIR")) or default_active_listen_request_dir()
-
-
 def _write_json_atomic(path: str, payload: dict) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.tmp-{uuid.uuid4().hex}"
@@ -793,193 +741,121 @@ def _write_json_atomic(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def _load_json_file(path: str) -> dict | None:
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _pending_active_listen_requests(config: AudioSourceConfig) -> list[dict]:
-    directory = active_listen_request_dir()
-    try:
-        names = sorted(os.listdir(directory))
-    except FileNotFoundError:
-        return []
-    now_ts = time.time()
-    requests: list[dict] = []
-    for name in names:
-        if not name.endswith('.json') or name.endswith('.response.json'):
-            continue
-        req_path = os.path.join(directory, name)
-        payload = _load_json_file(req_path)
-        if not payload:
-            continue
-        if clean(payload.get('source')) != config.source:
-            continue
-        request_id = clean(payload.get('request_id'))
-        output_path = clean(payload.get('output_path'))
-        response_path = clean(payload.get('response_path'))
-        try:
-            duration = int(payload.get('duration') or 0)
-        except Exception:
-            duration = 0
-        try:
-            created_at = float(payload.get('created_at') or 0.0)
-        except Exception:
-            created_at = 0.0
-        if not request_id or not output_path or not response_path or duration <= 0:
-            continue
-        if created_at and now_ts - created_at > max(15.0, duration + 15.0):
-            _write_json_atomic(response_path, {
-                'ok': False,
-                'request_id': request_id,
-                'source': config.source,
-                'error': 'request expired',
-            })
-            try:
-                os.unlink(req_path)
-            except FileNotFoundError:
-                pass
-            continue
-        requests.append({
-            'request_id': request_id,
-            'source': config.source,
-            'duration': duration,
-            'output_path': output_path,
-            'response_path': response_path,
-            'request_path': req_path,
-            'expected_bytes': duration * SAMPLE_RATE * SAMPLE_WIDTH,
-        })
-    return requests
-
-
-def _finalize_active_listen_capture(request: dict, audio_bytes: bytes, error: str | None = None) -> None:
-    response = {
-        'ok': error is None,
-        'request_id': request.get('request_id'),
-        'source': request.get('source'),
-        'output_path': request.get('output_path'),
-    }
-    if error is None:
-        try:
-            write_wav(request['output_path'], audio_bytes)
-            response['captured_bytes'] = len(audio_bytes)
-            response['duration_sec'] = round(len(audio_bytes) / float(SAMPLE_RATE * SAMPLE_WIDTH), 2)
-        except Exception as exc:
-            error = str(exc) or 'failed to write capture'
-    if error is not None:
-        response['ok'] = False
-        response['error'] = error
-    _write_json_atomic(request['response_path'], response)
-    try:
-        os.unlink(request['request_path'])
-    except FileNotFoundError:
-        pass
-
-
-def _service_active_listen_requests(
-    config: AudioSourceConfig,
-    chunk: bytes,
-    active_requests: dict[str, dict],
-    last_scan_at: float,
-) -> float:
-    now_ts = time.monotonic()
-    if now_ts - last_scan_at >= 0.25:
-        for request in _pending_active_listen_requests(config):
-            request_id = request['request_id']
-            if request_id not in active_requests:
-                active_requests[request_id] = {**request, 'buffer': bytearray()}
-        last_scan_at = now_ts
-
-    completed: list[str] = []
-    for request_id, state in list(active_requests.items()):
-        state['buffer'].extend(chunk)
-        if len(state['buffer']) >= state['expected_bytes']:
-            _finalize_active_listen_capture(state, bytes(state['buffer'][:state['expected_bytes']]))
-            completed.append(request_id)
-    for request_id in completed:
-        active_requests.pop(request_id, None)
-    return last_scan_at
-
-
 def normalize_source_uri(value: str) -> str:
-    source = clean(value)
-    if source in {"", "alsa", "default"}:
-        return "alsa://default"
-    if source.startswith("alsa://"):
-        device = source[len("alsa://"):].lstrip("/")
-        return f"alsa://{device or 'default'}"
-    return source
+    return clean(value)
 
 
-def infer_transport(item: dict) -> str:
-    source = normalize_source_uri(item.get("source"))
-    if source.startswith("rtsp://"):
-        return "rtsp"
-    if source.startswith("tcp://"):
-        return "tcp_pull"
-    if source.startswith("alsa://"):
-        return "alsa"
-    if clean(item.get("host")) or clean(item.get("port")):
-        return "tcp_pull"
-    return "unknown"
+def unsupported_mic_sources(preferences: dict | None = None) -> list[dict[str, str]]:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    raw_sources = prefs.get("mics")
+    if not isinstance(raw_sources, list):
+        return []
+    unsupported: list[dict[str, str]] = []
+    for item in raw_sources:
+        if not isinstance(item, dict):
+            continue
+        source = normalize_source_uri(item.get("source"))
+        if source.startswith("rtsp://"):
+            continue
+        unsupported.append({
+            "label": clean(item.get("label")) or source or "(unnamed)",
+            "source": source or "(missing)",
+        })
+    return unsupported
 
 
-def _source_identity(item: dict, transport: str) -> str:
-    source = normalize_source_uri(item.get("source"))
-    if transport == "tcp_pull" and source and not source.startswith("tcp://") and clean(item.get("host")):
-        host = clean(item.get("host"))
-        port = clean(item.get("port"))
-        if host and port:
-            return f"tcp://{host}:{port}"
-    return source
+def unsupported_speaker_routes(preferences: dict | None = None) -> list[dict[str, str]]:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    raw_speakers = prefs.get("speakers")
+    if isinstance(raw_speakers, dict):
+        speakers = [
+            {"room": room, **config}
+            for room, config in raw_speakers.items()
+            if isinstance(config, dict)
+        ]
+    elif isinstance(raw_speakers, list):
+        speakers = [item for item in raw_speakers if isinstance(item, dict)]
+    else:
+        return []
+
+    unsupported: list[dict[str, str]] = []
+    for item in speakers:
+        room = clean(item.get("room")) or "(unnamed room)"
+        label = clean(item.get("label")) or room
+        route_type = clean(item.get("type"))
+        entity = clean(item.get("entity") or item.get("media_player"))
+        if route_type not in {"", "tts"}:
+            reason = f"legacy speaker type '{route_type}' is unsupported"
+        elif not entity.startswith("media_player."):
+            reason = "a media_player.* entity is required"
+        else:
+            continue
+        unsupported.append({
+            "label": label,
+            "room": room,
+            "reason": reason,
+        })
+    return unsupported
 
 
-def parse_tcp_port(value) -> int | None:
-    try:
-        port = int(value)
-    except Exception:
-        return None
-    if port <= 0 or port > 65535:
-        return None
-    return port
+def log_audio_route_health(preferences: dict | None = None) -> bool:
+    prefs = preferences if isinstance(preferences, dict) else load_preferences()
+    issues = 0
+    for item in unsupported_mic_sources(prefs):
+        log(
+            "Audio configuration error: unsupported microphone "
+            f"'{item['label']}' ({item['source']}). Only rtsp:// sources are supported; "
+            "re-stream the microphone through go2rtc or another RTSP service."
+        )
+        issues += 1
+    for item in unsupported_speaker_routes(prefs):
+        log(
+            "Audio configuration error: unsupported speaker "
+            f"'{item['label']}' in room '{item['room']}': {item['reason']}. "
+            "Select a Home Assistant media_player entity."
+        )
+        issues += 1
 
+    tts_entity = clean(prefs.get("tts_entity"))
+    if not tts_entity.startswith("tts."):
+        log(
+            "Audio configuration error: tts_entity must be a Home Assistant "
+            "tts.* entity. Select one in the Web UI."
+        )
+        issues += 1
 
-def parse_source_uri(source: str) -> tuple[str, str, str, int] | None:
-    normalized = normalize_source_uri(source)
-    if normalized.startswith("alsa://"):
-        device = normalized[len("alsa://"):].lstrip("/") or "default"
-        return "alsa", normalized, device, 0
-    if normalized.startswith("rtsp://"):
-        return "rtsp", normalized, "", 0
-    if normalized.startswith("tcp://"):
-        parsed = urlparse(normalized)
-        host = clean(parsed.hostname)
-        port = parse_tcp_port(parsed.port)
-        if not host or port is None:
-            return None
-        if clean(parsed.path) not in {"", "/"}:
-            return None
-        return "tcp_pull", normalized, host, port
-    return None
+    if issues:
+        log(f"Audio route validation failed with {issues} issue(s); affected routes are disabled.")
+        return False
+
+    valid_mics = sum(
+        1
+        for item in prefs.get("mics", [])
+        if isinstance(item, dict) and clean(item.get("source")).startswith("rtsp://")
+    )
+    raw_speakers = prefs.get("speakers")
+    valid_speakers = len(raw_speakers) if isinstance(raw_speakers, (list, dict)) else 0
+    log(
+        "Audio route validation passed: "
+        f"{valid_mics} RTSP microphone(s), {valid_speakers} media_player speaker(s), "
+        f"TTS entity {tts_entity}."
+    )
+    return True
 
 
 def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
     if not isinstance(item, dict):
         return None
-    transport = infer_transport(item)
-    source = _source_identity(item, transport)
+    source = normalize_source_uri(item.get("source"))
     if not source:
-        log(f"invalid audio source config: missing source for transport={transport}")
+        log("invalid audio source config: missing RTSP source")
         return None
-    parsed = parse_source_uri(source)
-    if parsed is None:
-        log(f"invalid audio source config: unsupported source URI {source}")
+    if not source.startswith("rtsp://"):
+        log(
+            f"unsupported microphone source {source}: only rtsp:// is supported; "
+            "re-stream the microphone through go2rtc or another RTSP service"
+        )
         return None
-    transport, source, host_or_device, port = parsed
     label = clean(item.get("label")) or source
     room = clean(item.get("room"))
     if not room:
@@ -993,32 +869,6 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
     if background_only and not background_hearing_enabled(item):
         return None
 
-    host = ""
-    sample_rate = SAMPLE_RATE
-    channels = CHANNELS
-    audio_format = "s16le"
-
-    if transport == "tcp_pull":
-        host = host_or_device
-        try:
-            sample_rate = int(item.get("sample_rate", SAMPLE_RATE))
-        except Exception:
-            sample_rate = -1
-        try:
-            channels = int(item.get("channels", CHANNELS))
-        except Exception:
-            channels = -1
-        audio_format = clean(item.get("format")).lower() or "s16le"
-        if sample_rate != SAMPLE_RATE or channels != CHANNELS or audio_format != "s16le":
-            log(
-                f"invalid audio source config for {label}: tcp_pull only supports "
-                f"sample_rate={SAMPLE_RATE}, channels={CHANNELS}, format=s16le "
-                f"(got sample_rate={sample_rate}, channels={channels}, format={audio_format or 'unset'})"
-            )
-            return None
-    elif transport == "alsa":
-        host = host_or_device
-
     return AudioSourceConfig(
         source=source,
         label=label,
@@ -1027,12 +877,6 @@ def build_audio_source_config(item: dict) -> AudioSourceConfig | None:
         background_only=background_only,
         room=room,
         note=clean(item.get("note")),
-        transport=transport,
-        host=host,
-        port=port,
-        sample_rate=sample_rate,
-        channels=channels,
-        audio_format=audio_format,
     )
 
 
@@ -1043,7 +887,6 @@ def load_enabled_mics(preferences: dict | None = None) -> list[AudioSourceConfig
         return []
 
     enabled: list[AudioSourceConfig] = []
-    tcp_endpoints: dict[tuple[str, int], str] = {}
     for item in raw_sources:
         if not isinstance(item, dict):
             continue
@@ -1052,16 +895,6 @@ def load_enabled_mics(preferences: dict | None = None) -> list[AudioSourceConfig
         config = build_audio_source_config(item)
         if config is None:
             continue
-        if config.transport == "tcp_pull":
-            endpoint = (config.host.casefold(), config.port)
-            previous = tcp_endpoints.get(endpoint)
-            if previous is not None:
-                log(
-                    f"duplicate tcp_pull endpoint rejected for {config.label}: "
-                    f"{config.host}:{config.port} already owned by {previous}"
-                )
-                continue
-            tcp_endpoints[endpoint] = config.label
         enabled.append(config)
     return enabled
 
@@ -1103,7 +936,7 @@ def load_runtime_settings(
         for item in raw_sources:
             if not isinstance(item, dict):
                 continue
-            source = _source_identity(item, infer_transport(item))
+            source = normalize_source_uri(item.get("source"))
             if source != base_config.source:
                 continue
             label = clean(item.get("label")) or source
@@ -1122,12 +955,6 @@ def load_runtime_settings(
                 background_only=background_only,
                 room=clean(item.get("room")) or base_config.room,
                 note=clean(item.get("note")) or base_config.note,
-                transport=base_config.transport,
-                host=base_config.host,
-                port=base_config.port,
-                sample_rate=base_config.sample_rate,
-                channels=base_config.channels,
-                audio_format=base_config.audio_format,
             )
             stt_enabled = item.get("stt_enabled") is True and retention > 0
             break
@@ -1142,25 +969,6 @@ def load_runtime_settings(
 
 
 def build_ffmpeg_command(config: AudioSourceConfig) -> list[str]:
-    if config.transport == "alsa":
-        return [
-            "ffmpeg",
-            "-loglevel",
-            "error",
-            "-f",
-            "alsa",
-            "-i",
-            config.host or "default",
-            "-ar",
-            str(SAMPLE_RATE),
-            "-ac",
-            str(CHANNELS),
-            "-f",
-            "s16le",
-            "-",
-        ]
-    if config.transport != "rtsp":
-        raise ValueError(f"ffmpeg transport unsupported for {config.transport}")
     return [
         "ffmpeg",
         "-loglevel",
@@ -1866,7 +1674,7 @@ def _wake_window_sec(preferences: dict | None = None) -> int:
 
 def _play_ack_se(config: AudioSourceConfig, se_path: str) -> None:
     try:
-        ok = play_pcm_file(config.room, se_path)
+        ok = play_audio_file(config.room, se_path)
     except Exception as exc:
         log(f"[wake-ack] SE→{config.room} ng: {exc}")
         return
@@ -2129,18 +1937,6 @@ def log_runtime_settings(config: AudioSourceConfig, settings: RuntimeSettings) -
     )
 
 
-def read_exact_socket(conn: socket.socket, size: int) -> bytes:
-    chunks: list[bytes] = []
-    remaining = size
-    while remaining > 0:
-        piece = conn.recv(remaining)
-        if not piece:
-            break
-        chunks.append(piece)
-        remaining -= len(piece)
-    return b"".join(chunks)
-
-
 def reset_vad(detector) -> None:
     if detector is None:
         return
@@ -2163,8 +1959,6 @@ def run_audio_stream_session(
 
     last_settings_signature: tuple[str | None, str, tuple[str, ...], bool, bool] | None = None
     last_background_log_at = 0.0
-    active_listen_requests: dict[str, dict] = {}
-    last_request_scan_at = 0.0
     prebuffer: deque[bytes] = deque(maxlen=prebuffer_chunks)
     segment_chunks: list[bytes] = []
     segment_levels: list[float] = []
@@ -2180,13 +1974,6 @@ def run_audio_stream_session(
                 break
             stats["chunks"] += 1
             stats["bytes"] += len(chunk)
-            last_request_scan_at = _service_active_listen_requests(
-                config,
-                chunk,
-                active_listen_requests,
-                last_request_scan_at,
-            )
-
             voice_prob = detect_voice(chunk, detector)
             is_speech = voice_prob > VAD_THRESHOLD
             level_db = chunk_db(chunk)
@@ -2290,8 +2077,7 @@ def run_audio_stream_session(
                 )
 
     finally:
-        for request in list(active_listen_requests.values()):
-            _finalize_active_listen_capture(request, bytes(request.get('buffer') or b''), error='stream ended before capture completed')
+        reset_vad(detector)
     return stats
 
 
@@ -2340,197 +2126,6 @@ def audio_worker(
         time.sleep(10)
 
 
-def reserve_tcp_pull_connection(config: AudioSourceConfig) -> TcpPullReservation:
-    global _tcp_pull_next_connect_at
-
-    # Only reservation bookkeeping belongs under this lock. Sleeping and the
-    # TCP handshake remain outside so one unreachable node cannot block every
-    # other microphone.
-    with _TCP_PULL_CONNECT_LOCK:
-        now_ts = time.monotonic()
-        connect_at = max(now_ts, _tcp_pull_next_connect_at)
-        _tcp_pull_next_connect_at = connect_at + TCP_PULL_CONNECT_GAP_SECONDS
-        generation = next(_TCP_PULL_SESSION_GEN)
-
-    log(
-        f"tcp pull reserved for {config.label}: generation={generation} "
-        f"wait={max(0.0, connect_at - now_ts):.1f}s"
-    )
-    return TcpPullReservation(generation=generation, connect_at=connect_at)
-
-
-def open_tcp_pull_connection(
-    config: AudioSourceConfig,
-    reservation: TcpPullReservation,
-    *,
-    sleep_fn=None,
-    connector=None,
-) -> socket.socket:
-    sleep_fn = sleep_fn or time.sleep
-    connector = connector or socket.create_connection
-
-    wait_seconds = max(0.0, reservation.connect_at - time.monotonic())
-    if wait_seconds > 0:
-        log(
-            f"tcp pull connection queued for {config.label}: "
-            f"generation={reservation.generation} waiting={wait_seconds:.1f}s"
-        )
-        sleep_fn(wait_seconds)
-
-    # Deployment prerequisite: development/preview environments must never
-    # target a production VoiceS3R node address.
-    log(
-        f"tcp pull connecting for {config.label}: generation={reservation.generation} "
-        f"source={config.source} host={config.host} port={config.port} "
-        f"connect_timeout={TCP_PULL_CONNECT_TIMEOUT_SECONDS:.1f}s "
-        f"sample_rate={config.sample_rate} channels={config.channels} "
-        f"format={config.audio_format}"
-    )
-    return connector(
-        (config.host, config.port),
-        timeout=TCP_PULL_CONNECT_TIMEOUT_SECONDS,
-    )
-
-
-def run_tcp_pull_session(
-    config: AudioSourceConfig,
-    token: str,
-    reservation: TcpPullReservation,
-    *,
-    sleep_fn=None,
-    connector=None,
-) -> TcpPullSessionResult:
-    state = TcpPullState.CONNECTING
-    conn: socket.socket | None = None
-    connected_at: float | None = None
-    stats = {"chunks": 0, "bytes": 0}
-    reason = "unknown"
-
-    try:
-        conn = open_tcp_pull_connection(
-            config,
-            reservation,
-            sleep_fn=sleep_fn,
-            connector=connector,
-        )
-        connected_at = time.monotonic()
-        conn.settimeout(TCP_PULL_READ_TIMEOUT_SECONDS)
-        detector, vad_mode = new_vad()
-        state = TcpPullState.STREAMING
-        log(
-            f"tcp pull state={state.value} label={config.label} "
-            f"generation={reservation.generation} "
-            f"read_timeout={TCP_PULL_READ_TIMEOUT_SECONDS:.1f}s vad={vad_mode}"
-        )
-        stats = run_audio_stream_session(
-            config,
-            token,
-            lambda: read_exact_socket(conn, CHUNK_BYTES),
-            detector,
-            vad_mode,
-        )
-        reason = "eof"
-    except socket.timeout as exc:
-        reason = "connect_timeout" if state == TcpPullState.CONNECTING else "read_timeout"
-        log(
-            f"tcp pull timeout for {config.label}: generation={reservation.generation} "
-            f"state={state.value} reason={reason} error={exc}"
-        )
-    except OSError as exc:
-        reason = "connect_error" if state == TcpPullState.CONNECTING else "read_error"
-        log(
-            f"tcp pull socket error for {config.label}: generation={reservation.generation} "
-            f"state={state.value} reason={reason} errno={exc.errno} error={exc}"
-        )
-    except Exception as exc:
-        reason = "stream_error"
-        log(
-            f"tcp pull error for {config.label}: generation={reservation.generation} "
-            f"state={state.value} reason={reason} error={type(exc).__name__}: {exc}"
-        )
-    finally:
-        state = TcpPullState.CLOSING
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception as exc:
-                log(
-                    f"tcp pull close error for {config.label}: "
-                    f"generation={reservation.generation} error={exc}"
-                )
-
-    connected_seconds = (
-        max(0.0, time.monotonic() - connected_at)
-        if connected_at is not None
-        else 0.0
-    )
-    log(
-        f"tcp pull state={state.value} label={config.label} "
-        f"generation={reservation.generation} reason={reason} "
-        f"connected_seconds={connected_seconds:.1f} "
-        f"chunks={stats['chunks']} bytes={stats['bytes']}"
-    )
-    return TcpPullSessionResult(
-        generation=reservation.generation,
-        reason=reason,
-        stats=stats,
-        connected_seconds=connected_seconds,
-    )
-
-
-def tcp_pull_retry_delay(
-    failure_streak: int,
-    *,
-    random_value: float | None = None,
-) -> float:
-    streak = max(1, int(failure_streak))
-    base = min(
-        TCP_PULL_BACKOFF_MAX_SECONDS,
-        TCP_PULL_BACKOFF_BASE_SECONDS * (2 ** (streak - 1)),
-    )
-    sample = random.random() if random_value is None else float(random_value)
-    sample = min(1.0, max(0.0, sample))
-    jitter = (sample * 2.0 - 1.0) * TCP_PULL_BACKOFF_JITTER_RATIO * base
-    return max(0.0, base + jitter)
-
-
-def tcp_pull_worker(
-    config: AudioSourceConfig,
-    token: str,
-    *,
-    max_sessions: int | None = None,
-    sleep_fn=None,
-) -> None:
-    sleep_fn = sleep_fn or time.sleep
-    failure_streak = 0
-    completed_sessions = 0
-
-    while max_sessions is None or completed_sessions < max_sessions:
-        reservation = reserve_tcp_pull_connection(config)
-        result = run_tcp_pull_session(
-            config,
-            token,
-            reservation,
-            sleep_fn=sleep_fn,
-        )
-        stable = (
-            result.connected_seconds >= TCP_PULL_STABLE_SESSION_SECONDS
-            and result.stats["bytes"] > 0
-        )
-        failure_streak = 0 if stable else failure_streak + 1
-        retry_delay = tcp_pull_retry_delay(max(1, failure_streak))
-        completed_sessions += 1
-
-        log(
-            f"tcp pull state={TcpPullState.RETRY_WAIT.value} label={config.label} "
-            f"generation={result.generation} reason={result.reason} "
-            f"stable={'yes' if stable else 'no'} failure_streak={failure_streak} "
-            f"retry_in={retry_delay:.2f}s"
-        )
-        # run_tcp_pull_session owns and closes the socket before returning.
-        sleep_fn(retry_delay)
-
-
 def wait_for_enabled_mics(*, load_fn=None, sleep_fn=None) -> tuple[dict, list[AudioSourceConfig]]:
     """Stay alive while hearing is intentionally unavailable, then recover."""
     load_fn = load_fn or load_preferences
@@ -2538,15 +2133,23 @@ def wait_for_enabled_mics(*, load_fn=None, sleep_fn=None) -> tuple[dict, list[Au
     announced = False
     while True:
         preferences = load_fn()
+        unsupported = unsupported_mic_sources(preferences)
         sources = load_enabled_mics(preferences)
         if sources:
             if announced:
-                log("有効なマイク設定を検出しました。聴覚を開始します")
+                log("Valid RTSP microphone configuration detected; starting hearing.")
             return preferences, sources
         if not announced:
+            for item in unsupported:
+                log(
+                    "Unsupported microphone route detected: "
+                    f"{item['label']} ({item['source']}). "
+                    "Re-stream it through go2rtc or another RTSP service and update "
+                    "mics[].source to an rtsp:// URL."
+                )
             log(
-                "有効なマイクが設定されていないため聴覚を無効にしています。"
-                "preferences.json の mics を確認してください"
+                "Hearing is disabled because no valid RTSP microphone is configured. "
+                "Check mics in preferences.json."
             )
             announced = True
         sleep_fn(60)
@@ -2565,6 +2168,7 @@ def main() -> int:
     )
     cleanup_thread.start()
 
+    log_audio_route_health()
     preferences, sources = wait_for_enabled_mics()
 
     token = clean(os.environ.get("SUPERVISOR_TOKEN"))
@@ -2572,9 +2176,8 @@ def main() -> int:
 
     threads = []
     for config in sources:
-        worker = tcp_pull_worker if config.transport == "tcp_pull" else audio_worker
         thread = threading.Thread(
-            target=worker,
+            target=audio_worker,
             args=(config, token),
             daemon=False,
             name=f"audio:{config.label}",

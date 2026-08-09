@@ -12,7 +12,9 @@ New keys:
   - audio_media
 
 The classifier is intentionally conservative: if an entry is not clearly media,
-it stays in the sensing buckets (cameras/mics).
+it stays in the sensing buckets (cameras/mics). Microphone inputs now use RTSP;
+legacy ALSA/TCP entries are preserved for an operator-assisted migration and
+reported as unsupported instead of being silently discarded.
 """
 
 from __future__ import annotations
@@ -37,9 +39,8 @@ LEGACY_BUCKETS = ("cameras", "audio_sources")
 
 # 強いメディア信号: エンティティ型/センサー語より優先してメディアに分類する。
 # スクショ/画面/キャプチャ/レコーダーは、たとえHAカメラエンティティ型(camera.*)でも
-# “目”ではなく“画面/コンテンツ”。音声の rtsp:// はキャプチャ箱/AVフィード(実マイクは
-# alsa/tcp/i2s)なのでメディア扱い。弱いメディア信号(_tv/tv/video等)はセンサー語と競合したら
-# 保守的にセンサー側へ残す。
+# “目”ではなく“画面/コンテンツ”。音声の rtsp:// は現在のマイク入力契約なのでセンサー扱い。
+# 弱いメディア信号(_tv/tv/video等)はセンサー語と競合したら保守的にセンサー側へ残す。
 CAMERA_STRONG_MEDIA = (
     "screenshot",
     "screen_capture",
@@ -73,8 +74,6 @@ AUDIO_STRONG_MEDIA = (
     "capture",
     "recorder",
     "recording",
-    "rtsp://",
-    "rtsp:",
 )
 AUDIO_WEAK_MEDIA = (
     "_tv",
@@ -86,12 +85,11 @@ AUDIO_WEAK_MEDIA = (
 )
 
 AUDIO_SENSOR_TOKENS = (
+    "rtsp://",
+    "rtsp:",
     "mic_only",
     "microphone",
     "micro",
-    "alsa",
-    "tcp://",
-    "tcp:",
     "voice",
     "voices3r",
     "line_in",
@@ -226,8 +224,12 @@ def build_source_draft(prefs: dict[str, Any]) -> tuple[dict[str, list[dict[str, 
             item = _normalize_media_item(item, source_key=detail.category)
         draft[detail.category].append(item)
         suffix = " [ambiguous]" if detail.ambiguous else ""
+        source = clean(entry.get("source")).lower()
+        unsupported = ""
+        if source.startswith(("alsa://", "tcp://")):
+            unsupported = "; unsupported microphone transport: replace with rtsp://"
         warnings.append(
-            f"audio_sources[{idx}] -> {detail.category}{suffix}: {detail.reason}"
+            f"audio_sources[{idx}] -> {detail.category}{suffix}: {detail.reason}{unsupported}"
         )
 
     return draft, warnings

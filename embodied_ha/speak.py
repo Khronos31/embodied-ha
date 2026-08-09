@@ -4,19 +4,17 @@
 """
 import sys
 import errno
+import hashlib
 import json
+import mimetypes
 import os
-import socket
+import shutil
 import stat
 import subprocess
-import urllib.request
-import urllib.error
-from urllib.parse import urlparse
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
-from tts_options import is_voicevox_provider, normalize_tts_options  # noqa: E402
+import tempfile
+import wave
+from pathlib import Path
+from urllib.parse import urlencode
 
 PCM_SAMPLE_RATE = 16000
 PCM_CHANNELS = 1
@@ -26,6 +24,8 @@ MAX_PCM_BYTES = (
     PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH_BYTES * MAX_PLAYBACK_SECONDS
 )
 MAX_AUDIO_INPUT_BYTES = 128 * 1024 * 1024
+MEDIA_SOURCE_DIR = "/media/embodied-ha"
+MEDIA_SOURCE_URI_PREFIX = "media-source://media_source/local/embodied-ha"
 
 
 def get_ha_token():
@@ -61,134 +61,17 @@ def _find_speaker(speakers, room: str) -> dict:
     return {}
 
 
-def _find_speaker_by_host(speakers, host: str) -> dict:
-    """TCP スピーカーをホストで検索する（電脳体モードの明示的ルーティング用）。"""
-    for item in _normalize_speakers(speakers):
-        if item.get("type") == "tcp" and item.get("host") == host:
-            return item
-    return {}
+def _tts_media_source_uri(tts_entity: str, message: str) -> str:
+    """Build a provider-neutral HA TTS Media Source URI.
 
-
-def _rewrite_tts_url(tts_url: str, ha_url: str) -> str:
-    """外部向け TTS URL を supervisor プロキシ経由 URL に書き換える。
-    ha_url = "http://supervisor/core/api" のとき "/api" を取り除いた
-    "http://supervisor/core" をベースに tts_url のパスを接続する。
+    Voice, language, speed, pitch, and other provider-specific settings belong
+    to the selected Home Assistant TTS entity.  Embodied HA only supplies the
+    utterance and disables HA's persistent TTS cache.
     """
-    parsed = urlparse(tts_url)
-    base = ha_url.rstrip("/")
-    if base.endswith("/api"):
-        base = base[:-4]  # "http://supervisor/core"
-    qs = f"?{parsed.query}" if parsed.query else ""
-    return f"{base}{parsed.path}{qs}"
-
-
-def _fetch_pcm_for_message(message: str, ha_url: str, ha_token: str,
-                            tts_provider: str, tts_language: str,
-                            tts_options: dict | None = None) -> bytes:
-    """HA TTS から raw mono s16le 16kHz PCM バイト列を取得する。"""
-    tts_url = _request_tts_url(
-        message, ha_url, ha_token, tts_provider, tts_language, tts_options
-    )
-    audio_bytes = _fetch_tts_audio(tts_url, ha_url, ha_token)
-
-    proc = subprocess.Popen(
-        [
-            "ffmpeg", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-ar", "16000", "-ac", "1", "-f", "s16le",
-            "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        pcm_bytes, ffmpeg_err = proc.communicate(input=audio_bytes, timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise RuntimeError("ffmpeg conversion timed out")
-
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg failed: {ffmpeg_err.decode('utf-8', errors='replace').strip()}"
-        )
-    if not pcm_bytes:
-        raise RuntimeError("ffmpeg produced empty PCM output")
-    return pcm_bytes
-
-
-def _fetch_tts_audio(tts_url: str, ha_url: str, ha_token: str) -> bytes:
-    """Fetch generated audio, triggering synthesis for lazy HA TTS streams."""
-    audio_url = _rewrite_tts_url(tts_url, ha_url)
-    fetch_req = urllib.request.Request(
-        audio_url,
-        headers={"Authorization": f"Bearer {ha_token}"},
-    )
-    try:
-        with urllib.request.urlopen(fetch_req, timeout=15) as resp:
-            audio_bytes = resp.read()
-    except Exception as exc:
-        raise RuntimeError(f"tts audio fetch failed ({audio_url}): {exc}") from exc
-    if not audio_bytes:
-        raise RuntimeError("tts audio fetch returned empty content")
-    return audio_bytes
-
-
-def _request_tts_url(message: str, ha_url: str, ha_token: str,
-                     tts_provider: str, tts_language: str,
-                     tts_options: dict | None = None) -> str:
-    """Request a generated TTS URL without playing or downloading the audio."""
-    engine_id = tts_provider if tts_provider.startswith("tts.") else f"tts.{tts_provider}"
-    payload_data = {
-        "engine_id": engine_id,
-        "message": message,
-        "language": tts_language,
-    }
-    if tts_options:
-        payload_data["options"] = tts_options
-    payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"{ha_url}/tts_get_url",
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {ha_token}",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"tts_get_url HTTP {exc.code}: {body}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"tts_get_url failed: {exc}") from exc
-
-    tts_url = (result.get("url") or "").strip()
-    if not tts_url:
-        raise RuntimeError("tts_get_url returned no url")
-    return tts_url
-
-
-def _fetch_pcm_with_fallback(message: str, ha_url: str, ha_token: str,
-                             tts_provider: str, tts_language: str,
-                             tts_options: dict) -> bytes:
-    """Retry with the integration defaults if VOICEVOX rejects custom options."""
-    if not tts_options:
-        return _fetch_pcm_for_message(
-            message, ha_url, ha_token, tts_provider, tts_language
-        )
-    try:
-        return _fetch_pcm_for_message(
-            message, ha_url, ha_token, tts_provider, tts_language, tts_options
-        )
-    except Exception:
-        print("[speak] VOICEVOX options付きTTSに失敗。既定音声で再試行。", file=sys.stderr)
-        return _fetch_pcm_for_message(
-            message, ha_url, ha_token, tts_provider, tts_language
-        )
+    if not tts_entity.startswith("tts."):
+        raise ValueError("tts_entity must be a tts.* entity")
+    query = urlencode({"message": message, "cache": "false"})
+    return f"media-source://tts/{tts_entity}?{query}"
 
 
 def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
@@ -259,279 +142,161 @@ def _pcm_bytes_from_file(audio_path: str) -> bytes:
     return raw_bytes
 
 
-def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5) -> None:
-    with socket.create_connection((host, port), timeout=timeout) as sock:
-        sock.sendall(pcm_bytes)
+def _speaker_media_player(config: dict) -> str:
+    legacy_type = str(config.get("type") or "").strip()
+    if legacy_type not in {"", "tts"}:
+        raise ValueError(f"legacy speaker type is unsupported: {legacy_type}")
+    entity_id = str(config.get("entity") or config.get("media_player") or "").strip()
+    if not entity_id.startswith("media_player."):
+        raise ValueError("media_player entity is required")
+    return entity_id
 
 
-def _boost_pcm_for_local_playback(pcm_bytes: bytes, sample_rate: int,
-                                  channels: int, timeout: float) -> bytes:
-    """Local出力だけを1.5倍に増幅し、クリッピングをリミッターで抑える。"""
-    proc = subprocess.Popen(
-        [
-            "ffmpeg", "-loglevel", "error",
-            "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels),
-            "-i", "pipe:0",
-            "-af", "volume=1.5,alimiter=limit=0.95:level=false",
-            "-f", "s16le", "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+def _write_wav_atomic(path: Path, pcm_bytes: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
     try:
-        boosted, ffmpeg_err = proc.communicate(input=pcm_bytes, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise RuntimeError("local playback gain timed out")
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "local playback gain failed: "
-            f"{ffmpeg_err.decode('utf-8', errors='replace').strip()}"
-        )
-    if not boosted:
-        raise RuntimeError("local playback gain produced empty PCM output")
-    return boosted
+        with os.fdopen(fd, "w+b") as raw_file:
+            with wave.open(raw_file, "wb") as wav_file:
+                wav_file.setnchannels(PCM_CHANNELS)
+                wav_file.setsampwidth(PCM_SAMPLE_WIDTH_BYTES)
+                wav_file.setframerate(PCM_SAMPLE_RATE)
+                wav_file.writeframes(pcm_bytes)
+            raw_file.flush()
+            os.fsync(raw_file.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
-def _play_pcm_local(pcm_bytes: bytes, sink: str = "", sample_rate: int = 16000,
-                    channels: int = 1, timeout: float = 30) -> None:
-    """コンテナ内の PulseAudio へ raw s16le PCM を再生する（ホスト内蔵スピーカー等）。
-    audio:true でホスト音声が注入され run.sh が PULSE_SERVER を設定済みなので、
-    sink（例: alsa_output.pci-0000_00_1f.3.analog-stereo）へそのまま出せる。
-    sink 未指定なら PulseAudio の既定 sink。
-    """
-    pcm_bytes = _boost_pcm_for_local_playback(
-        pcm_bytes, sample_rate, channels, timeout
+def _copy_atomic(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
-    cmd = ["paplay", "--raw", f"--rate={sample_rate}",
-           f"--channels={channels}", "--format=s16le"]
-    if sink:
-        cmd.append(f"--device={sink}")
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        _, err = proc.communicate(input=pcm_bytes, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        raise RuntimeError("paplay timed out")
-    if proc.returncode != 0:
-        raise RuntimeError(f"paplay failed: {err.decode('utf-8', errors='replace').strip()}")
+        with source.open("rb") as source_file, os.fdopen(fd, "wb") as target_file:
+            shutil.copyfileobj(source_file, target_file)
+            target_file.flush()
+            os.fsync(target_file.fileno())
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, destination)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
-def play_pcm_file(room, pcm_path, host=""):
+def _stage_media_source(audio_path: str) -> tuple[Path, str, str]:
+    """Validate an audio file and persist it in HA's local Media Source."""
+    source = Path(audio_path)
+    pcm_bytes = _pcm_bytes_from_file(str(source))
+    source_suffix = source.suffix.lower()
+    guessed_type = mimetypes.guess_type(source.name)[0] or ""
+    if guessed_type in {"audio/x-wav", "audio/vnd.wave"}:
+        guessed_type = "audio/wav"
+
+    # Raw PCM has no self-describing header. Formats HA cannot identify as audio
+    # are normalized to WAV as well, preserving the existing ffmpeg acceptance
+    # contract while ensuring media_player receives a playable object.
+    convert_to_wav = source_suffix == ".pcm" or not guessed_type.startswith("audio/")
+    digest_source = pcm_bytes if convert_to_wav else source.read_bytes()
+    digest = hashlib.sha256(digest_source).hexdigest()
+    suffix = ".wav" if convert_to_wav else source_suffix
+    media_type = "audio/wav" if convert_to_wav else guessed_type
+    media_dir = Path(os.environ.get("EHA_MEDIA_SOURCE_DIR") or MEDIA_SOURCE_DIR)
+    destination = media_dir / f"{digest}{suffix}"
+
+    if not destination.exists():
+        if convert_to_wav:
+            _write_wav_atomic(destination, pcm_bytes)
+        else:
+            _copy_atomic(source, destination)
+    uri = f"{MEDIA_SOURCE_URI_PREFIX}/{destination.name}"
+    return destination, uri, media_type
+
+
+def _load_preferences() -> dict:
     prefs_file = os.environ.get("EHA_PREFS_FILE", "")
-
-    prefs = {}
     try:
         with open(prefs_file, encoding="utf-8") as f:
-            prefs = json.load(f)
+            loaded = json.load(f)
+            return loaded if isinstance(loaded, dict) else {}
     except Exception:
-        pass
-
-    if host:
-        config = _find_speaker_by_host(prefs.get("speakers", []), host)
-    else:
-        config = _find_speaker(prefs.get("speakers", []), room)
-
-    if not config:
-        print(f"[speak] '{room}' は preferences.json に未登録。PCM 再生をスキップ。", file=sys.stderr)
-        return False
-
-    try:
-        pcm_bytes = _pcm_bytes_from_file(pcm_path)
-    except Exception as exc:
-        print(f"[speak] audio file load failed ({pcm_path}): {exc}", file=sys.stderr)
-        return False
-
-    if config.get("type") == "tcp":
-        target_host = (config.get("host") or "").strip()
-        try:
-            port = int(config.get("port") or 3334)
-        except Exception:
-            port = 3334
-        if not target_host or port <= 0:
-            print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
-            return False
-
-        try:
-            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=3)
-            print(f"[speak] tcp:{room} PCM OK sent={len(pcm_bytes)}B ({target_host}:{port})")
-            return True
-        except Exception as exc:
-            print(f"[speak] tcp:{room} PCM 送信失敗: {exc}", file=sys.stderr)
-            return False
-
-    if config.get("type") == "local":
-        sink = (config.get("sink") or "").strip()
-        try:
-            _play_pcm_local(pcm_bytes, sink=sink)
-            print(f"[speak] local:{room} PCM OK played={len(pcm_bytes)}B sink={sink or '(default)'}")
-            return True
-        except Exception as exc:
-            print(f"[speak] local:{room} PCM 再生失敗: {exc}", file=sys.stderr)
-            return False
-
-    print(f"[speak] PCM file playback is unsupported for speaker type: {config.get('type')}", file=sys.stderr)
-    return False
+        return {}
 
 
-def speak(room, message, host=""):
-    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
+def play_audio_file(room, audio_path):
+    prefs = _load_preferences()
     ha_url = os.environ["HA_URL"]
     ha_token = get_ha_token()
 
-    prefs = {}
-    try:
-        with open(prefs_file, encoding="utf-8") as f:
-            prefs = json.load(f)
-    except Exception:
-        pass
+    config = _find_speaker(prefs.get("speakers", []), room)
 
-    # host が指定されている場合はホストで検索（電脳体モードでの直接ルーティング）
-    if host:
-        config = _find_speaker_by_host(prefs.get("speakers", []), host)
-    else:
-        config = _find_speaker(prefs.get("speakers", []), room)
+    if not config:
+        print(f"[speak] '{room}' は preferences.json に未登録。音声再生をスキップ。", file=sys.stderr)
+        return False
+
+    try:
+        media_player = _speaker_media_player(config)
+        persisted_path, media_uri, media_type = _stage_media_source(audio_path)
+    except Exception as exc:
+        print(f"[speak] audio file staging failed ({audio_path}): {exc}", file=sys.stderr)
+        return False
+
+    payload = json.dumps({
+        "entity_id": media_player,
+        "media_content_id": media_uri,
+        "media_content_type": media_type,
+    }, ensure_ascii=False)
+    ok = curl_post(f"{ha_url}/services/media_player/play_media", payload, ha_token)
+    print(
+        f"[speak] Media Source:{room} {'OK' if ok else 'NG'} "
+        f"path={persisted_path}"
+    )
+    return ok
+
+
+def speak(room, message):
+    ha_url = os.environ["HA_URL"]
+    ha_token = get_ha_token()
+    prefs = _load_preferences()
+    config = _find_speaker(prefs.get("speakers", []), room)
 
     if not config:
         print(f"[speak] '{room}' は preferences.json に未登録。TTS をスキップ。", file=sys.stderr)
         return False
 
-    if config.get("type") == "tts":
-        tts_entity = (
-            config.get("tts_entity")
-            or prefs.get("tts_entity")
-            or ""
-        ).strip()
-        if not tts_entity:
-            print(f"[speak] tts speaker '{room}': tts_entity が未設定", file=sys.stderr)
-            return False
-        media_player = (config.get("entity") or config.get("media_player") or "").strip()
-        if not media_player:
-            print(f"[speak] tts speaker '{room}': media_player が未設定", file=sys.stderr)
-            return False
-        payload_data = {
-            "entity_id": tts_entity,
-            "message": message,
-            "media_player_entity_id": media_player
-        }
-        tts_options = normalize_tts_options(prefs.get("tts_options"))
-        if tts_options and is_voicevox_provider(tts_entity):
-            tts_language = (prefs.get("tts_language") or prefs.get("stt_language") or "ja-JP").strip()
-            try:
-                tts_url = _request_tts_url(
-                    message, ha_url, ha_token, tts_entity, tts_language, tts_options
-                )
-                # HAのTTS streamはURL取得時に遅延合成されるため、取得まで完走して
-                # speaker/optionsを検証する。同じ要求はHAのTTSキャッシュで再利用される。
-                _fetch_tts_audio(tts_url, ha_url, ha_token)
-                payload_data["language"] = tts_language
-                payload_data["options"] = tts_options
-            except Exception as exc:
-                print(
-                    f"[speak] VOICEVOX optionsの事前検証に失敗。既定音声を使用: {exc}",
-                    file=sys.stderr,
-                )
-        payload = json.dumps(payload_data, ensure_ascii=False)
-        ok = curl_post(f"{ha_url}/services/tts/speak", payload, ha_token)
-        print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
-        return ok
-
-    elif config.get("type") == "tcp":
-        # VoiceS3R 等の TCP スピーカーに raw mono s16le 16kHz PCM を push する。
-        # デバイス側がサーバー（port 3334 listen）で、TCP 切断が終了合図。
-        target_host = (config.get("host") or "").strip()
-        try:
-            port = int(config.get("port") or 3334)
-        except Exception:
-            port = 3334
-        if not target_host or port <= 0:
-            print(f"[speak] tcp speaker '{room}': host/port が未設定", file=sys.stderr)
-            return False
-
-        _global_tts_entity = (prefs.get("tts_entity") or "").strip()
-        _derived_provider = _global_tts_entity.removeprefix("tts.") if _global_tts_entity else ""
-        tts_provider = (
-            config.get("tts_provider")
-            or prefs.get("tts_provider")
-            or _derived_provider
-            or ""
-        ).strip()
-        tts_language = (
-            config.get("tts_language")
-            or prefs.get("stt_language")
-            or "ja-JP"
-        ).strip()
-        if not tts_provider:
-            print(f"[speak] tcp speaker '{room}': tts_provider が未設定", file=sys.stderr)
-            return False
-
-        tts_options = (
-            normalize_tts_options(prefs.get("tts_options"))
-            if is_voicevox_provider(tts_provider) else {}
-        )
-        try:
-            pcm_bytes = _fetch_pcm_with_fallback(
-                message, ha_url, ha_token, tts_provider, tts_language, tts_options
-            )
-        except Exception as exc:
-            print(f"[speak] tcp:{room} TTS 取得失敗: {exc}", file=sys.stderr)
-            return False
-
-        try:
-            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=5)
-            print(f"[speak] tcp:{room} OK sent={len(pcm_bytes)}B ({target_host}:{port})")
-            return True
-        except Exception as exc:
-            print(f"[speak] tcp:{room} 送信失敗: {exc}", file=sys.stderr)
-            return False
-
-    elif config.get("type") == "local":
-        # ホスト(M720q)の内蔵スピーカー等、コンテナの PulseAudio へ直接再生する。
-        # audio:true でホスト音声が注入され、run.sh が PULSE_SERVER を設定済み。
-        # 合成は tcp 経路と同じ（HA TTS → mono s16le 16kHz PCM）を再利用。
-        sink = (config.get("sink") or "").strip()
-        _global_tts_entity = (prefs.get("tts_entity") or "").strip()
-        _derived_provider = _global_tts_entity.removeprefix("tts.") if _global_tts_entity else ""
-        tts_provider = (
-            config.get("tts_provider")
-            or prefs.get("tts_provider")
-            or _derived_provider
-            or ""
-        ).strip()
-        tts_language = (
-            config.get("tts_language")
-            or prefs.get("stt_language")
-            or "ja-JP"
-        ).strip()
-        if not tts_provider:
-            print(f"[speak] local speaker '{room}': tts_provider が未設定", file=sys.stderr)
-            return False
-
-        tts_options = (
-            normalize_tts_options(prefs.get("tts_options"))
-            if is_voicevox_provider(tts_provider) else {}
-        )
-        try:
-            pcm_bytes = _fetch_pcm_with_fallback(
-                message, ha_url, ha_token, tts_provider, tts_language, tts_options
-            )
-        except Exception as exc:
-            print(f"[speak] local:{room} TTS 取得失敗: {exc}", file=sys.stderr)
-            return False
-
-        try:
-            _play_pcm_local(pcm_bytes, sink=sink)
-            print(f"[speak] local:{room} OK played={len(pcm_bytes)}B sink={sink or '(default)'}")
-            return True
-        except Exception as exc:
-            print(f"[speak] local:{room} 再生失敗: {exc}", file=sys.stderr)
-            return False
-
-    else:
-        print(f"[speak] 不明な speaker type: {config.get('type')}", file=sys.stderr)
+    try:
+        media_player = _speaker_media_player(config)
+    except ValueError as exc:
+        print(f"[speak] speaker '{room}' の設定が無効です: {exc}", file=sys.stderr)
         return False
+    tts_entity = str(prefs.get("tts_entity") or "").strip()
+    try:
+        media_uri = _tts_media_source_uri(tts_entity, message)
+    except ValueError as exc:
+        print(f"[speak] tts speaker '{room}': {exc}", file=sys.stderr)
+        return False
+    payload = json.dumps({
+        "entity_id": media_player,
+        "media": {
+            "media_content_id": media_uri,
+            # HA resolves a Media Source URI and replaces this generic class
+            # with the TTS stream's actual MIME type before device playback.
+            "media_content_type": "music",
+        },
+    }, ensure_ascii=False)
+    ok = curl_post(f"{ha_url}/services/media_player/play_media", payload, ha_token)
+    print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
+    return ok
 
 
 if __name__ == "__main__":
@@ -539,17 +304,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("room")
     parser.add_argument("message", nargs="?", default="")
-    parser.add_argument("--host", default="", help="TCP スピーカーをホストで直接指定（電脳体モード用）")
     parser.add_argument(
         "--file-path",
         default="",
-        help="最長10分の音声ファイルを再生する（.pcmはmono s16le/16kHz、それ以外はffmpegで変換）",
+        help="最長10分の音声ファイルをHA Media Source経由で再生する",
     )
     a = parser.parse_args()
     if a.file_path:
-        ok = play_pcm_file(a.room, a.file_path, host=a.host)
+        ok = play_audio_file(a.room, a.file_path)
     else:
         if not a.message:
             parser.error("message or --file-path is required")
-        ok = speak(a.room, a.message, host=a.host)
+        ok = speak(a.room, a.message)
     sys.exit(0 if ok else 1)

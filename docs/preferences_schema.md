@@ -34,38 +34,10 @@
 |---|---|
 | string | `"tts.home_assistant_cloud"` 例 |
 
-グローバルの TTS エンティティです。`speakers` の `type: "tts"` で個別指定が無い場合のフォールバックになります。
-
----
-
-### `tts_options`
-
-VOICEVOX通常発話の個体別設定です。`tts_entity`またはTCP/local経路の
-`tts_provider`が`tts.voicevox_tts`（`voicevox_tts`も可）の場合だけ使用されます。
-空オブジェクトまたは未設定なら、Home Assistant統合の既定値を使います。
-
-| キー | 型 | 範囲 |
-|---|---|---|
-| `speaker` | integer | 0以上 |
-| `volume` | number | 0.5〜2.0 |
-| `pitch` | number | -0.15〜0.15 |
-| `speed` | number | 0.5〜3.0 |
-
-空オブジェクト以外では`speaker`が必須です。`volume`、`pitch`、`speed`だけを
-部分指定することはできません。
-
-```json
-{
-  "tts_options": {
-    "speaker": 56,
-    "volume": 1.0,
-    "pitch": 0.0,
-    "speed": 1.0
-  }
-}
-```
-
-VOICEVOX Song用の`sing_speaker`とは独立した設定です。
+グローバルのHA TTSエンティティです。すべての`speakers`に対する通常読み上げに使います。
+話者・言語・速度・音量などはHome Assistant側のTTSエンティティ設定を使用し、Embodied HAからは上書きしません。
+既存ファイルに残る旧`tts_options`は互換データとして保持されることがありますが、通常読み上げでは使用されません。
+VOICEVOX Song用の`sing_speaker`は別機能です。
 
 ---
 
@@ -134,13 +106,13 @@ STT の言語コードです。
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
 | `entity` | string | ○ | 短い ID か HA entity_id |
-| `source` | string | ○ | `rtsp://...`, `alsa://default`, `tcp://host:port` のいずれか |
+| `source` | string | ○ | `rtsp://...` の音声ストリーム |
 | `room` | string | ○ | 所在部屋 |
 | `label` | string | ○ | 表示名 |
 | `stt_enabled` | boolean | — | 常時 STT を有効にするか |
 | `note` | string | — | 補足 |
 
-`stt_enabled: true` の `mics` は `audio_daemon.py` の監視対象になります。旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。
+`stt_enabled: true` の `mics` は `audio_daemon.py` の監視対象になります。旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。旧 `alsa://` / `tcp://` 項目は消失防止のため残りますが、起動ログで移行対象として通知され、RTSPへ置き換えるまで使用されません。
 
 ---
 
@@ -177,7 +149,7 @@ STT の言語コードです。
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
 | `id` | string | ○ | 一意な ID |
-| `source` | string | ○ | 音声ソース名、URL、または取得先の識別子 |
+| `source` | string | ○ | go2rtcストリーム名、または `rtsp://...` URL |
 | `room` | string | — | 文脈上の部屋 |
 | `label` | string | ○ | 表示名 |
 | `note` | string | — | 補足 |
@@ -199,24 +171,14 @@ STT の言語コードです。
 
 | フィールド | 型 | 必須 | 説明 |
 |---|---|---|---|
-| `entity` | string | ○ | `type: "tts"` では media_player entity_id、`type: "tcp"` では短い ID でも可 |
+| `entity` | string | ○ | HA `media_player` entity_id |
 | `room` | string | ○ | 部屋名 |
 | `label` | string | — | 表示名 |
-| `type` | string | ○ | `tts` または `tcp` |
+| `type` | string | — | 旧設定との互換用。省略または `tts` のみ |
 | `note` | string | — | 補足 |
-| `tts_entity` | string | — | `type: "tts"` の個別 TTS エンティティ上書き |
-| `media_player` | string | — | `tts` の再生先エンティティ名の別名 |
-| `host` | string | — | `tcp` スピーカーの送信先ホスト |
-| `port` | number | — | `tcp` スピーカーの待受ポート |
-| `tts_provider` | string | — | `tcp` / `local` の音声生成に使うTTSエンティティ上書き |
-| `tts_language` | string | — | `tcp` の音声生成に使う言語上書き |
+| `media_player` | string | — | `entity` の旧別名 |
 
-`type: "tts"` はグローバル `tts_entity` をフォールバックに使います。`type: "tcp"` は raw PCM を TCP ソケットへ送ります。
-
-`tts_provider`を明示する場合は、現行Home Assistantの`tts_get_url`契約に合わせて
-`tts.voicevox_tts`のようなTTSエンティティIDを指定してください。未指定ならグローバルの
-`tts_entity`から自動取得します。旧platform名だけでは、統合が生成した実際のentity IDを
-一意に復元できない場合があります。
+通常発話はグローバル`tts_entity`から`cache: false`のTTS Media Source URIを組み立て、`media_player.play_media`へ渡します。音声ファイル再生は`/media/embodied-ha/`に永続配置してMedia Source URIを同じサービスへ渡します。旧`tcp` / `local`スピーカーは未対応です。
 
 ---
 

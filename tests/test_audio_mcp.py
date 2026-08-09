@@ -72,14 +72,12 @@ class AudioMcpTests(unittest.TestCase):
         self.assertEqual(cmd[:4], ["ffmpeg", "-rtsp_transport", "tcp", "-i"])
         self.assertIn("rtsp://localhost:8554/capture_tv", cmd)
 
-    def test_build_record_command_alsa(self):
-        cmd = self.audio_mcp.build_record_command("alsa://default", 7)
-        self.assertEqual(cmd[:5], ["ffmpeg", "-f", "alsa", "-i", "default"])
-        self.assertIn("7", cmd)
-
-    def test_build_record_command_rejects_tcp(self):
-        with self.assertRaises(ValueError):
-            self.audio_mcp.build_record_command("tcp://192.168.1.100:3333", 5)
+    def test_build_record_command_rejects_removed_schemes(self):
+        for source in ("alsa://default", "tcp://192.168.1.100:3333"):
+            with self.subTest(source=source), self.assertRaisesRegex(
+                ValueError, "only rtsp"
+            ):
+                self.audio_mcp.build_record_command(source, 5)
 
     def test_speaker_file_path_contract_names_raw_format_and_conversion(self):
         for tool in (
@@ -87,10 +85,42 @@ class AudioMcpTests(unittest.TestCase):
             self.audio_mcp.TOOL_USE_DEVICE_SPEAKER,
         ):
             description = tool["inputSchema"]["properties"]["file_path"]["description"]
-            self.assertIn(".pcm", description)
-            self.assertIn("mono s16le/16kHz", description)
-            self.assertIn("ffmpeg", description)
             self.assertIn("最長10分", description)
+            self.assertIn("Media Source", description)
+            self.assertIn("永続", description)
+
+    def test_ha_speaker_lookup_uses_entity(self):
+        speakers = [{
+            "room": "study",
+            "entity": "media_player.study",
+            "label": "Study speaker",
+        }]
+        self.assertEqual(
+            self.audio_mcp._find_ha_speaker_by_entity(
+                speakers, "media_player.study"
+            ),
+            speakers[0],
+        )
+
+    def test_room_speaker_resolution_does_not_prefer_legacy_tcp(self):
+        speakers = [
+            {"room": "study", "entity": "media_player.study"},
+            {"room": "study", "type": "tcp", "host": "192.0.2.1"},
+        ]
+        self.assertEqual(
+            self.audio_mcp._resolve_room_speaker(speakers, "study"),
+            speakers[0],
+        )
+
+    def test_run_speak_never_injects_tcp_host(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(
+            self.audio_mcp.subprocess, "run", return_value=completed
+        ) as run:
+            self.audio_mcp._run_speak("study", "hello")
+        command = run.call_args.args[0]
+        self.assertEqual(command[-2:], ["study", "hello"])
+        self.assertNotIn("--host", command)
 
     def test_concentrate_hearing_spec_requires_view_file_without_execution_tools(self):
         description = self.audio_mcp.TOOL_CONCENTRATE_HEARING["description"]
@@ -354,7 +384,7 @@ class AudioMcpTests(unittest.TestCase):
             log_path = Path(tmpdir) / "active_listen_log.jsonl"
             with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
                  mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value=None):
-                result = self.audio_mcp.listen({"source": "alsa://default"})
+                result = self.audio_mcp.listen({"source": "rtsp://example/study"})
         self.assertTrue(result[1])
         payload = self._json(result[0])
         self.assertEqual(payload["error"], "ffmpeg not found")
@@ -398,44 +428,23 @@ class AudioMcpTests(unittest.TestCase):
         self.assertIn("rtsp://localhost:8554/capture_tv", first_cmd)
 
 
-    def test_listen_alsa_branch(self):
-        responses = [
-            mock.Mock(returncode=0, stdout="", stderr=""),
-            mock.Mock(returncode=0, stdout="", stderr="mean_volume: -80.0 dB\nmax_volume: -70.0 dB\n"),
-        ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "active_listen_log.jsonl"
-            with mock.patch.object(self.audio_mcp, "ACTIVE_LISTEN_LOG_FILE", str(log_path)), \
-                 mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"), \
-                 mock.patch.object(self.audio_mcp.subprocess, "run", side_effect=responses) as run_mock:
-                payload = self._json(self.audio_mcp.listen({"source": "alsa://default", "duration": 3}))
+    def test_listen_rejects_removed_source_schemes(self):
+        for source in ("alsa://default", "tcp://192.168.1.100:3333"):
+            with self.subTest(source=source):
+                result, is_error = self.audio_mcp.listen({"source": source})
+                self.assertTrue(is_error)
+                self.assertIn("unknown source", result[0]["text"])
 
-        first_cmd = run_mock.call_args_list[0].args[0]
-        self.assertEqual(first_cmd[:5], ["/usr/bin/ffmpeg", "-f", "alsa", "-i", "default"])
-        self.assertFalse(payload["has_sound"])
-
-
-    def test_listen_tcp_branch_records_audio(self):
-        recorded_entries = []
-        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),              mock.patch.object(self.audio_mcp, "request_daemon_capture_to_wav") as tcp_mock,              mock.patch.object(self.audio_mcp, "analyze_volume", return_value=(-18.0, -29.0)),              mock.patch.object(self.audio_mcp, "record_active_listen", side_effect=lambda entry, source: recorded_entries.append((entry, source))):
-            payload = self._json(self.audio_mcp.listen({"source": "tcp://192.168.1.100:3333", "duration": 4}))
-
-        tcp_mock.assert_called_once()
-        self.assertEqual(payload["source"], "tcp://192.168.1.100:3333")
-        self.assertTrue(payload["has_sound"])
-        self.assertEqual(recorded_entries[-1][1], "tcp://192.168.1.100:3333")
-        self.assertEqual(recorded_entries[-1][0]["source"], "tcp://192.168.1.100:3333")
-
-    def test_listen_tcp_timeout_is_logged(self):
-        recorded_entries = []
-        with mock.patch.object(self.audio_mcp, "find_ffmpeg", return_value="/usr/bin/ffmpeg"),              mock.patch.object(self.audio_mcp, "request_daemon_capture_to_wav", side_effect=TimeoutError("timed out")),              mock.patch.object(self.audio_mcp, "record_active_listen", side_effect=lambda entry, source: recorded_entries.append((entry, source))):
-            result = self.audio_mcp.listen({"source": "tcp://192.168.1.100:3333", "duration": 4})
-
-        payload = json.loads(result[0][0]["text"])
-        self.assertIn("timed out", payload["error"])
-        self.assertEqual(payload["source"], "tcp://192.168.1.100:3333")
-        self.assertEqual(recorded_entries[-1][1], "tcp://192.168.1.100:3333")
-        self.assertIn("timed out", recorded_entries[-1][0]["error"])
+    def test_use_device_microphone_reports_actionable_legacy_state(self):
+        with mock.patch.object(
+            self.audio_mcp,
+            "_current_body_state",
+            return_value=({}, "tcp://192.168.1.100:3333", "study", "study"),
+        ):
+            result, is_error = self.audio_mcp.use_device_microphone({})
+        self.assertTrue(is_error)
+        self.assertIn("廃止済み", result[0]["text"])
+        self.assertIn("return_to_body", result[0]["text"])
 
     def test_listen_records_active_log_with_transcript(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -121,7 +121,7 @@ class BuildChatPromptContractTests(unittest.TestCase):
             policies_raw="- 深夜は静かに",
             chat_source="voice",
             user_room="書斎",
-            user_room_speaker="tcp://speaker:3334",
+            user_room_speaker="media_player.study",
             recent_auditory_input="# 最近聞こえた音\nチャイム",
             user_msg="聞こえた？",
         )
@@ -135,7 +135,7 @@ class BuildChatPromptContractTests(unittest.TestCase):
             "## 視聴機能 [watch]",
             "# 最近聞こえた音\nチャイム",
             "呼ばれた場所: **書斎**",
-            "tcp://speaker:3334",
+            "media_player.study",
             "今日は祝日",
             '{"proposal":"消灯"}',
         ):
@@ -149,7 +149,7 @@ class ResolveVoiceUserRoomTests(unittest.TestCase):
     def test_missing_location_belief_returns_empty_pair(self):
         self.assertEqual(chat_invoke.resolve_voice_user_room("voice", "/no/such", "/no/such/prefs.json"), ("", ""))
 
-    def test_known_room_without_tcp_speaker_returns_room_only(self):
+    def test_known_room_without_ha_speaker_returns_room_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(Path(tmp) / "location_belief.json", "w", encoding="utf-8") as fh:
                 json.dump({"room": "リビング"}, fh)
@@ -163,10 +163,10 @@ class ResolveVoiceUserRoomTests(unittest.TestCase):
             with open(Path(tmp) / "location_belief.json", "w", encoding="utf-8") as fh:
                 json.dump({"room": "キッチン"}, fh)
             with open(prefs_file, "w", encoding="utf-8") as fh:
-                json.dump({"speakers": {"キッチン": {"type": "tcp", "host": "192.168.1.100", "port": 3334}}}, fh)
+                json.dump({"speakers": {"キッチン": {"type": "tts", "entity": "media_player.kitchen"}}}, fh)
             user_room, speaker = chat_invoke.resolve_voice_user_room("voice", tmp, str(prefs_file))
             self.assertEqual(user_room, "キッチン")
-            self.assertEqual(speaker, "tcp://192.168.1.100:3334")
+            self.assertEqual(speaker, "media_player.kitchen")
 
 
 class BuildInnerVoiceTests(unittest.TestCase):

@@ -33,7 +33,6 @@ import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimport�
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import prefs_store  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
-from tts_options import validate_tts_options  # type: ignore  # noqa: E402
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
@@ -339,83 +338,6 @@ def ha_api_raw_request(path: str, method: str = "GET", body: dict = None) -> tup
         return e.code, err_body
     except Exception as e:
         return 500, str(e)
-
-
-def _supervisor_json(path: str, timeout: float = 5) -> object:
-    token = os.environ.get("SUPERVISOR_TOKEN", "")
-    if not token:
-        raise RuntimeError("Supervisor APIを利用できません")
-    request = urllib.request.Request(
-        f"http://supervisor{path}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read(2 * 1024 * 1024 + 1)
-    if len(raw) > 2 * 1024 * 1024:
-        raise RuntimeError("Supervisor APIの応答が大きすぎます")
-    data = json.loads(raw)
-    if isinstance(data, dict) and "data" in data:
-        return data["data"]
-    return data
-
-
-def _voicevox_addon_hostname() -> str:
-    try:
-        data = _supervisor_json("/addons")
-        addons = data.get("addons", []) if isinstance(data, dict) else []
-        for addon in addons:
-            if not isinstance(addon, dict):
-                continue
-            text = " ".join(str(addon.get(key, "")) for key in ("slug", "name")).lower()
-            if "voicevox" not in text or "engine" not in text:
-                continue
-            slug = addon.get("slug")
-            if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9_]+", slug):
-                continue
-            info = _supervisor_json(f"/addons/{slug}/info")
-            hostname = info.get("hostname", "") if isinstance(info, dict) else ""
-            if isinstance(hostname, str) and re.fullmatch(r"[a-z0-9-]+", hostname):
-                return hostname
-    except urllib.error.HTTPError as error:
-        if error.code not in (401, 403):
-            raise
-
-    # Default-role add-ons cannot enumerate other add-ons through Supervisor.
-    # This is the stable internal hostname of the supported VOICEVOX add-on.
-    return "974e6a09-voicevox-engine-addon"
-
-
-def get_voicevox_speakers() -> list[dict]:
-    hostname = _voicevox_addon_hostname()
-    request = urllib.request.Request(f"http://{hostname}:50021/speakers")
-    with urllib.request.urlopen(request, timeout=5) as response:
-        raw = response.read(2 * 1024 * 1024 + 1)
-    if len(raw) > 2 * 1024 * 1024:
-        raise RuntimeError("VOICEVOX Engineの応答が大きすぎます")
-    speakers = json.loads(raw)
-    if not isinstance(speakers, list):
-        raise RuntimeError("VOICEVOX Engineの応答形式が不正です")
-
-    result = []
-    for speaker in speakers:
-        if not isinstance(speaker, dict) or not isinstance(speaker.get("name"), str):
-            continue
-        for style in speaker.get("styles", []):
-            if not isinstance(style, dict):
-                continue
-            style_id = style.get("id")
-            style_name = style.get("name")
-            if (
-                isinstance(style_id, int)
-                and not isinstance(style_id, bool)
-                and isinstance(style_name, str)
-            ):
-                result.append({
-                    "name": speaker["name"],
-                    "style_name": style_name,
-                    "speaker": style_id,
-                })
-    return result
 
 
 def get_ha_entities(domains: list[str]) -> list[dict]:
@@ -2113,12 +2035,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(data)
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
-        elif path == "/api/tts/voicevox/speakers":
-            try:
-                self.send_json({"speakers": get_voicevox_speakers()})
-            except Exception as e:
-                print(f"[web] VOICEVOX speakers fetch failed: {e}", flush=True)
-                self.send_json({"error": "VOICEVOXの話者一覧を取得できません"}, 502)
         elif path == "/api/character":
             filepath = CHARACTER_FILE
             if not os.path.exists(filepath):
@@ -2210,7 +2126,6 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(body, dict) or len(body) == 0:
                     self.send_json({"error": "設定データが空か無効です"}, 400)
                     return
-                validate_tts_options(body.get("tts_options"))
                 validate_camera_history_options(body)
                 # 全置換すると、UIがフォームに持っていないキーが保存のたびに消える(findings F-21)。
                 # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。

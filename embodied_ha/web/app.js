@@ -1347,20 +1347,20 @@ async function fetchSettings() {
                 ],
                 mics: [
                     {
-                        source: "alsa://default",
+                        source: "rtsp://localhost:8554/study_mic",
                         label: "モックマイク",
                         room: "study",
-                        note: "USBマイク直接録音",
+                        note: "RTSP音声ストリーム",
                         stt_enabled: true,
                         stt_retention_hours: 24,
                         wake_word_enabled: true,
                         background_hearing_enabled: true
                     },
                     {
-                        source: "tcp://192.168.1.100:3333",
-                        label: "モックVoiceS3R",
+                        source: "rtsp://localhost:8554/kitchen_mic",
+                        label: "モックキッチンマイク",
                         room: "kitchen",
-                        note: "モック常時計測ノード",
+                        note: "RTSP常時計測ストリーム",
                         stt_enabled: true,
                         stt_retention_hours: 24,
                         wake_word_enabled: false,
@@ -1387,12 +1387,6 @@ async function fetchSettings() {
                 ],
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
-                tts_options: {
-                    speaker: 56,
-                    volume: 1.0,
-                    pitch: 0.0,
-                    speed: 1.0
-                },
                 speakers: {
                     study: { type: "tts", entity: "media_player.example_speaker" }
                 },
@@ -1578,24 +1572,31 @@ async function loadSttProviders(currentProvider) {
 }
 
 
-async function loadTtsProviders(currentProvider) {
-    const sel = document.getElementById('setting-tts-provider');
+async function loadTtsEntities(currentEntity) {
+    const sel = document.getElementById('setting-tts-entity');
     if (!sel) return;
     sel.disabled = true;
     try {
-        const res = await fetch(`${base}/api/ha-entities?domain=tts`);
-        const entities = await res.json();
-        const opts = ['<option value="">（未設定）</option>'];
+        let entities = [];
+        if (isStandaloneMode) {
+            entities = (entityList && entityList.tts) ? entityList.tts : [
+                { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null }
+            ];
+        } else {
+            const res = await fetch(`${base}/api/ha-entities?domain=tts`);
+            entities = await res.json();
+        }
+        const opts = ['<option value="">(未選択)</option>'];
         for (const e of (entities || [])) {
-            const selected = e.entity_id === currentProvider ? ' selected' : '';
+            const selected = e.entity_id === currentEntity ? ' selected' : '';
             const label = e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
             opts.push(`<option value="${e.entity_id}"${selected}>${label}</option>`);
         }
         sel.innerHTML = opts.join('');
-        if (currentProvider && !entities.find(e => e.entity_id === currentProvider)) {
+        if (currentEntity && !entities.find(e => e.entity_id === currentEntity)) {
             const opt = document.createElement('option');
-            opt.value = currentProvider;
-            opt.textContent = currentProvider + ' (不明)';
+            opt.value = currentEntity;
+            opt.textContent = currentEntity + ' (不明)';
             opt.selected = true;
             sel.insertBefore(opt, sel.children[1]);
         }
@@ -1605,107 +1606,7 @@ async function loadTtsProviders(currentProvider) {
         sel.disabled = false;
     }
 }
-
-let voicevoxTtsSpeakers = [];
-let currentTtsSpeakerId = null;
-
-async function loadVoicevoxTtsSpeakers(targetSpeakerId) {
-    const sel = document.getElementById('setting-tts-speaker');
-    const loading = document.getElementById('tts-speaker-loading');
-    const errorBnr = document.getElementById('tts-speaker-error');
-    if (!sel) return;
-
-    if (targetSpeakerId !== undefined && targetSpeakerId !== null && targetSpeakerId !== '') {
-        const parsed = typeof targetSpeakerId === 'number' ? targetSpeakerId : parseInt(targetSpeakerId, 10);
-        currentTtsSpeakerId = (!isNaN(parsed) && parsed >= 0) ? parsed : null;
-    } else {
-        currentTtsSpeakerId = null;
-    }
-
-    sel.classList.add('tts-loading');
-    sel.disabled = true;
-    if (loading) loading.classList.add('visible');
-    if (errorBnr) errorBnr.classList.remove('visible');
-
-    try {
-        let speakers = [];
-        if (isStandaloneMode) {
-            speakers = [
-                { name: "白上虎太郎", style_name: "ふつう", speaker: 12 },
-                { name: "猫使アル", style_name: "おちつき", speaker: 56 },
-                { name: "満別花丸", style_name: "ボーイ", speaker: 73 }
-            ];
-        } else {
-            const res = await fetch(`${base}/api/tts/voicevox/speakers`);
-            if (!res.ok) {
-                throw new Error(`HTTP ${res.status}`);
-            }
-            const data = await res.json();
-            speakers = data.speakers || [];
-        }
-
-        voicevoxTtsSpeakers = speakers;
-
-        sel.textContent = '';
-
-        const unselectedOpt = document.createElement('option');
-        unselectedOpt.value = '';
-        unselectedOpt.textContent = '(未選択)';
-        sel.appendChild(unselectedOpt);
-
-        let foundCurrent = false;
-
-        speakers.forEach(s => {
-            const opt = document.createElement('option');
-            opt.value = String(s.speaker);
-            opt.textContent = `${s.name || ''} (${s.style_name || ''})`;
-            if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '' && Number(currentTtsSpeakerId) === Number(s.speaker)) {
-                opt.selected = true;
-                foundCurrent = true;
-            }
-            sel.appendChild(opt);
-        });
-
-        if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '' && !foundCurrent) {
-            const fallbackOpt = document.createElement('option');
-            fallbackOpt.value = String(currentTtsSpeakerId);
-            fallbackOpt.textContent = `話者 ID: ${currentTtsSpeakerId}`;
-            fallbackOpt.selected = true;
-            sel.insertBefore(fallbackOpt, sel.children[1]);
-        }
-
-    } catch (e) {
-        console.error("Failed to load VOICEVOX TTS speakers:", e);
-        sel.textContent = '';
-
-        const unselectedOpt = document.createElement('option');
-        unselectedOpt.value = '';
-        unselectedOpt.textContent = '(未選択)';
-        sel.appendChild(unselectedOpt);
-
-        if (currentTtsSpeakerId !== null && currentTtsSpeakerId !== undefined && currentTtsSpeakerId !== '') {
-            const fallbackOpt = document.createElement('option');
-            fallbackOpt.value = String(currentTtsSpeakerId);
-            fallbackOpt.textContent = `話者 ID: ${currentTtsSpeakerId} (取得失敗)`;
-            fallbackOpt.selected = true;
-            sel.appendChild(fallbackOpt);
-        }
-        if (errorBnr) errorBnr.classList.add('visible');
-    } finally {
-        sel.disabled = false;
-        sel.classList.remove('tts-loading');
-        if (loading) loading.classList.remove('visible');
-    }
-}
-
-async function retryLoadVoicevoxTtsSpeakers() {
-    const sel = document.getElementById('setting-tts-speaker');
-    const selectedVal = sel?.value;
-    const speakerIdToLoad = (selectedVal !== null && selectedVal !== undefined && selectedVal !== '')
-        ? parseInt(selectedVal, 10)
-        : currentTtsSpeakerId;
-    await loadVoicevoxTtsSpeakers(speakerIdToLoad);
-}
+const loadTtsProviders = loadTtsEntities;
 
 
 async function renderSettingsForm() {
@@ -1724,15 +1625,7 @@ async function renderSettingsForm() {
     await loadSttProviders(sttProvider);
     // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
-    await loadTtsProviders(prefsData.tts_provider || '');
-    const ttsOpts = prefsData.tts_options || {};
-    const ttsVolEl = document.getElementById('setting-tts-volume');
-    if (ttsVolEl) ttsVolEl.value = ttsOpts.volume ?? 1.0;
-    const ttsPitchEl = document.getElementById('setting-tts-pitch');
-    if (ttsPitchEl) ttsPitchEl.value = ttsOpts.pitch ?? 0.0;
-    const ttsSpeedEl = document.getElementById('setting-tts-speed');
-    if (ttsSpeedEl) ttsSpeedEl.value = ttsOpts.speed ?? 1.0;
-    await loadVoicevoxTtsSpeakers(ttsOpts.speaker);
+    await loadTtsEntities(prefsData.tts_entity || '');
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
         sttLangSel.value = prefsData.stt_language || 'ja-JP';
@@ -2048,21 +1941,12 @@ function serializeFormToPrefs() {
     document.querySelectorAll('#speakers-tbody .speaker-item').forEach(tr => {
         const room = tr.dataset.room || '';
         if (!room) return;
-        const type = tr.dataset.type || 'tts';
         const item = {
             room,
-            type,
-            label: tr.dataset.label || undefined,
             entity: tr.dataset.entity || undefined,
+            label: tr.dataset.label || undefined,
             note: tr.dataset.note || undefined,
         };
-        if (type === 'tcp') {
-            item.host = tr.dataset.host || '';
-            const portNum = parseInt(tr.dataset.port || '3334', 10);
-            item.port = isNaN(portNum) ? 3334 : portNum;
-        } else if (type === 'local') {
-            item.sink = tr.dataset.sink || undefined;
-        }
         // undefinedキーを除去
         Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
         speakers.push(item);
@@ -2168,7 +2052,7 @@ function serializeFormToPrefs() {
     const audio_media = getMediaFromUI('audio');
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
     const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
-    const tts_provider = document.getElementById('setting-tts-provider')?.value?.trim() || null;
+    const tts_entity = document.getElementById('setting-tts-entity')?.value?.trim() || null;
     const wakeWordsRaw = document.getElementById('setting-wake-words')?.value || '';
     const wake_words = wakeWordsRaw.split(",").map(s => s.trim()).filter(Boolean);
 
@@ -2185,35 +2069,9 @@ function serializeFormToPrefs() {
         }
     }
 
-    const ttsSpeakerEl = document.getElementById('setting-tts-speaker');
-    const ttsVolEl = document.getElementById('setting-tts-volume');
-    const ttsPitchEl = document.getElementById('setting-tts-pitch');
-    const ttsSpeedEl = document.getElementById('setting-tts-speed');
-
-    let tts_options = {};
-    const ttsSpeakerVal = ttsSpeakerEl?.value;
-    if (ttsSpeakerVal !== undefined && ttsSpeakerVal !== '') {
-        const spkId = parseInt(ttsSpeakerVal, 10);
-        if (!isNaN(spkId) && spkId >= 0) {
-            const vol = parseFloat(ttsVolEl?.value);
-            const pitch = parseFloat(ttsPitchEl?.value);
-            const speed = parseFloat(ttsSpeedEl?.value);
-
-            tts_options = {
-                speaker: spkId,
-                volume: !isNaN(vol) ? vol : 1.0,
-                pitch: !isNaN(pitch) ? pitch : 0.0,
-                speed: !isNaN(speed) ? speed : 1.0
-            };
-        }
-    } else if (ttsSpeakerEl === null && prefsData?.tts_options) {
-        tts_options = { ...prefsData.tts_options };
-    }
-
-    const { audio_sources: _audioSources, sing_speaker: _singSpeaker, ...prefsBase } = prefsData || {};
+    const { audio_sources: _audioSources, sing_speaker: _singSpeaker, tts_options: _ttsOptions, tts_provider: _ttsProvider, ...prefsBase } = prefsData || {};
 
     const returnObj = {
-        // フォームで管理していないフィールド（tts_provider 等）を保持してから上書きする
         ...prefsBase,
         character_name: (document.getElementById('setting-character-name')?.value || '').trim() || 'Claude',
         cameras,
@@ -2222,9 +2080,8 @@ function serializeFormToPrefs() {
         audio_media,
         stt_provider,
         stt_language,
-        tts_provider,
+        tts_entity,
         wake_words,
-        tts_options,
         speakers,
         entities,
         presence,
@@ -2480,35 +2337,21 @@ function createSpeakerRow(item = {}) {
     if (!tbody) return;
     const tr = document.createElement('tr');
     tr.className = 'speaker-item';
+    setOriginalRowData(tr, item);
 
-    const type = item.type || 'tts';
     const room = item.room || '';
     const label = item.label || '';
     const entity = item.entity || '';
     const note = item.note || '';
-    const host = item.host || '';
-    const port = item.port || 3334;
-    const sink = item.sink || '';
 
-    tr.dataset.type = type;
     tr.dataset.room = room;
     tr.dataset.label = label;
     tr.dataset.entity = entity;
     tr.dataset.note = note;
-    tr.dataset.host = host;
-    tr.dataset.port = String(port);
-    tr.dataset.sink = sink;
-
-    // 表示するエンティティ/ホスト文字列
-    const entityDisplay = type === 'tcp'
-        ? (host ? `${host}:${port}` : '（未設定）')
-        : type === 'local'
-        ? (sink || '(既定sink)')
-        : (entity || '（未設定）');
 
     tr.innerHTML = `
         <td style="font-weight:600;">${esc(room || '（未設定）')}</td>
-        <td style="font-size:12px;">${esc(entityDisplay)}</td>
+        <td style="font-size:12px;">${esc(entity || '（未設定）')}</td>
         <td>${esc(label)}</td>
         <td style="text-align:center;">
             <button type="button" class="btn-icon" title="編集"
@@ -2523,11 +2366,11 @@ function createSpeakerRow(item = {}) {
 }
 
 function addSpeakerRow() {
-    createSpeakerRow({ type: 'tts' });
+    createSpeakerRow({});
 }
 
 function addSpeakerRowAndOpen() {
-    createSpeakerRow({ type: 'tts' });
+    createSpeakerRow({});
     const rows = document.querySelectorAll('#speakers-tbody .speaker-item');
     const last = rows[rows.length - 1];
     if (last) {
@@ -2909,18 +2752,7 @@ function toggleMicSttEnabledModal(checkbox) {
     }
 }
 
-function handleSpeakerTypeModalChange(select) {
-    const modal = select.closest('#edit-modal') || select.closest('.modal');
-    if (!modal) return;
-    const ttsDiv = modal.querySelector('.speaker-fields-tts-modal');
-    const tcpDiv = modal.querySelector('.speaker-fields-tcp-modal');
-    const localDiv = modal.querySelector('.speaker-fields-local-modal');
-    const v = select.value;
-    if (ttsDiv) ttsDiv.style.display = (v === 'tts') ? 'block' : 'none';
-    if (tcpDiv) tcpDiv.style.display = (v === 'tcp') ? 'block' : 'none';
-    if (localDiv) localDiv.style.display = (v === 'local') ? 'block' : 'none';
-}
-window.handleSpeakerTypeModalChange = handleSpeakerTypeModalChange;
+// Speaker selection is HA media_player entity only
 
 // --- Edit Modal Functions ---
 function openEditModal(type, tr) {
@@ -3054,7 +2886,7 @@ function openEditModal(type, tr) {
         bodyEl.innerHTML = `
             <div class="form-group">
                 <label class="form-label">ソース (source)</label>
-                <input type="text" class="mic-source-modal form-input" placeholder="例: alsa://default, tcp://..." value="${esc(source)}">
+                <input type="text" class="mic-source-modal form-input" placeholder="例: rtsp://localhost:8554/study_mic" value="${esc(source)}">
             </div>
             <div class="form-group">
                 <label class="form-label">部屋 (room)</label>
@@ -3062,7 +2894,7 @@ function openEditModal(type, tr) {
             </div>
             <div class="form-group">
                 <label class="form-label">デバイスID (entity)</label>
-                <input type="text" class="mic-entity-modal form-input" placeholder="VoiceS3R等の特殊デバイスのみ" value="${esc(entity)}">
+                <input type="text" class="mic-entity-modal form-input" placeholder="デバイスID (任意)" value="${esc(entity)}">
             </div>
             <div class="form-group">
                 <label class="form-label">ラベル (label)</label>
@@ -3128,19 +2960,21 @@ function openEditModal(type, tr) {
 
     } else if (type === 'speaker') {
         titleEl.textContent = 'スピーカーを編集';
-        const spkType = tr.dataset.type || 'tts';
         const room = tr.dataset.room || '';
         const label = tr.dataset.label || '';
         const entity = tr.dataset.entity || '';
         const note = tr.dataset.note || '';
-        const host = tr.dataset.host || '';
-        const port = tr.dataset.port || '3334';
-        const sink = tr.dataset.sink || '';
 
         bodyEl.innerHTML = `
             <div class="form-group">
                 <label class="form-label">部屋名 (room)</label>
                 <input type="text" class="speaker-room-modal form-input" placeholder="例: study" value="${esc(room)}">
+            </div>
+            <div class="form-group">
+                <label class="form-label">HAエンティティ (media_player.xxx)</label>
+                <select class="speaker-ha-entity-modal form-input">
+                    <option value="">(未選択)</option>
+                </select>
             </div>
             <div class="form-group">
                 <label class="form-label">ラベル (label)</label>
@@ -3150,48 +2984,11 @@ function openEditModal(type, tr) {
                 <label class="form-label">メモ (note)</label>
                 <input type="text" class="speaker-note-modal form-input" placeholder="任意" value="${esc(note)}">
             </div>
-            <div class="form-group">
-                <label class="form-label">スピーカータイプ</label>
-                <select class="speaker-type-select-modal form-input" onchange="handleSpeakerTypeModalChange(this)">
-                    <option value="tts" ${spkType === 'tts' ? 'selected' : ''}>HAエンティティ (TTS)</option>
-                    <option value="tcp" ${spkType === 'tcp' ? 'selected' : ''}>その他TCPスピーカー（手動設定）</option>
-                    <option value="local" ${spkType === 'local' ? 'selected' : ''}>本体内蔵スピーカー（ホストPulse）</option>
-                </select>
-            </div>
-            <div class="speaker-fields-tts-modal form-group" style="display: ${spkType === 'tts' ? 'block' : 'none'};">
-                <label class="form-label">HAエンティティ (media_player.xxx)</label>
-                <select class="speaker-ha-entity-modal form-input">
-                    <option value="">(未選択)</option>
-                </select>
-            </div>
-            <div class="speaker-fields-local-modal" style="display: ${spkType === 'local' ? 'block' : 'none'};">
-                <div class="form-group">
-                    <label class="form-label">出力先 sink（空欄で既定sink）</label>
-                    <input type="text" class="speaker-sink-modal form-input" placeholder="例: alsa_output.pci-0000_00_1f.3.analog-stereo" value="${esc(sink)}">
-                    <p class="form-hint" style="font-size:11px;">アドオンが動く実機(ホスト)の PulseAudio sink 名。<code>ha audio info</code> の output で確認できます。空欄なら既定sink。tts_provider はグローバル設定を使用。</p>
-                </div>
-            </div>
-            <div class="speaker-fields-tcp-modal" style="display: ${spkType === 'tcp' ? 'block' : 'none'};">
-                <div class="form-group">
-                    <label class="form-label">ホスト (host)</label>
-                    <input type="text" class="speaker-host-modal form-input" placeholder="192.168.1.xxx" value="${esc(host)}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">ポート (port)</label>
-                    <input type="number" class="speaker-port-modal form-input" placeholder="3334" min="1" max="65535" value="${esc(port)}">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">ペアリングID (entity)</label>
-                    <input type="text" class="speaker-entity-modal form-input" placeholder="例: voice_s3r_kitchen" value="${esc(spkType === 'tcp' ? entity : '')}">
-                    <p class="form-hint" style="font-size:11px;">同じIDを持つ音声ソースと同一デバイスとして扱われます。</p>
-                </div>
-                <p class="form-hint" style="font-size:11px;">raw mono s16le 16kHz PCM を TCP で push します。tts_provider はグローバル設定を使用します。</p>
-            </div>
         `;
 
         // media_player ドロップダウンを populate
         const haEntitySelect = bodyEl.querySelector('.speaker-ha-entity-modal');
-        populateSpeakerHaEntityDropdown(haEntitySelect, spkType === 'tts' ? entity : '');
+        populateSpeakerHaEntityDropdown(haEntitySelect, entity);
     } else if (type === 'sensor') {
         titleEl.textContent = 'センサーの編集';
         const label = tr.dataset.label || '';
@@ -3436,40 +3233,22 @@ function saveEditModal() {
         const room = modal.querySelector('.speaker-room-modal').value.trim();
         const label = modal.querySelector('.speaker-label-modal').value.trim();
         const note = modal.querySelector('.speaker-note-modal').value.trim();
-        const type = modal.querySelector('.speaker-type-select-modal').value;
+        const entity = modal.querySelector('.speaker-ha-entity-modal').value;
+        const merged = cleanRowData(mergeRowData(_currentEditTr, {
+            room,
+            label,
+            entity,
+            note
+        }));
 
-        let entity = '';
-        let host = '';
-        let port = '3334';
-        let sink = '';
-
-        if (type === 'tts') {
-            entity = modal.querySelector('.speaker-ha-entity-modal').value;
-        } else if (type === 'local') {
-            sink = modal.querySelector('.speaker-sink-modal').value.trim();
-        } else {
-            entity = modal.querySelector('.speaker-entity-modal').value.trim();
-            host = modal.querySelector('.speaker-host-modal').value.trim();
-            port = modal.querySelector('.speaker-port-modal').value.trim() || '3334';
-        }
-
-        _currentEditTr.dataset.type = type;
+        setOriginalRowData(_currentEditTr, merged);
         _currentEditTr.dataset.room = room;
         _currentEditTr.dataset.label = label;
         _currentEditTr.dataset.entity = entity;
         _currentEditTr.dataset.note = note;
-        _currentEditTr.dataset.host = host;
-        _currentEditTr.dataset.port = port;
-        _currentEditTr.dataset.sink = sink;
-
-        const entityDisplay = type === 'tcp'
-            ? (host ? `${host}:${port}` : '（未設定）')
-            : type === 'local'
-            ? (sink || '(既定sink)')
-            : (entity || '（未設定）');
 
         _currentEditTr.querySelector('td:nth-child(1)').textContent = room || '（未設定）';
-        _currentEditTr.querySelector('td:nth-child(2)').textContent = entityDisplay;
+        _currentEditTr.querySelector('td:nth-child(2)').textContent = entity || '（未設定）';
         _currentEditTr.querySelector('td:nth-child(3)').textContent = label;
         
     } else if (_currentEditType === 'sensor') {

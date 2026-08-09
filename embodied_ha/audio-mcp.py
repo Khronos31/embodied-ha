@@ -106,17 +106,6 @@ def active_listen_log_name() -> str:
     return os.path.basename(ACTIVE_LISTEN_LOG_FILE) or "active_listen_log.jsonl"
 
 
-def default_active_listen_request_dir() -> str:
-    data_dir = clean(os.environ.get("EHA_DATA_DIR"))
-    if data_dir:
-        return os.path.join(data_dir, "runtime", "active_listen_requests")
-    return "/config/embodied-ha/runtime/active_listen_requests"
-
-
-def active_listen_request_dir() -> str:
-    return clean(os.environ.get("EHA_ACTIVE_LISTEN_REQUEST_DIR")) or default_active_listen_request_dir()
-
-
 def concentrate_hearing_state_path() -> Path:
     data_dir = clean(os.environ.get("EHA_DATA_DIR")) or "/config/embodied-ha"
     configured = clean(os.environ.get("EHA_CONCENTRATE_HEARING_STATE_FILE"))
@@ -173,54 +162,12 @@ def _write_json_atomic(path: str, payload: dict) -> None:
     os.replace(tmp, path)
 
 
-def request_daemon_capture_to_wav(source: str, duration: int, output_path: str) -> None:
-    request_id = uuid.uuid4().hex
-    request_dir = active_listen_request_dir()
-    os.makedirs(request_dir, exist_ok=True)
-    response_path = os.path.join(request_dir, f"{request_id}.response.json")
-    request_path = os.path.join(request_dir, f"{request_id}.json")
-    payload = {
-        'request_id': request_id,
-        'source': normalize_source_uri(source),
-        'duration': max(1, int(duration)),
-        'output_path': output_path,
-        'response_path': response_path,
-        'created_at': time.time(),
-    }
-    _write_json_atomic(request_path, payload)
-    deadline = time.monotonic() + duration + 12
-    try:
-        while time.monotonic() < deadline:
-            if os.path.exists(response_path):
-                with open(response_path, encoding='utf-8') as f:
-                    response = json.load(f)
-                if response.get('ok') is not True:
-                    raise TimeoutError(clean(response.get('error')) or 'daemon capture failed')
-                return
-            time.sleep(0.1)
-        raise TimeoutError(f'timed out waiting for daemon capture for {source}')
-    finally:
-        for candidate in (request_path, response_path):
-            try:
-                os.unlink(candidate)
-            except FileNotFoundError:
-                pass
-
-
 def _prefs_path() -> str:
     return os.environ.get("EHA_PREFS_FILE", "")
 
 
 def normalize_source_uri(value: str) -> str:
-    source = clean(value)
-    if not source:
-        return ""
-    if source in {"alsa", "default"}:
-        return "alsa://default"
-    if source.startswith("alsa://"):
-        device = source[len("alsa://"):].lstrip("/")
-        return f"alsa://{device or 'default'}"
-    return source
+    return clean(value)
 
 
 def load_preferences() -> dict:
@@ -245,7 +192,7 @@ def load_mic_configs() -> list[dict]:
         if not isinstance(item, dict):
             continue
         source = normalize_source_uri(item.get("source"))
-        if not source:
+        if not source.startswith("rtsp://"):
             continue
         config = dict(item)
         config["source"] = source
@@ -302,8 +249,8 @@ def build_listen_spec() -> dict:
         "description": (
             "短時間だけ音を聴く。\n"
             "source を省略すると body_location.json を参照して自動選択する:\n"
-            "- 電脳体で VoiceS3R（TCP）に侵入中: そのノードのマイク（同 IP の tcp://HOST:3333）\n"
-            "- 電脳体で HA エンティティに侵入中 or 物理体: 現在の部屋のマイク（TCP 優先）\n"
+            "- 電脳体: 投射先の部屋に登録されたRTSPマイク\n"
+            "- 物理体: 現在の部屋に登録されたRTSPマイク\n"
             f"source を明示する場合の利用可能なソース:\n{source_lines}\n"
             "transcribe は必要なときだけ true にする。"
         ),
@@ -536,19 +483,8 @@ def find_ffmpeg() -> str | None:
 
 def build_record_command(source: str, duration: int) -> list[str]:
     source = normalize_source_uri(source)
-    if source.startswith("tcp://"):
-        raise ValueError("tcp sources require direct socket capture")
-    if source.startswith("alsa://"):
-        device = source[len("alsa://"):].lstrip("/") or "default"
-        return [
-            "ffmpeg",
-            "-f", "alsa",
-            "-i", device,
-            "-ar", "16000",
-            "-ac", "1",
-            "-t", str(duration),
-            "-y",
-        ]
+    if not source.startswith("rtsp://"):
+        raise ValueError("only rtsp microphone sources are supported")
     return [
         "ffmpeg",
         "-rtsp_transport", "tcp",
@@ -742,25 +678,11 @@ def read_audio_event_tags(args: dict):
 _SPEAK_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "speak.py")
 
 
-def _extract_tcp_host(entity: str) -> str:
-    if entity.startswith("tcp://"):
-        return entity[6:].split(":")[0]
-    return ""
-
-
-def _find_tcp_speaker_by_host(speakers, host: str) -> dict:
-    if isinstance(speakers, list):
-        for s in speakers:
-            if isinstance(s, dict) and s.get("type") == "tcp" and s.get("host") == host:
-                return s
-    return {}
-
-
 def _find_ha_speaker_by_entity(speakers, entity_id: str) -> dict:
     if isinstance(speakers, list):
         for s in speakers:
             if isinstance(s, dict):
-                if s.get("media_player") == entity_id or s.get("tts_entity") == entity_id:
+                if s.get("entity") == entity_id or s.get("media_player") == entity_id:
                     return s
     return {}
 
@@ -787,7 +709,7 @@ TOOL_SPEAK = {
         "type": "object",
         "properties": {
             "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
-            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。.pcmはmono s16le/16kHz、それ以外はffmpegで変換する。messageとは排他"},
+            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。HA Media Sourceへ永続保存して再生する。messageとは排他"},
         },
         "required": [],
     },
@@ -803,7 +725,7 @@ TOOL_USE_DEVICE_SPEAKER = {
         "type": "object",
         "properties": {
             "message": {"type": "string", "description": "話す内容。file_pathとは排他"},
-            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。.pcmはmono s16le/16kHz、それ以外はffmpegで変換する。messageとは排他"},
+            "file_path": {"type": "string", "description": "再生する最長10分の音声ファイルパス。HA Media Sourceへ永続保存して再生する。messageとは排他"},
         },
         "required": [],
     },
@@ -851,9 +773,7 @@ TOOL_CONCENTRATE_HEARING = {
 
 def _record_concentrate_hearing_webm(source: str, duration: int) -> str:
     source = normalize_source_uri(source)
-    if source not in _source_map() and not source.startswith(
-        ("rtsp://", "alsa://", "tcp://")
-    ):
+    if source not in _source_map() and not source.startswith("rtsp://"):
         raise RuntimeError(f"unknown source: {source}")
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -879,20 +799,17 @@ def _record_concentrate_hearing_webm(source: str, duration: int) -> str:
         ) as webm_file:
             webm_path = webm_file.name
 
-        if source.startswith("tcp://"):
-            request_daemon_capture_to_wav(source, duration, wav_path)
-        else:
-            command = build_record_command(source, duration) + [wav_path]
-            command[0] = ffmpeg
-            recorded = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=duration + 15,
-                check=False,
-            )
-            if recorded.returncode != 0:
-                raise RuntimeError(clean(recorded.stderr) or clean(recorded.stdout) or "recording failed")
+        command = build_record_command(source, duration) + [wav_path]
+        command[0] = ffmpeg
+        recorded = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=duration + 15,
+            check=False,
+        )
+        if recorded.returncode != 0:
+            raise RuntimeError(clean(recorded.stderr) or clean(recorded.stdout) or "recording failed")
 
         converted = subprocess.run(
             [ffmpeg, "-y", "-loglevel", "error", "-i", wav_path, "-vn", "-c:a", "libopus", webm_path],
@@ -939,21 +856,16 @@ def _broken_cyber_state_error(current_entity: str, projected_room: str) -> tuple
 
 def _resolve_room_speaker(speakers: list, room: str) -> dict:
     room_speakers = _find_speakers_by_room(speakers, room)
-    if not room_speakers:
-        return {}
-    tcp_in_room = [s for s in room_speakers if s.get("type") == "tcp"]
-    return tcp_in_room[0] if tcp_in_room else room_speakers[0]
+    return room_speakers[0] if room_speakers else {}
 
 
-def _run_speak(speak_room: str, message: str = "", speak_host: str = "", file_path: str = "") -> tuple[list, bool]:
+def _run_speak(speak_room: str, message: str = "", file_path: str = "") -> tuple[list, bool]:
     cmd = ["python3", _SPEAK_PY, speak_room]
     if file_path:
         cmd += ["--file-path", file_path]
     else:
         cmd.append(message)
-    if speak_host:
-        cmd += ["--host", speak_host]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
     detail = (r.stdout or "").strip() or (r.stderr or "").strip()
     if r.returncode != 0:
         action = "再生" if file_path else "発話"
@@ -971,9 +883,8 @@ def _speak_payload(args: dict) -> tuple[str, str, tuple[list, bool] | None]:
 
 def _speak_with_entry(entry: dict, message: str = "", *, file_path: str = "", mode_desc: str = "") -> tuple[list, bool]:
     speak_room = clean(entry.get("room")) or ""
-    speak_host = clean(entry.get("host")) if entry.get("type") == "tcp" else ""
-    label = clean(entry.get("label")) or speak_room or speak_host
-    result, is_error = _run_speak(speak_room, message, speak_host, file_path=file_path)
+    label = clean(entry.get("label")) or speak_room
+    result, is_error = _run_speak(speak_room, message, file_path=file_path)
     if is_error:
         return result, True
     if file_path:
@@ -1025,7 +936,7 @@ def _audio_listen_from_source(
             **action_fields_for_sensory(sensory, host=source),
         }
 
-    if source not in _source_map() and not (source.startswith("rtsp://") or source.startswith("alsa://") or source.startswith("tcp://")):
+    if source not in _source_map() and not source.startswith("rtsp://"):
         payload = {**base_payload(), "error": f"unknown source: {source}"}
         record_active_listen(payload, source)
         return [text(json.dumps({"error": payload["error"]}, ensure_ascii=False))], True
@@ -1041,23 +952,14 @@ def _audio_listen_from_source(
     try:
         with tempfile.NamedTemporaryFile(dir=TMP_DIR, suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
-        if source.startswith("tcp://"):
-            try:
-                request_daemon_capture_to_wav(source, duration, tmp_path)
-            except Exception as exc:
-                err_msg = clean(str(exc)) or "tcp recording failed"
-                payload = {**base_payload(), "error": err_msg}
-                record_active_listen(payload, source)
-                return [text(json.dumps({"error": err_msg, "source": source}, ensure_ascii=False))], True
-        else:
-            command = build_record_command(source, duration) + [tmp_path]
-            command[0] = ffmpeg
-            record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
-            if record.returncode != 0:
-                err_msg = clean(record.stderr) or clean(record.stdout) or "recording failed"
-                payload = {**base_payload(), "error": err_msg}
-                record_active_listen(payload, source)
-                return [text(json.dumps({"error": err_msg, "source": source}, ensure_ascii=False))], True
+        command = build_record_command(source, duration) + [tmp_path]
+        command[0] = ffmpeg
+        record = subprocess.run(command, capture_output=True, text=True, timeout=duration + 15)
+        if record.returncode != 0:
+            err_msg = clean(record.stderr) or clean(record.stdout) or "recording failed"
+            payload = {**base_payload(), "error": err_msg}
+            record_active_listen(payload, source)
+            return [text(json.dumps({"error": err_msg, "source": source}, ensure_ascii=False))], True
 
         peak_db, mean_db = analyze_volume(tmp_path)
         payload = {
@@ -1198,6 +1100,11 @@ def use_device_microphone(args: dict):
         return broken_state
     if not current_entity:
         return [text("物理体モードでは use_device_microphone は使えません。listen を使ってください。")], True
+    if current_entity.startswith(("tcp://", "alsa://")):
+        return [text(
+            "現在の身体状態は廃止済みのマイク入力を参照しています。"
+            "return_to_body で身体へ戻り、preferences.json のRTSPマイクへ入り直してください。"
+        )], True
     prefs = load_preferences()
     caps = get_device_capabilities(current_entity, prefs)
     source = clean(caps.get("mic_source"))

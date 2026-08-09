@@ -1,13 +1,12 @@
 # ベースは python slim（増分5b）。Claude Code同梱廃止(5a)でnode実行時依存が無くなったため
 # node:22-slim から乗り換え、イメージを削減する。python は現行本番(Debian bookworm=3.11)と
 # 同minorの 3.11 を維持し回帰面を最小化(3.12以降への更新は別TODO)。Debian世代は bookworm 据え置き
-# なので apt 依存(ffmpeg/libasound2-plugins 等)は不変。
+# なので apt 依存(ffmpeg等)は不変。
 FROM python:3.11-slim-bookworm
 
 # システム依存パッケージ（python3 / pip はベースイメージ同梱のため apt からは外す）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg curl ca-certificates jq git mosquitto-clients \
-    libasound2-plugins pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true

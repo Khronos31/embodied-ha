@@ -71,25 +71,19 @@ def load_preferences() -> dict[str, Any]:
     return load_prefs(prefs_path())
 
 
-def _tcp_host(entity: str) -> str:
-    entity = clean(entity)
-    if entity.startswith("tcp://"):
-        return entity[6:].split(":")[0]
-    return ""
-
-
 def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str, str | None]:
     entity = clean(entity)
     if not entity:
         return "", None
 
-    # audio_sources is the pre-2.0 name retained for settings not yet migrated.
-    for bucket in ("mics", "audio_sources"):
+    for bucket in ("mics",):
         for item in prefs.get(bucket, []):
             if not isinstance(item, dict):
                 continue
-            if clean(item.get("source")) == entity:
-                normalized = clean(item.get("entity")) or entity
+            item_source = clean(item.get("source"))
+            item_entity = clean(item.get("entity"))
+            if entity in {item_source, item_entity}:
+                normalized = item_entity or item_source
                 return normalized, clean(item.get("room")) or None
 
     speakers = prefs.get("speakers", [])
@@ -97,13 +91,9 @@ def normalize_cyberspace_entity(entity: str, prefs: dict[str, Any]) -> tuple[str
         speakers = [{**(v if isinstance(v, dict) else {}), "room": k} for k, v in speakers.items()]
     elif not isinstance(speakers, list):
         speakers = []
-    host = _tcp_host(entity)
     for item in speakers:
         if not isinstance(item, dict):
             continue
-        if host and clean(item.get("host")) == host:
-            normalized = clean(item.get("entity")) or entity
-            return normalized, clean(item.get("room")) or None
         if clean(item.get("entity")) == entity:
             return entity, clean(item.get("room")) or None
 
@@ -150,7 +140,7 @@ def load_location_state(graph: dict[str, Any] | None = None) -> dict[str, Any]:
         "projected_display_name": _room_label(projected, graph) if projected else None,
         "projection_updated_at": clean(state.get("projection_updated_at")) or None,
         "current_entity": clean(state.get("current_entity")) or "",
-        "source": clean(state.get("source")) or "alsa://default",
+        "source": clean(state.get("source")) or "body-mcp",
     }
 
 
@@ -534,7 +524,7 @@ def return_to_body(args: dict[str, Any]):
     current = state["current_room"]
     timestamp = now().isoformat(timespec="seconds")
     reason = clean(args.get("reason")) or None
-    host = clean(args.get("host")) or clean(state.get("source")) or "alsa://default"
+    host = clean(args.get("host")) or clean(state.get("source")) or "body-mcp"
     new_state = {
         **state,
         "current_room": current,
@@ -661,7 +651,7 @@ TOOL_RETURN_TO_BODY = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "host": {"type": "string", "description": "戻った先のデバイス識別子。例: alsa://default"},
+            "host": {"type": "string", "description": "戻った先のデバイス識別子。任意"},
             "reason": {"type": "string", "description": "戻る理由。任意"},
         },
     },

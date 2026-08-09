@@ -151,11 +151,13 @@ class HaControlServiceValidationTests(unittest.TestCase):
     def test_script_direct_call_still_works(self, mock_run):
         # by-design で許可しているスクリプト名の直呼び（entity_id 省略可）を壊さない
         mock_run.return_value = mock.Mock(returncode=0, stdout="")
-        _, is_error = self._call({
-            "domain": "script",
-            "service": "viewing_reservation_set",
-            "data": {"reservation_channel": "フジテレビ"},
-        })
+        fake_daytime = type("FakeDatetime", (_FakeDatetime,), {"fixed_hour": 12})
+        with mock.patch.object(self.mcp.datetime, "datetime", fake_daytime):
+            _, is_error = self._call({
+                "domain": "script",
+                "service": "viewing_reservation_set",
+                "data": {"reservation_channel": "フジテレビ"},
+            })
         self.assertFalse(is_error)
         called_url = mock_run.call_args[0][0][-1]
         self.assertTrue(called_url.endswith("/services/script/viewing_reservation_set"))

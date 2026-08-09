@@ -3,9 +3,8 @@
   "character_name": "Claude",
   "wake_words": ["ねえクロード", "クロード"],
 
+  "_tts_entity_doc": "通常読み上げに使うHAのtts.*エンティティ。声・言語・速度・音量等はHA側のエンティティ設定を使用し、Embodied HAからは上書きしない。",
   "tts_entity": "tts.home_assistant_cloud",
-  "_tts_options_doc": "VOICEVOX通常発話の個体別設定。tts_entityがtts.voicevox_ttsのときだけ使用する。空でなければspeaker（0以上の整数）が必須。volumeは0.5〜2.0、pitchは-0.15〜0.15、speedは0.5〜3.0。空ならHA統合の既定値を使う。",
-  "tts_options": {},
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
@@ -33,82 +32,70 @@
     }
   ],
 
-  "_audio_sources_doc": "entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。rtsp/alsa/tcp など非HAのものは独自IDを設定する。",
-  "audio_sources": [
+  "_mics_doc": "マイク（耳）: 侵入して聴く実デバイス。entity は侵入時のID、source はRTSP URL。ハードウェア入力はgo2rtc等でRTSP配信する。stt_enabled で文字起こし対象を切り替える。",
+  "mics": [
     {
-      "entity": "mic_tv",
-      "source": "rtsp://localhost:8554/living_tv_stream",
-      "label": "TV・レコーダー",
-      "room": "living",
-      "note": "go2rtc経由のTV/レコーダー音声",
-      "stt_enabled": false,
-      "stt_retention_hours": 0,
-      "wake_word_enabled": false,
-      "background_hearing_enabled": false
-    },
-    {
-      "entity": "mic_alsa",
-      "source": "alsa://default",
-      "label": "スタディマイク",
+      "entity": "mic_study",
+      "source": "rtsp://homeassistant.local:8554/study_microphone",
       "room": "study",
-      "note": "USBマイク直接録音（/dev/snd 必要）",
-      "stt_enabled": true,
-      "stt_retention_hours": 24,
-      "wake_word_enabled": true,
-      "background_hearing_enabled": true
+      "label": "書斎マイク",
+      "stt_enabled": true
     },
     {
-      "entity": "mic_node_kitchen",
-      "source": "tcp://192.168.1.xxx:3333",
-      "label": "廊下 VoiceS3R",
+      "entity": "mic_hallway",
+      "source": "rtsp://homeassistant.local:8554/hallway_microphone",
       "room": "hallway",
-      "note": "常時計測用の固定IPノード",
-      "stt_enabled": true,
-      "stt_retention_hours": 24,
-      "wake_word_enabled": true,
-      "background_hearing_enabled": true
+      "label": "廊下マイク",
+      "stt_enabled": true
     }
   ],
 
-  "_speakers_doc": "entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。ttsタイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。",
+  "_video_media_doc": "映像ソース（観る）: 侵入不要で届くフレーム。id はメディア用 ID、source は camera_proxy / go2rtc / 直接 URL など。room は文脈用。",
+  "video_media": [
+    {
+      "id": "capture_tv",
+      "source": "camera.living_room_tv_proxy",
+      "room": "living",
+      "label": "テレビ映像",
+      "note": "レコーダー/TVの画面"
+    },
+    {
+      "id": "home_pc_screenshot",
+      "source": "camera.study_pc_screenshot",
+      "room": "study",
+      "label": "書斎PC画面",
+      "note": "スクリーンショットの取得元"
+    }
+  ],
+
+  "_audio_media_doc": "音声ソース（聴く）: 侵入不要で届く音。id はメディア用 ID、source は音声取得元。video_media で対応する映像ソースを参照できる。",
+  "audio_media": [
+    {
+      "id": "capture_tv_audio",
+      "source": "capture_tv",
+      "room": "living",
+      "label": "テレビ音声",
+      "note": "テレビ映像とペア",
+      "video_media": "capture_tv"
+    },
+    {
+      "id": "capture_pc_audio",
+      "source": "capture_pc2",
+      "room": "study",
+      "label": "PC音声",
+      "note": "PC画面の音",
+      "video_media": "home_pc_screenshot"
+    }
+  ],
+
+  "_speakers_doc": "スピーカーデバイス一覧。entity はHAの media_player entity_id（電脳体侵入時にも使う）。TTSエンティティはグローバルの tts_entity を参照する。",
   "speakers": [
     {
       "entity": "media_player.your_tts_media_player",
       "room": "study",
       "label": "書斎（Nest Mini）",
       "type": "tts",
-      "note": ""
-    },
-    {
-      "entity": "notify.living_alexa_speak",
-      "room": "living",
-      "label": "リビング（Alexa）",
-      "type": "notify",
-      "note": ""
-    },
-    {
-      "entity": "notify.bedroom_alexa_speak",
-      "room": "bedroom",
-      "label": "寝室（Alexa）",
-      "type": "notify",
-      "note": ""
-    },
-    {
-      "entity": "notify.mobile_app_your_phone",
-      "room": "away",
-      "label": "外出先（スマホ）",
-      "type": "notify",
-      "title": "Embodied HA",
-      "note": ""
-    },
-    {
-      "entity": "mic_node_kitchen",
-      "room": "hallway",
-      "label": "廊下（VoiceS3R）",
-      "type": "tcp",
-      "host": "192.168.1.xxx",
-      "port": 3334,
-      "note": ""
+      "note": "tts_entity はグローバル設定を使用"
     }
   ],
 

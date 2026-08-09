@@ -5,9 +5,8 @@
     "ねえクロード",
     "クロード"
   ],
+  "_tts_entity_doc": "通常読み上げに使うHAのtts.*エンティティ。声・言語・速度・音量等はHA側のエンティティ設定を使用し、Embodied HAからは上書きしない。",
   "tts_entity": "tts.home_assistant_cloud",
-  "_tts_options_doc": "VOICEVOX通常発話の個体別設定。tts_entityがtts.voicevox_ttsのときだけ使用する。空でなければspeaker（0以上の整数）が必須。volumeは0.5〜2.0、pitchは-0.15〜0.15、speedは0.5〜3.0。空ならHA統合の既定値を使う。",
-  "tts_options": {},
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
@@ -37,7 +36,7 @@
       "note": "作業中の様子を見る"
     }
   ],
-  "_speakers_doc": "スピーカーデバイス一覧。entity: HAエンティティIDか独自の短いID（電脳体侵入時に使う）。tts タイプは entity = media_player entity_id。TTSエンティティはグローバルの tts_entity を参照する。tcp タイプは raw PCM を TCP ソケットに送信する（VoiceS3R 等）。",
+  "_speakers_doc": "スピーカーデバイス一覧。entity はHAの media_player entity_id（電脳体侵入時にも使う）。TTSエンティティはグローバルの tts_entity を参照する。",
   "speakers": [
     {
       "entity": "media_player.your_tts_media_player",
@@ -45,15 +44,6 @@
       "label": "書斎（Nest Mini）",
       "type": "tts",
       "note": "tts_entity はグローバル設定を使用"
-    },
-    {
-      "entity": "mic_node_kitchen",
-      "room": "hallway",
-      "label": "廊下（VoiceS3R）",
-      "type": "tcp",
-      "host": "192.168.1.xxx",
-      "port": 3334,
-      "note": "VoiceS3R スピーカー。tts_provider はグローバルの tts_entity から自動取得"
     }
   ],
   "_entities_doc": "操作できる家電の対応表（口語の呼び方 → entity_id）。チャットで家電操作を頼まれたとき entity_id を引くのに使う。Web UIで編集・discover.pyで下書き生成・チャットの entities_add でも追記可。name は HA の friendly_name そのままでよい。",
@@ -138,22 +128,22 @@
       }
     ]
   },
-  "_mics_doc": "マイク（耳）: 侵入して聴く実デバイス。entity は侵入時の ID、source は HA エンティティ ID か外部入力の識別子。stt_enabled で文字起こし対象を切り替える。",
+  "_mics_doc": "マイク（耳）: 侵入して聴く実デバイス。entity は侵入時のID、source はRTSP URL。ハードウェア入力はgo2rtc等でRTSP配信する。stt_enabled で文字起こし対象を切り替える。",
   "_video_media_doc": "映像ソース（観る）: 侵入不要で届くフレーム。id はメディア用 ID、source は camera_proxy / go2rtc / 直接 URL など。room は文脈用。",
   "_audio_media_doc": "音声ソース（聴く）: 侵入不要で届く音。id はメディア用 ID、source は音声取得元。video_media で対応する映像ソースを参照できる。",
   "mics": [
     {
-      "entity": "mic_alsa_default",
-      "source": "alsa://default",
+      "entity": "mic_study",
+      "source": "rtsp://homeassistant.local:8554/study_microphone",
       "room": "study",
       "label": "書斎マイク",
       "stt_enabled": true
     },
     {
-      "entity": "mic_node_hallway",
-      "source": "tcp://192.168.1.xxx:3333",
+      "entity": "mic_hallway",
+      "source": "rtsp://homeassistant.local:8554/hallway_microphone",
       "room": "hallway",
-      "label": "廊下 VoiceS3R",
+      "label": "廊下マイク",
       "stt_enabled": true
     }
   ],

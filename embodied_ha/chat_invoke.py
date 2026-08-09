@@ -61,11 +61,17 @@ def resolve_voice_user_room(chat_source, data_dir, prefs_file):
             elif not isinstance(raw_speakers, list):
                 raw_speakers = []
             spk = next(
-                (s for s in raw_speakers if isinstance(s, dict) and s.get("room") == user_room and s.get("type") == "tcp"),
+                (
+                    s
+                    for s in raw_speakers
+                    if isinstance(s, dict) and s.get("room") == user_room
+                ),
                 None,
             )
             if spk:
-                user_room_speaker = f'tcp://{spk["host"]}:{spk.get("port", 3334)}'
+                entity = str(spk.get("entity") or spk.get("media_player") or "").strip()
+                if entity.startswith("media_player."):
+                    user_room_speaker = entity
         except Exception:
             pass
 
@@ -180,7 +186,7 @@ def build_chat_prompt(
 
 返事を届ける方法（3択から1つ選んで実行する）:
 1. **身体移動してから喋る** — `move_to` で {user_room} へ行き → `speak` で返答する。しっかり近くで話したいとき。
-2. **電脳体でスピーカーに侵入して喋る** — `enter_cyberspace` で {user_room} の TCP スピーカーに入り → `use_device_speaker` で返答する。素早く届けたいとき。{spk_hint}
+2. **電脳体でスピーカーに侵入して喋る** — `enter_cyberspace` で {user_room} のスピーカーに入り → `use_device_speaker` で返答する。素早く届けたいとき。{spk_hint}
 3. **その場から喋る** — 移動せず `speak` を呼ぶ（今いる部屋のスピーカーから音が出る）。急ぎのとき・すでに同室のとき。
 
 必ず `speak` または `use_device_speaker` を呼ぶこと。物理体なら `speak`、電脳体でスピーカー侵入中なら `use_device_speaker`。
@@ -317,7 +323,7 @@ recall ツールで過去ログ全体（観察・探索・会話・記憶）を�
 {resident}さんから設定を教えてもらったら preferences_update で記録してください。指定がなければ省略（フィールドごと出力しなくてよい）。
 - cameras_add: カメラ追加 例: [{{"source": "capture_tv", "label": "テレビ", "note": "説明"}}]  source は HA entity_id（camera.xxx）または go2rtc ストリーム名（ドットなし）
 - cameras_remove: カメラ削除 例: ["capture_tv"]
-- speakers_set: 発話先設定 例: {{"study": {{"type": "tts", "tts_entity": "tts.home_assistant_cloud", "media_player": "media_player.xxx"}}}} または {{"living": {{"type": "notify", "entity": "notify.alexa_speak"}}}}
+- speakers_set: 発話先設定 例: {{"study": {{"type": "tts", "entity": "media_player.xxx"}}}}。読み上げエンジンはグローバルの tts_entity で設定する。
 - presence_set: 在宅判定エンティティ 例: {{"entity": "input_boolean.resident_home"}}
 - policies_add: 行動ポリシー追加 例: ["集中してるときは静かに"]
 - sensors_add: 観察ループで常時見るセンサー（おもなデバイス）に追加。「○○も常に見せて」と頼まれたとき。

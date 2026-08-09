@@ -26,7 +26,7 @@ class UpdatePreferencesBehaviorTests(unittest.TestCase):
             chat_prefs_update.update_preferences({"preferences_update": {
                 "cameras_add": [{"source": "new_cam"}],
                 "cameras_remove": ["old_cam"],
-                "speakers_set": {"study": {"type": "tcp", "host": "speaker"}},
+                "speakers_set": {"study": {"entity": "media_player.study"}},
                 "presence_set": {"entity": "person.yuno"},
                 "policies_add": ["静かに"],
                 "sensors_add": [{"group": "new", "label": "温度", "entity": "sensor.temp"}],
@@ -36,7 +36,7 @@ class UpdatePreferencesBehaviorTests(unittest.TestCase):
             }}, str(prefs_file))
             prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
             self.assertEqual(prefs["cameras"], [{"source": "new_cam"}])
-            self.assertEqual(prefs["speakers"][0]["type"], "tcp")
+            self.assertEqual(prefs["speakers"][0]["entity"], "media_player.study")
             self.assertEqual(prefs["presence"], {"entity": "person.yuno"})
             self.assertEqual(prefs["policies"], ["静かに"])
             self.assertEqual(prefs["sensors"]["groups"][0]["title"], "new")

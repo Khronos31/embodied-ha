@@ -213,13 +213,13 @@ class AudioDaemonTests(unittest.TestCase):
     def test_load_enabled_mics_filters_and_normalizes(self):
         prefs = {
             "mics": [
-                {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "wake_word_enabled": True},
+                {"source": "rtsp://example/study", "label": "Desk", "room": "study", "stt_enabled": True, "wake_word_enabled": True},
                 {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": False},
             ]
         }
         sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(len(sources), 1)
-        self.assertEqual(sources[0].source, "alsa://default")
+        self.assertEqual(sources[0].source, "rtsp://example/study")
         self.assertEqual(sources[0].label, "Desk")
         self.assertTrue(sources[0].wake_word_enabled)
         self.assertEqual(sources[0].retention_hours, 60)
@@ -227,7 +227,7 @@ class AudioDaemonTests(unittest.TestCase):
     def test_load_enabled_mics_keeps_zero_retention_as_background_by_default(self):
         prefs = {
             "mics": [
-                {"source": "alsa://default", "label": "Desk", "room": "study", "stt_enabled": True, "stt_retention_hours": 0},
+                {"source": "rtsp://example/study", "label": "Desk", "room": "study", "stt_enabled": True, "stt_retention_hours": 0},
                 {"source": "rtsp://example", "label": "TV", "room": "living", "stt_enabled": True, "stt_retention_hours": 1},
             ]
         }
@@ -265,32 +265,94 @@ class AudioDaemonTests(unittest.TestCase):
         self.assertEqual(sources[0].label, "Google TV")
         self.assertTrue(sources[0].background_only)
 
-    def test_load_enabled_mics_parses_tcp_pull_source(self):
+    def test_unsupported_mic_sources_inventory_removed_schemes(self):
         prefs = {
             "mics": [
                 {
                     "source": "tcp://192.168.1.100:3333",
                     "label": "Hallway VoiceS3R",
                     "room": "hallway",
-                    "sample_rate": 16000,
-                    "channels": 1,
-                    "format": "s16le",
                     "stt_enabled": True,
-                }
+                },
+                {"source": "alsa://default", "label": "Local mic"},
+                {"source": "rtsp://example/study", "label": "Study"},
             ]
         }
-        sources = self.audio_daemon.load_enabled_mics(prefs)
-        self.assertEqual(len(sources), 1)
-        self.assertEqual(sources[0].transport, "tcp_pull")
-        self.assertEqual(sources[0].source, "tcp://192.168.1.100:3333")
-        self.assertEqual(sources[0].host, "192.168.1.100")
-        self.assertEqual(sources[0].port, 3333)
-        self.assertEqual(sources[0].room, "hallway")
-        self.assertEqual(sources[0].sample_rate, 16000)
-        self.assertEqual(sources[0].channels, 1)
-        self.assertEqual(sources[0].audio_format, "s16le")
+        self.assertEqual(
+            self.audio_daemon.unsupported_mic_sources(prefs),
+            [
+                {"label": "Hallway VoiceS3R", "source": "tcp://192.168.1.100:3333"},
+                {"label": "Local mic", "source": "alsa://default"},
+            ],
+        )
 
-    def test_load_enabled_mics_rejects_duplicate_tcp_endpoint(self):
+    def test_unsupported_speaker_routes_inventory_legacy_and_missing_entity(self):
+        prefs = {
+            "speakers": [
+                {
+                    "room": "kitchen",
+                    "type": "tcp",
+                    "label": "Kitchen VoiceS3R",
+                    "entity": "voice_s3r_kitchen",
+                },
+                {"room": "hallway", "type": "tts", "label": "Hallway"},
+                {
+                    "room": "study",
+                    "type": "tts",
+                    "entity": "media_player.study",
+                },
+            ]
+        }
+        self.assertEqual(
+            self.audio_daemon.unsupported_speaker_routes(prefs),
+            [
+                {
+                    "label": "Kitchen VoiceS3R",
+                    "room": "kitchen",
+                    "reason": "legacy speaker type 'tcp' is unsupported",
+                },
+                {
+                    "label": "Hallway",
+                    "room": "hallway",
+                    "reason": "a media_player.* entity is required",
+                },
+            ],
+        )
+
+    def test_audio_route_health_logs_actionable_legacy_errors(self):
+        prefs = {
+            "mics": [{"source": "alsa://default", "label": "Local mic"}],
+            "speakers": [{"room": "kitchen", "type": "tcp", "label": "Kitchen"}],
+            "tts_entity": "voicevox",
+        }
+        with mock.patch.object(self.audio_daemon, "log") as log_mock:
+            result = self.audio_daemon.log_audio_route_health(prefs)
+
+        self.assertFalse(result)
+        output = "\n".join(call.args[0] for call in log_mock.call_args_list)
+        self.assertIn("Only rtsp:// sources are supported", output)
+        self.assertIn("Select a Home Assistant media_player entity", output)
+        self.assertIn("tts_entity must be a Home Assistant tts.* entity", output)
+        self.assertIn("validation failed with 3 issue(s)", output)
+
+    def test_audio_route_health_reports_valid_contract(self):
+        prefs = {
+            "mics": [{"source": "rtsp://go2rtc/study", "label": "Study"}],
+            "speakers": [
+                {"room": "study", "type": "tts", "entity": "media_player.study"}
+            ],
+            "tts_entity": "tts.voicevox_study",
+        }
+        with mock.patch.object(self.audio_daemon, "log") as log_mock:
+            result = self.audio_daemon.log_audio_route_health(prefs)
+
+        self.assertTrue(result)
+        log_mock.assert_called_once_with(
+            "Audio route validation passed: 1 RTSP microphone(s), "
+            "1 media_player speaker(s), TTS entity tts.voicevox_study."
+        )
+
+    def test_load_enabled_mics_rejects_non_rtsp_sources(self):
         prefs = {
             "mics": [
                 {
@@ -299,43 +361,31 @@ class AudioDaemonTests(unittest.TestCase):
                     "room": "study",
                     "stt_enabled": True,
                 },
-                {
-                    "source": "tcp://VOICE-NODE.local:3333",
-                    "label": "Voice node duplicate",
-                    "room": "study",
-                    "stt_enabled": True,
-                },
+                {"source": "alsa://default", "label": "Local", "room": "study", "stt_enabled": True},
             ]
         }
 
         with mock.patch.object(self.audio_daemon, "log") as log_mock:
             sources = self.audio_daemon.load_enabled_mics(prefs)
 
-        self.assertEqual([source.label for source in sources], ["Voice node A"])
-        self.assertIn("duplicate tcp_pull endpoint rejected", log_mock.call_args.args[0])
-
-    def test_load_enabled_mics_rejects_invalid_tcp_pull_source(self):
-        prefs = {
-            "mics": [
-                {
-                    "source": "tcp://192.168.1.100:3333",
-                    "label": "Hallway VoiceS3R",
-                    "room": "hallway",
-                    "sample_rate": 48000,
-                    "channels": 1,
-                    "format": "s16le",
-                    "stt_enabled": True,
-                }
-            ]
-        }
-        sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(sources, [])
+        self.assertTrue(all("only rtsp://" in call.args[0] for call in log_mock.call_args_list))
+
+    def test_build_ffmpeg_command_uses_rtsp_over_tcp(self):
+        config = self.audio_daemon.AudioSourceConfig(
+            "rtsp://example/study", "Study", 24, True, room="study"
+        )
+        command = self.audio_daemon.build_ffmpeg_command(config)
+        self.assertEqual(command[:6], [
+            "ffmpeg", "-loglevel", "error", "-rtsp_transport", "tcp", "-i"
+        ])
+        self.assertEqual(command[6], "rtsp://example/study")
 
     def test_load_enabled_mics_rejects_missing_room(self):
         prefs = {
             "mics": [
                 {
-                    "source": "alsa://default",
+                    "source": "rtsp://example/study",
                     "label": "Desk",
                     "stt_enabled": True,
                 }
@@ -343,212 +393,6 @@ class AudioDaemonTests(unittest.TestCase):
         }
         sources = self.audio_daemon.load_enabled_mics(prefs)
         self.assertEqual(sources, [])
-
-    def test_parse_tcp_port_accepts_valid_range(self):
-        self.assertEqual(self.audio_daemon.parse_tcp_port(3333), 3333)
-        self.assertEqual(self.audio_daemon.parse_tcp_port("65535"), 65535)
-        self.assertIsNone(self.audio_daemon.parse_tcp_port(0))
-        self.assertIsNone(self.audio_daemon.parse_tcp_port(65536))
-
-    def _tcp_config(self):
-        return self.audio_daemon.AudioSourceConfig(
-            "tcp://voice-node.local:3333",
-            "Voice node",
-            24,
-            True,
-            room="study",
-            transport="tcp_pull",
-            host="voice-node.local",
-            port=3333,
-        )
-
-    def test_tcp_connect_sleep_and_handshake_are_outside_reservation_lock(self):
-        module = self.audio_daemon
-        config = self._tcp_config()
-        events = []
-
-        class TrackingLock:
-            held = False
-
-            def __enter__(self):
-                self.held = True
-                events.append("lock_enter")
-                return self
-
-            def __exit__(self, *_args):
-                self.held = False
-                events.append("lock_exit")
-
-        lock = TrackingLock()
-        module._tcp_pull_next_connect_at = 12.0
-
-        def sleep_fn(seconds):
-            self.assertFalse(lock.held)
-            events.append(("sleep", seconds))
-
-        def connector(address, timeout):
-            self.assertFalse(lock.held)
-            events.append(("connect", address, timeout))
-            return mock.Mock()
-
-        with mock.patch.object(module, "_TCP_PULL_CONNECT_LOCK", lock), \
-             mock.patch.object(module.time, "monotonic", return_value=10.0):
-            reservation = module.reserve_tcp_pull_connection(config)
-            module.open_tcp_pull_connection(
-                config,
-                reservation,
-                sleep_fn=sleep_fn,
-                connector=connector,
-            )
-
-        self.assertEqual(events[:2], ["lock_enter", "lock_exit"])
-        self.assertEqual(events[2], ("sleep", 2.0))
-        self.assertEqual(
-            events[3],
-            (
-                "connect",
-                ("voice-node.local", 3333),
-                module.TCP_PULL_CONNECT_TIMEOUT_SECONDS,
-            ),
-        )
-
-    def test_tcp_session_generation_increments_per_reservation(self):
-        config = self._tcp_config()
-        with mock.patch.object(self.audio_daemon.time, "monotonic", return_value=10.0):
-            first = self.audio_daemon.reserve_tcp_pull_connection(config)
-            second = self.audio_daemon.reserve_tcp_pull_connection(config)
-
-        self.assertEqual(first.generation, 1)
-        self.assertEqual(second.generation, 2)
-        self.assertGreaterEqual(second.connect_at, first.connect_at + 2.0)
-
-    def test_tcp_session_closes_before_retry_sleep(self):
-        module = self.audio_daemon
-        config = self._tcp_config()
-        events = []
-
-        class FakeSocket:
-            def settimeout(self, value):
-                events.append(("settimeout", value))
-
-            def close(self):
-                events.append("close")
-
-        def connector(_address, timeout):
-            events.append(("connect_timeout", timeout))
-            return FakeSocket()
-
-        def sleep_fn(seconds):
-            events.append(("sleep", seconds))
-
-        with mock.patch.object(
-            module.socket,
-            "create_connection",
-            side_effect=connector,
-        ), mock.patch.object(
-            module,
-            "new_vad",
-            return_value=(None, "fallback"),
-        ), mock.patch.object(
-            module,
-            "run_audio_stream_session",
-            return_value={"chunks": 1, "bytes": module.CHUNK_BYTES},
-        ), mock.patch.object(
-            module.time,
-            "monotonic",
-            return_value=100.0,
-        ), mock.patch.object(
-            module.random,
-            "random",
-            return_value=0.5,
-        ):
-            module.tcp_pull_worker(
-                config,
-                "token",
-                max_sessions=1,
-                sleep_fn=sleep_fn,
-            )
-
-        self.assertIn("close", events)
-        retry_sleep_index = max(
-            index
-            for index, event in enumerate(events)
-            if isinstance(event, tuple) and event[0] == "sleep"
-        )
-        self.assertLess(events.index("close"), retry_sleep_index)
-
-    def test_tcp_session_classifies_connect_timeout(self):
-        module = self.audio_daemon
-        config = self._tcp_config()
-        reservation = module.TcpPullReservation(generation=7, connect_at=0.0)
-
-        result = module.run_tcp_pull_session(
-            config,
-            "token",
-            reservation,
-            connector=mock.Mock(side_effect=module.socket.timeout("timed out")),
-        )
-
-        self.assertEqual(result.generation, 7)
-        self.assertEqual(result.reason, "connect_timeout")
-        self.assertEqual(result.stats, {"chunks": 0, "bytes": 0})
-
-    def test_tcp_retry_delay_is_exponential_capped_and_jittered(self):
-        module = self.audio_daemon
-        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=0.5), 1.0)
-        self.assertEqual(module.tcp_pull_retry_delay(2, random_value=0.5), 2.0)
-        self.assertEqual(module.tcp_pull_retry_delay(20, random_value=0.5), 30.0)
-        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=0.0), 0.75)
-        self.assertEqual(module.tcp_pull_retry_delay(1, random_value=1.0), 1.25)
-
-    def test_stream_session_finalizes_active_listen_on_exception(self):
-        # run_audio_stream_session が読み取りループ中の例外で終了しても、
-        # 未完了の active_listen capture を error 付きで finalize してから re-raise すること。
-        module = self.audio_daemon
-        config = self._tcp_config()
-
-        seeded = {
-            "request_id": "req1",
-            "source": "tcp://x",
-            "output_path": "/tmp/eha_test_o.wav",
-            "response_path": "/tmp/eha_test_r.json",
-            "request_path": "/tmp/eha_test_q.json",
-            "expected_bytes": 10 ** 9,
-            "buffer": bytearray(),
-        }
-
-        def fake_service(cfg, chunk, active_requests, last_scan_at):
-            active_requests.setdefault("req1", seeded)
-            return last_scan_at
-
-        calls = []
-
-        def fake_finalize(request, audio_bytes, error=None):
-            calls.append((request.get("request_id"), error))
-
-        reads = [b"\x00" * module.CHUNK_BYTES]
-
-        def read_chunk():
-            if reads:
-                return reads.pop(0)
-            raise RuntimeError("tcp read timeout")
-
-        with mock.patch.object(
-            module, "_service_active_listen_requests", side_effect=fake_service
-        ), mock.patch.object(
-            module, "_finalize_active_listen_capture", side_effect=fake_finalize
-        ), mock.patch.object(
-            module, "detect_voice", return_value=0.0
-        ):
-            with self.assertRaises(RuntimeError):
-                module.run_audio_stream_session(
-                    config, "token", read_chunk, None, "fallback"
-                )
-
-        self.assertTrue(
-            any(cid == "req1" and err is not None for cid, err in calls),
-            "active_listen capture should be finalized with error on exception",
-        )
 
     def test_audio_daemon_flock_rejects_second_instance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -612,7 +456,7 @@ class AudioDaemonTests(unittest.TestCase):
             )
         self.assertEqual(preferences, {"mics": [{"stt_enabled": True}]})
         self.assertEqual(sources, [config])
-        self.assertTrue(any("聴覚を無効" in call.args[0] for call in log_mock.call_args_list))
+        self.assertTrue(any("Hearing is disabled" in call.args[0] for call in log_mock.call_args_list))
 
     def test_load_runtime_settings_uses_latest_global_and_source_values(self):
         base_config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, False, room="study")
@@ -795,14 +639,14 @@ class AudioDaemonTests(unittest.TestCase):
             body_location_path = Path(tmpdir) / "body_location.json"
             belief_path = Path(tmpdir) / "location_belief.json"
             prefs_path.write_text(
-                json.dumps({"mics": [{"source": "default", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
+                json.dumps({"mics": [{"source": "rtsp://example/study", "label": "Desk", "room": "kitchen"}]}, ensure_ascii=False),
                 encoding="utf-8",
             )
             body_location_path.write_text(
                 json.dumps({"current_room": "study"}, ensure_ascii=False),
                 encoding="utf-8",
             )
-            config = self.audio_daemon.AudioSourceConfig("alsa://default", "Desk", 24, True, room="study")
+            config = self.audio_daemon.AudioSourceConfig("rtsp://example/study", "Desk", 24, True, room="study")
             with mock.patch.dict(os.environ, {
                 "EHA_PREFS_FILE": str(prefs_path),
                 "EHA_BODY_LOCATION_FILE": str(body_location_path),
