@@ -117,7 +117,7 @@ class SpeakTcpTests(unittest.TestCase):
         sent_data = []
         mock_sock.__enter__ = lambda s: s
         mock_sock.__exit__ = lambda s, *a: None
-        mock_sock.sendall.side_effect = lambda d: sent_data.append(d)
+        mock_sock.send.side_effect = lambda d: sent_data.append(bytes(d)) or len(d)
 
         prefs_path = self._write_prefs(prefs)
         try:
@@ -131,6 +131,48 @@ class SpeakTcpTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(sent_data, [pcm_data])
+
+    def test_tcp_send_timeout_scales_with_pcm_duration(self):
+        pcm_data = b"\x00" * (self.speak.PCM_BYTES_PER_SECOND * 20)
+
+        self.assertEqual(
+            self.speak._tcp_send_deadline_seconds(pcm_data),
+            20 + self.speak.TCP_SEND_DEADLINE_MARGIN_SECONDS,
+        )
+
+    def test_tcp_send_handles_partial_writes_and_uses_stall_timeout(self):
+        pcm_data = b"abcdef"
+        mock_sock = mock.MagicMock()
+        mock_sock.__enter__ = lambda s: s
+        mock_sock.__exit__ = lambda s, *a: None
+        mock_sock.send.side_effect = [2, 1, 3]
+
+        with mock.patch("socket.create_connection", return_value=mock_sock) as connect:
+            self.speak._send_pcm_to_tcp("192.168.1.100", 3334, pcm_data)
+
+        connect.assert_called_once_with(
+            ("192.168.1.100", 3334),
+            timeout=self.speak.TCP_CONNECT_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            [bytes(call.args[0]) for call in mock_sock.send.call_args_list],
+            [b"abcdef", b"cdef", b"def"],
+        )
+        self.assertTrue(mock_sock.settimeout.called)
+        self.assertTrue(all(
+            call.args[0] <= self.speak.TCP_SEND_STALL_TIMEOUT_SECONDS
+            for call in mock_sock.settimeout.call_args_list
+        ))
+
+    def test_tcp_send_rejects_closed_connection(self):
+        mock_sock = mock.MagicMock()
+        mock_sock.__enter__ = lambda s: s
+        mock_sock.__exit__ = lambda s, *a: None
+        mock_sock.send.return_value = 0
+
+        with mock.patch("socket.create_connection", return_value=mock_sock):
+            with self.assertRaisesRegex(ConnectionError, "connection closed"):
+                self.speak._send_pcm_to_tcp("192.168.1.100", 3334, b"pcm")
 
     def test_local_success_plays_to_sink(self):
         prefs = {

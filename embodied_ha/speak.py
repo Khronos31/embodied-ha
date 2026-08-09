@@ -9,6 +9,7 @@ import os
 import socket
 import stat
 import subprocess
+import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -26,6 +27,11 @@ MAX_PCM_BYTES = (
     PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH_BYTES * MAX_PLAYBACK_SECONDS
 )
 MAX_AUDIO_INPUT_BYTES = 128 * 1024 * 1024
+PCM_BYTES_PER_SECOND = PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_SAMPLE_WIDTH_BYTES
+TCP_CONNECT_TIMEOUT_SECONDS = 5.0
+TCP_SEND_STALL_TIMEOUT_SECONDS = 10.0
+TCP_SEND_DEADLINE_MARGIN_SECONDS = 15.0
+TCP_SEND_CHUNK_BYTES = 32 * 1024
 
 
 def get_ha_token():
@@ -259,9 +265,34 @@ def _pcm_bytes_from_file(audio_path: str) -> bytes:
     return raw_bytes
 
 
-def _send_pcm_to_tcp(host: str, port: int, pcm_bytes: bytes, timeout: float = 5) -> None:
-    with socket.create_connection((host, port), timeout=timeout) as sock:
-        sock.sendall(pcm_bytes)
+def _tcp_send_deadline_seconds(pcm_bytes: bytes) -> float:
+    """実時間でPCMを消費する受信機に十分な全体送信期限を返す。"""
+    playback_seconds = len(pcm_bytes) / PCM_BYTES_PER_SECOND
+    return playback_seconds + TCP_SEND_DEADLINE_MARGIN_SECONDS
+
+
+def _send_pcm_to_tcp(
+    host: str,
+    port: int,
+    pcm_bytes: bytes,
+    connect_timeout: float = TCP_CONNECT_TIMEOUT_SECONDS,
+) -> None:
+    """PCMをTCPへ送る。接続、無進捗、音声長連動の期限を別々に扱う。"""
+    send_deadline = time.monotonic() + _tcp_send_deadline_seconds(pcm_bytes)
+    with socket.create_connection((host, port), timeout=connect_timeout) as sock:
+        remaining_pcm = memoryview(pcm_bytes)
+        while remaining_pcm:
+            remaining_seconds = send_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise TimeoutError("PCM send deadline exceeded")
+
+            # send()をチャンク単位で呼び、進捗が止まった場合は音声長に関係なく
+            # 早期に検出する。部分送信は次のループで継続する。
+            sock.settimeout(min(TCP_SEND_STALL_TIMEOUT_SECONDS, remaining_seconds))
+            sent = sock.send(remaining_pcm[:TCP_SEND_CHUNK_BYTES])
+            if sent == 0:
+                raise ConnectionError("TCP speaker connection closed during PCM send")
+            remaining_pcm = remaining_pcm[sent:]
 
 
 def _boost_pcm_for_local_playback(pcm_bytes: bytes, sample_rate: int,
@@ -355,7 +386,7 @@ def play_pcm_file(room, pcm_path, host=""):
             return False
 
         try:
-            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=3)
+            _send_pcm_to_tcp(target_host, port, pcm_bytes, connect_timeout=3)
             print(f"[speak] tcp:{room} PCM OK sent={len(pcm_bytes)}B ({target_host}:{port})")
             return True
         except Exception as exc:
@@ -480,7 +511,7 @@ def speak(room, message, host=""):
             return False
 
         try:
-            _send_pcm_to_tcp(target_host, port, pcm_bytes, timeout=5)
+            _send_pcm_to_tcp(target_host, port, pcm_bytes)
             print(f"[speak] tcp:{room} OK sent={len(pcm_bytes)}B ({target_host}:{port})")
             return True
         except Exception as exc:
