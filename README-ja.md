@@ -170,7 +170,7 @@ action:
 | `extra_context.conf` | TV番組ガイドやローカルAPI仕様などの追加コンテキスト（1行1コマンド） | Web UI 設定画面 or File Editor |
 | `home_policy.md` | 家のルール・方針（エージェントが操作判断の拠り所にする） | Web UI 設定画面 or File Editor |
 
-スピーカーは 3 タイプに対応: **HA エンティティ（TTS）** / **TCP 生ストリーム**（ESP32 自作スピーカー等） / **本体内蔵**（アドオンが動くマシンの PulseAudio 出力）。
+マイクは **RTSP ストリーム**から読み取り、スピーカーは Home Assistant の **`media_player` エンティティ**を使用します。ネットワーク音声ノードは、`esphome-audio-node`などでHome Assistant/go2rtcへ別途公開できるため、Embodied HAは安定したインターフェースだけを利用します。
 
 ### 欲求システム
 

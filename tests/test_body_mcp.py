@@ -130,13 +130,14 @@ class BodyMcpTests(unittest.TestCase):
         self.assertEqual(rows[0]["projection_mode"], "enter_remote")
         self.assertEqual(rows[0]["action_cost"], 0.35)
 
-    def test_enter_cyberspace_resolves_tcp_room_from_legacy_audio_source(self):
+    def test_enter_cyberspace_resolves_room_from_rtsp_microphone(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)
             prefs_path = Path(tmpdir) / "preferences.json"
             prefs_path.write_text(json.dumps({
-                "audio_sources": [{
-                    "source": "tcp://voice-node.local:3333",
+                "mics": [{
+                    "entity": "study_microphone",
+                    "source": "rtsp://go2rtc:8554/study_microphone",
                     "room": "study",
                 }],
             }), encoding="utf-8")
@@ -150,20 +151,19 @@ class BodyMcpTests(unittest.TestCase):
                 "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
             }, clear=False):
                 payload = self._json(self.body_mcp.enter_cyberspace({
-                    "entity": "tcp://voice-node.local:3333",
+                    "entity": "study_microphone",
                     "reason": "声を聞く",
                 }))
         self.assertEqual(payload["state"]["projected_room"], "study")
-        self.assertEqual(payload["state"]["current_entity"], "tcp://voice-node.local:3333")
+        self.assertEqual(payload["state"]["current_entity"], "study_microphone")
 
-    def test_enter_cyberspace_resolves_tcp_room_from_speaker_host(self):
+    def test_enter_cyberspace_resolves_room_from_ha_speaker_entity(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             graph_path = self._write_graph(tmpdir)
             prefs_path = Path(tmpdir) / "preferences.json"
             prefs_path.write_text(json.dumps({
                 "speakers": [{
-                    "host": "voice-node.local",
-                    "port": 3334,
+                    "entity": "media_player.study",
                     "room": "study",
                 }],
             }), encoding="utf-8")
@@ -177,7 +177,7 @@ class BodyMcpTests(unittest.TestCase):
                 "EHA_BODY_LOCATION_LOG_FILE": str(log_path),
             }, clear=False):
                 payload = self._json(self.body_mcp.enter_cyberspace({
-                    "entity": "tcp://voice-node.local:3333",
+                    "entity": "media_player.study",
                 }))
         self.assertEqual(payload["state"]["projected_room"], "study")
 

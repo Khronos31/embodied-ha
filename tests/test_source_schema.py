@@ -79,12 +79,12 @@ class SourceSchemaMigrationTests(unittest.TestCase):
             migration.classify_source("camera", {"entity": "camera.home_pc_screenshot", "source": "camera.home_pc_screenshot"}),
             "video_media",
         )
-        # rtsp:// の音声は mic_only を含んでもメディア（キャプチャ箱/AVフィード）
+        # rtsp:// の音声は現在のマイク入力契約なのでセンサー
         self.assertEqual(
             migration.classify_source("audio", {"entity": "mic_tv", "source": "rtsp://192.168.1.130:8558/mic_only"}),
-            "audio_media",
+            "mics",
         )
-        # 実マイク（alsa/tcp）はセンサー側のまま
+        # 旧 transport も消失を避けてセンサー側へ保持し、移行時に警告する
         self.assertEqual(migration.classify_source("audio", {"source": "alsa://default"}), "mics")
         self.assertEqual(migration.classify_source("audio", {"source": "tcp://192.168.1.153:3333"}), "mics")
 
@@ -130,6 +130,7 @@ class SourceSchemaMigrationTests(unittest.TestCase):
             self.assertIn("audio_media (1)", report)
             self.assertIn("summary: cameras=2, mics=3, video_media=1, audio_media=1", report)
             self.assertIn("[warn]", report)
+            self.assertIn("unsupported microphone transport", report)
 
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):

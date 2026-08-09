@@ -4,11 +4,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS_PATH = ROOT / "embodied_ha" / "web" / "app.js"
+INDEX_HTML_PATH = ROOT / "embodied_ha" / "web" / "index.html"
 
 class WebUITests(unittest.TestCase):
     def setUp(self):
         self.assertTrue(APP_JS_PATH.exists(), f"{APP_JS_PATH} does not exist")
         self.app_js = APP_JS_PATH.read_text(encoding="utf-8")
+        self.index_html = INDEX_HTML_PATH.read_text(encoding="utf-8")
+
+    def test_tts_settings_use_ha_entity_without_voicevox_overrides(self):
+        self.assertIn('id="setting-tts-entity"', self.index_html)
+        for removed_id in (
+            "setting-tts-provider",
+            "setting-tts-speaker",
+            "setting-tts-volume",
+            "setting-tts-pitch",
+            "setting-tts-speed",
+        ):
+            self.assertNotIn(f'id="{removed_id}"', self.index_html)
+
+        self.assertIn("tts_entity,", self.app_js)
+        self.assertIn("tts_options: _ttsOptions", self.app_js)
+        self.assertNotIn("/api/tts/voicevox/speakers", self.app_js)
 
     def test_badge_helpers_for_chat_and_voice(self):
         """getBadgeText と getBadgeClass が chat と voice に対して正しいラベル/クラスを返し、自律モードに対しては空を返すこと"""

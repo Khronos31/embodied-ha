@@ -172,7 +172,7 @@ All configuration files are persisted under `/config/embodied-ha/` and can also 
 | `extra_context.conf` | Personal extra context (one shell command per line) | Web UI settings screen or File Editor |
 | `home_policy.md` | House rules and policies the agent consults when deciding on actions | Web UI settings screen or File Editor |
 
-Speakers come in 3 types: **HA entity (TTS)** / **raw TCP stream** (DIY ESP32 speakers, etc.) / **built-in** (PulseAudio output of the machine running the add-on).
+Microphones are read from **RTSP streams**, and speakers are **Home Assistant `media_player` entities**. Network audio nodes can be exposed to Home Assistant/go2rtc separately (for example with `esphome-audio-node`) so Embodied HA only consumes these stable interfaces.
 
 ### Desire system
 
