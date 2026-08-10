@@ -7,29 +7,30 @@
   - embodied_ha/chat/set        … 会話(chat.py)を起動。ペイロードがユーザーの発言
   - embodied_ha/loop/trigger … 自律ループ(loop.py)を手動起動
 """
+import datetime as dt
+import fcntl
+import json
 import os
+import random
 import subprocess
 import threading
 import time
-import json
-import random
-import fcntl
 import urllib.request
-import datetime as dt
 
-import body_state
 import anomaly_state
-import desire_state
 import antigravity_setup
+import body_state
 import camera_history
 import claude_setup
 import codex_setup
+import desire_state
 import harness_state
 import harness_status
 import invoke_failure
-from state_utils import load_prefs
+import wake_routing
 from instance_identity import MQTT_PREFIX
 from path_env import build_tools_path
+from state_utils import load_prefs
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
@@ -53,6 +54,7 @@ MQTT_PASS = os.environ.get("MQTT_PASS", "")
 # ロックを永久に握りっぱなしにしないための上限。loopはClaude複数回＋
 # ロールアップ/daybookで長くなりうるので余裕を持たせる。
 CHAT_TIMEOUT = 300
+CHAT_LOCK_WAIT_SECONDS = CHAT_TIMEOUT
 LOOP_TIMEOUT = 600
 LOOP_NO_SUCCESS_ALERT_SECONDS = 4 * 60 * 60
 CHILD_WATCHDOG_ALERT_THRESHOLD = 5
@@ -72,6 +74,7 @@ _desires_lock = threading.Lock()
 _body_lock = threading.Lock()
 _runtime_lock = threading.Lock()
 _runtime_started = threading.Event()
+_wake_replay_lock = threading.Lock()
 _BODY_STATE_FILE = os.path.join(os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR), "body_state.json")
 _ANOMALY_STATE_FILE = os.environ.get("EHA_ANOMALY_STATE_FILE", os.path.join(_LOG_DIR, "anomaly_state.json"))
 _setup_wait_notification_last_attempt = None
@@ -624,12 +627,16 @@ def on_loop_trigger(payload):
     run_loop(reason, mode="observe", trigger_kind=trigger_kind)
 
 
-def run_chat(message, source="chat"):
+def run_chat(message, source="chat", *, voice_room="", wait_for_lock=False):
     # MQTT text エンティティの state_topic に echo して HA の表示を同期
     mqtt_pub(f"{MQTT_PREFIX}/chat/state", message)
-    if not _chat_lock.acquire(blocking=False):
+    if wait_for_lock:
+        acquired = _chat_lock.acquire(timeout=CHAT_LOCK_WAIT_SECONDS)
+    else:
+        acquired = _chat_lock.acquire(blocking=False)
+    if not acquired:
         print("[daemon] chat already running, skip", flush=True)
-        return
+        return None
     start = time.perf_counter()
     success = False
     try:
@@ -655,6 +662,8 @@ def run_chat(message, source="chat"):
             "PATH": ENV_PATH,
             "EHA_BODY_STATE": _body_state_json(body_state_snapshot),
         }
+        if voice_room:
+            env["EHA_VOICE_USER_ROOM"] = voice_room
         if active_desires:
             env["ACTIVE_DESIRES"] = json.dumps(active_desires, ensure_ascii=False)
         try:
@@ -669,6 +678,7 @@ def run_chat(message, source="chat"):
         except Exception as e:
             print(f"[daemon] body state finish error (chat): {e}", flush=True)
         _chat_lock.release()
+    return success
 
 def mqtt_pub(topic, payload):
     """MQTT トピックに1メッセージ publish（MQTT_HOST 未設定時はno-op）。"""
@@ -685,27 +695,62 @@ def mqtt_pub(topic, payload):
 
 
 def on_chat_trigger(payload):
-    message = (payload or "").strip()
-    source = "chat"
-    if not message:
-        return
     try:
-        parsed = json.loads(message)
-    except Exception:
-        parsed = None
-    if isinstance(parsed, dict):
-        message = str(parsed.get("message", "")).strip()
-        source = str(parsed.get("source", "chat")).strip() or "chat"
-    if not message:
+        trigger = wake_routing.parse_chat_trigger(payload)
+    except wake_routing.TriggerError as exc:
+        print(f"[daemon] chat trigger rejected reason={exc.reason}", flush=True)
+        return
+    if trigger is None:
         print("[daemon] chat trigger missing message, skip", flush=True)
         return
-    run_chat(message, source=source)
+    if not trigger.versioned:
+        run_chat(trigger.message, source=trigger.source)
+        return
+
+    data_dir = os.environ.get("EHA_DATA_DIR", _SCRIPT_DIR)
+    ledger = wake_routing.RequestReplayLedger(
+        os.path.join(data_dir, "wake_request_ids.json"),
+        lock=_wake_replay_lock,
+    )
+    try:
+        claimed = ledger.claim(trigger.request_id)
+    except wake_routing.ReplayLedgerError as exc:
+        print(f"[daemon] wake trigger rejected reason={exc}", flush=True)
+        return
+    if not claimed:
+        print(f"[daemon] wake trigger rejected reason=duplicate request_id={trigger.request_id}", flush=True)
+        return
+    try:
+        wake_routing.update_location_belief(data_dir, trigger)
+    except OSError:
+        print(
+            f"[daemon] wake trigger rejected reason=location_belief_write_failed "
+            f"request_id={trigger.request_id}",
+            flush=True,
+        )
+        return
+    chat_result = run_chat(
+        trigger.message,
+        source="voice",
+        voice_room=trigger.room,
+        wait_for_lock=True,
+    )
+    if chat_result is None:
+        print(
+            f"[daemon] wake trigger failed reason=chat_busy_timeout request_id={trigger.request_id}",
+            flush=True,
+        )
+    elif not chat_result:
+        print(
+            f"[daemon] wake trigger failed reason=chat_execution_failed request_id={trigger.request_id}",
+            flush=True,
+        )
 
 
-def mqtt_listen(topic, handler, label):
+def mqtt_listen(topic, handler, label, *, threaded=True, qos=0):
     """mosquitto_sub でトピックを永続購読。切断時は5秒後に再接続。"""
     cmd = ["mosquitto_sub", "-h", MQTT_HOST, "-p", str(MQTT_PORT),
-           "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic]
+           "-u", MQTT_USER, "-P", MQTT_PASS, "-t", topic, "-q", str(qos)]
     while True:
         proc = None
         try:
@@ -714,7 +759,7 @@ def mqtt_listen(topic, handler, label):
             for line in proc.stdout:
                 line = line.strip()
                 if line:
-                    threading.Thread(target=handler, args=(line,), daemon=True).start()
+                    _dispatch_mqtt_line(handler, line, threaded=threaded)
             proc.wait()
         except Exception as e:
             print(f"[daemon] {label} mqtt error: {e}", flush=True)
@@ -729,6 +774,13 @@ def mqtt_listen(topic, handler, label):
                     except Exception:
                         pass
         time.sleep(5)
+
+
+def _dispatch_mqtt_line(handler, line, *, threaded):
+    if threaded:
+        threading.Thread(target=handler, args=(line,), daemon=True).start()
+    else:
+        handler(line)
 
 
 def _schedule_period(schedule: dict | None = None, *, hour: int | None = None) -> str:
@@ -934,6 +986,7 @@ def start_runtime_threads() -> bool:
             threading.Thread(
                 target=mqtt_listen,
                 args=(f"{MQTT_PREFIX}/chat/set", on_chat_trigger, "mqtt-chat"),
+                kwargs={"threaded": False, "qos": 1},
                 daemon=True,
             ).start()
             threading.Thread(

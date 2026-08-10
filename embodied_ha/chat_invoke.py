@@ -34,7 +34,7 @@ def build_claude_env(environ=None):
     }
 
 
-def resolve_voice_user_room(chat_source, data_dir, prefs_file):
+def resolve_voice_user_room(chat_source, data_dir, prefs_file, user_room_override=""):
     """voiceモード時、location_belief.jsonとpreferences.jsonからユーザーの部屋とスピーカーを解決する。
 
     chat.sh:266-290と同一ロジック。voice以外は空文字列のペアを返す。
@@ -44,12 +44,16 @@ def resolve_voice_user_room(chat_source, data_dir, prefs_file):
     if chat_source != "voice":
         return user_room, user_room_speaker
 
-    try:
-        with open(os.path.join(data_dir, "location_belief.json"), encoding="utf-8") as fh:
-            belief = json.load(fh)
-        user_room = (belief.get("room") or "").strip()
-    except Exception:
-        pass
+    override = str(user_room_override or "").strip()
+    if override and len(override) <= 128 and not any(ord(character) < 32 for character in override):
+        user_room = override
+    else:
+        try:
+            with open(os.path.join(data_dir, "location_belief.json"), encoding="utf-8") as fh:
+                belief = json.load(fh)
+            user_room = (belief.get("room") or "").strip()
+        except Exception:
+            pass
 
     if user_room and prefs_file:
         try:

@@ -190,7 +190,12 @@ def _run_chat_turn(cfg, chat_source, user_msg, resident, timestamp,
     active_desires_raw = cfg.get("ACTIVE_DESIRES", "")
     inner_voice = chat_invoke.build_inner_voice(active_desires_raw)
     body_narrative = chat_invoke.build_body_narrative(cfg.get("EHA_BODY_STATE", "") or "{}")
-    user_room, user_room_speaker = chat_invoke.resolve_voice_user_room(chat_source, data_dir, prefs_file)
+    user_room, user_room_speaker = chat_invoke.resolve_voice_user_room(
+        chat_source,
+        data_dir,
+        prefs_file,
+        cfg.get("EHA_VOICE_USER_ROOM", ""),
+    )
 
     prompt = chat_invoke.build_chat_prompt(
         character=character,
