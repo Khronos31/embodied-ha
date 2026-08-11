@@ -80,6 +80,26 @@ class TtsMediaSourceUriTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tts_entity"):
             self.speak._tts_media_source_uri("voicevox_tts", "hello")
 
+    def test_adds_only_language_and_voice(self):
+        uri = self.speak._tts_media_source_uri(
+            "tts.google_ai_tts", "hello", "ja-JP", "zephyr"
+        )
+        self.assertEqual(
+            parse_qs(urlparse(uri).query),
+            {
+                "message": ["hello"],
+                "cache": ["false"],
+                "language": ["ja-JP"],
+                "voice": ["zephyr"],
+            },
+        )
+
+    def test_ignores_voice_without_language(self):
+        uri = self.speak._tts_media_source_uri(
+            "tts.google_ai_tts", "hello", "", "zephyr"
+        )
+        self.assertNotIn("voice", parse_qs(urlparse(uri).query))
+
 
 class SpeakGeneralTests(unittest.TestCase):
     _ENV = {
@@ -172,6 +192,81 @@ class SpeakGeneralTests(unittest.TestCase):
                 post.assert_not_called()
         finally:
             os.unlink(prefs_path)
+
+    def test_tts_uses_selection_for_active_entity_only(self):
+        prefs = {
+            "tts_entity": "tts.google_ai_tts",
+            "tts_selections": {
+                "tts.google_ai_tts": {"language": "ja-JP", "voice": "zephyr"},
+                "tts.home_assistant_cloud": {
+                    "language": "en-US",
+                    "voice": "AvaMultilingualNeural",
+                },
+            },
+            "speakers": [{"room": "study", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                self.speak,
+                "curl_post",
+                side_effect=lambda _url, payload, _token: payloads.append(
+                    json.loads(payload)
+                ) or True,
+            ):
+                self.assertTrue(self.speak.speak("study", "こんにちは"))
+        finally:
+            os.unlink(prefs_path)
+        query = parse_qs(urlparse(payloads[0]["media"]["media_content_id"]).query)
+        self.assertEqual(query["language"], ["ja-JP"])
+        self.assertEqual(query["voice"], ["zephyr"])
+        self.assertNotIn("en-US", str(query))
+
+    def test_option_failure_retries_exact_legacy_uri_once(self):
+        prefs = {
+            "tts_entity": "tts.google_ai_tts",
+            "tts_selections": {
+                "tts.google_ai_tts": {"language": "ja-JP", "voice": "stale"}
+            },
+            "speakers": [{"room": "study", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        payloads = []
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                self.speak,
+                "curl_post",
+                side_effect=lambda _url, payload, _token: payloads.append(
+                    json.loads(payload)
+                ) or len(payloads) == 2,
+            ):
+                self.assertTrue(self.speak.speak("study", "hello"))
+        finally:
+            os.unlink(prefs_path)
+        self.assertEqual(len(payloads), 2)
+        first = parse_qs(urlparse(payloads[0]["media"]["media_content_id"]).query)
+        second = parse_qs(urlparse(payloads[1]["media"]["media_content_id"]).query)
+        self.assertEqual(first["voice"], ["stale"])
+        self.assertEqual(second, {"message": ["hello"], "cache": ["false"]})
+
+    def test_default_uri_failure_is_not_retried(self):
+        prefs = {
+            "tts_entity": "tts.voicevox_tts_aru",
+            "speakers": [{"room": "study", "entity": "media_player.study"}],
+        }
+        prefs_path = self._write_prefs(prefs)
+        try:
+            env = {**self._ENV, "EHA_PREFS_FILE": prefs_path}
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                self.speak, "curl_post", return_value=False
+            ) as post:
+                self.assertFalse(self.speak.speak("study", "hello"))
+        finally:
+            os.unlink(prefs_path)
+        post.assert_called_once()
 
 
 class AudioFileValidationTests(unittest.TestCase):

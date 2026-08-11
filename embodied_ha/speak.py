@@ -61,17 +61,45 @@ def _find_speaker(speakers, room: str) -> dict:
     return {}
 
 
-def _tts_media_source_uri(tts_entity: str, message: str) -> str:
+def _tts_media_source_uri(
+    tts_entity: str,
+    message: str,
+    language: str = "",
+    voice: str = "",
+) -> str:
     """Build a provider-neutral HA TTS Media Source URI.
 
-    Voice, language, speed, pitch, and other provider-specific settings belong
-    to the selected Home Assistant TTS entity.  Embodied HA only supplies the
-    utterance and disables HA's persistent TTS cache.
+    Embodied HA may select only a language and a language-specific voice.
+    Every other provider-specific setting belongs to the selected Home
+    Assistant TTS entity.
     """
     if not tts_entity.startswith("tts."):
         raise ValueError("tts_entity must be a tts.* entity")
-    query = urlencode({"message": message, "cache": "false"})
+    params = {"message": message, "cache": "false"}
+    language = str(language or "").strip()
+    voice = str(voice or "").strip()
+    if language:
+        params["language"] = language
+        if voice:
+            params["voice"] = voice
+    query = urlencode(params)
     return f"media-source://tts/{tts_entity}?{query}"
+
+
+def _tts_selection(prefs: dict, tts_entity: str) -> tuple[str, str]:
+    """Return the language and voice stored for the active TTS entity only."""
+
+    selections = prefs.get("tts_selections")
+    if not isinstance(selections, dict):
+        return "", ""
+    selection = selections.get(tts_entity)
+    if not isinstance(selection, dict):
+        return "", ""
+    language = selection.get("language")
+    voice = selection.get("voice")
+    language = language.strip() if isinstance(language, str) else ""
+    voice = voice.strip() if language and isinstance(voice, str) else ""
+    return language, voice
 
 
 def _convert_audio_file_to_pcm(audio_path: str) -> bytes:
@@ -280,8 +308,9 @@ def speak(room, message):
         print(f"[speak] speaker '{room}' の設定が無効です: {exc}", file=sys.stderr)
         return False
     tts_entity = str(prefs.get("tts_entity") or "").strip()
+    language, voice = _tts_selection(prefs, tts_entity)
     try:
-        media_uri = _tts_media_source_uri(tts_entity, message)
+        media_uri = _tts_media_source_uri(tts_entity, message, language, voice)
     except ValueError as exc:
         print(f"[speak] tts speaker '{room}': {exc}", file=sys.stderr)
         return False
@@ -295,6 +324,21 @@ def speak(room, message):
         },
     }, ensure_ascii=False)
     ok = curl_post(f"{ha_url}/services/media_player/play_media", payload, ha_token)
+    if not ok and (language or voice):
+        print(
+            f"[speak] TTS options failed for {tts_entity}; retrying entity defaults",
+            file=sys.stderr,
+        )
+        payload_data = json.loads(payload)
+        payload_data["media"]["media_content_id"] = _tts_media_source_uri(
+            tts_entity,
+            message,
+        )
+        ok = curl_post(
+            f"{ha_url}/services/media_player/play_media",
+            json.dumps(payload_data, ensure_ascii=False),
+            ha_token,
+        )
     print(f"[speak] TTS:{room} {'OK' if ok else 'NG'}")
     return ok
 

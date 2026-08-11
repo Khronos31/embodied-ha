@@ -67,6 +67,68 @@ class PreferencesEndpointTests(unittest.TestCase):
                         invalid.do_PUT()
                     self.assertEqual(invalid.send_json.call_args.args[1], 400)
 
+    def test_tts_info_endpoint_proxies_websocket_discovery(self):
+        handler = object.__new__(server.Handler)
+        handler.path = "/api/tts-info?provider=tts.google_ai_tts&language=ja-JP"
+        handler.headers = {}
+        handler.send_json = mock.Mock()
+        result = {
+            "languages": ["ja-JP"],
+            "voices": [{"voice_id": "zephyr", "name": "Zephyr"}],
+        }
+        with mock.patch.object(
+            server.tts_discovery, "discover_tts_options", return_value=result
+        ) as discover:
+            handler.do_GET()
+        handler.send_json.assert_called_once_with(result)
+        discover.assert_called_once_with(
+            server.HA_URL,
+            server.HA_TOKEN,
+            "tts.google_ai_tts",
+            "ja-JP",
+        )
+
+    def test_tts_info_endpoint_rejects_non_tts_provider(self):
+        handler = object.__new__(server.Handler)
+        handler.path = "/api/tts-info?provider=not_tts"
+        handler.headers = {}
+        handler.send_json = mock.Mock()
+        with mock.patch.object(
+            server.tts_discovery, "discover_tts_options"
+        ) as discover:
+            handler.do_GET()
+        self.assertEqual(handler.send_json.call_args.args[1], 400)
+        discover.assert_not_called()
+
+    def test_tts_selections_accept_only_language_and_voice(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefs_file = Path(temp) / "preferences.json"
+            prefs_file.write_text('{"keep": true}', encoding="utf-8")
+            valid = self._handler({
+                "tts_entity": "tts.google_ai_tts",
+                "tts_selections": {
+                    "tts.google_ai_tts": {
+                        "language": "ja-JP",
+                        "voice": "zephyr",
+                    }
+                },
+            })
+            with mock.patch.object(server, "PREFS_FILE", str(prefs_file)):
+                valid.do_PUT()
+            self.assertEqual(valid.send_json.call_args.args[0], {"ok": True})
+
+            for invalid_value in (
+                {"tts.google_ai_tts": {"speed": "fast"}},
+                {"not_tts": {"language": "ja-JP"}},
+                {"tts.google_ai_tts": {"language": ""}},
+                [],
+            ):
+                with self.subTest(value=invalid_value):
+                    invalid = self._handler({"tts_selections": invalid_value})
+                    with mock.patch.object(server, "PREFS_FILE", str(prefs_file)):
+                        invalid.do_PUT()
+                    self.assertEqual(invalid.send_json.call_args.args[1], 400)
+
 
 if __name__ == "__main__":
     unittest.main()

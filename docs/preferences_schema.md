@@ -18,16 +18,6 @@
 
 ---
 
-### `wake_words`
-
-| 型 | デフォルト |
-|---|---|
-| array of string | `[]` |
-
-ウェイクワードの一覧です。`audio_daemon.py` が参照します。
-
----
-
 ### `tts_entity`
 
 | 型 | デフォルト |
@@ -35,9 +25,39 @@
 | string | `"tts.home_assistant_cloud"` 例 |
 
 グローバルのHA TTSエンティティです。すべての`speakers`に対する通常読み上げに使います。
-話者・言語・速度・音量などはHome Assistant側のTTSエンティティ設定を使用し、Embodied HAからは上書きしません。
+対応情報を公開するTTS統合では、`tts_selections`で言語・音声だけを任意指定できます。
+速度・音量・ピッチ・感情など、それ以外のプロバイダー固有オプションは今後もEmbodied HAでは扱わず、
+Home Assistant側のTTSエンティティ設定を使用します。
 既存ファイルに残る旧`tts_options`は互換データとして保持されることがありますが、通常読み上げでは使用されません。
 VOICEVOX Song用の`sing_speaker`は別機能です。
+
+---
+
+### `tts_selections`
+
+| 型 | デフォルト |
+|---|---|
+| object | `{}` |
+
+TTSエンティティごとの任意の言語・音声選択です。Web UIはHome Assistantが公開する対応言語と、
+選択した言語に対応する音声から候補を動的に生成します。音声一覧を公開しない統合では`voice`を指定せず、
+HA側のエンティティ設定を使います。
+
+```json
+{
+  "tts_selections": {
+    "tts.home_assistant_cloud": {
+      "language": "ja-JP",
+      "voice": "ja-JP-NanamiNeural"
+    },
+    "tts.voicevox_tts_sample": {
+      "language": "ja-JP"
+    }
+  }
+}
+```
+
+保存できるキーは`language`と`voice`だけです。エンティティを切り替えても各選択は個別に保持されます。
 
 ---
 
@@ -47,7 +67,7 @@ VOICEVOX Song用の`sing_speaker`は別機能です。
 |---|---|
 | string | `"stt.home_assistant_cloud"` 例 |
 
-音声認識プロバイダーです。
+`listen`、`use_device_microphone`、音声チャットなどの能動聴取で使う音声認識プロバイダーです。
 
 ---
 
@@ -57,7 +77,7 @@ VOICEVOX Song用の`sing_speaker`は別機能です。
 |---|---|
 | string | `"ja-JP"` 例 |
 
-STT の言語コードです。
+能動聴取で使う STT の言語コードです。
 
 ---
 
@@ -99,7 +119,7 @@ STT の言語コードです。
 |---|---|
 | array of object | `[]` |
 
-耳として使うマイク一覧です。侵入が必要な身体的知覚で、`audio-mcp` の `listen` と `use_device_microphone`、`audio_daemon.py` が参照します。
+耳として使うマイク一覧です。侵入が必要な身体的知覚で、`audio-mcp` の `listen` と `use_device_microphone` が参照します。
 
 各要素の主なフィールド:
 
@@ -109,10 +129,14 @@ STT の言語コードです。
 | `source` | string | ○ | `rtsp://...` の音声ストリーム |
 | `room` | string | ○ | 所在部屋 |
 | `label` | string | ○ | 表示名 |
-| `stt_enabled` | boolean | — | 常時 STT を有効にするか |
 | `note` | string | — | 補足 |
 
-`stt_enabled: true` の `mics` は `audio_daemon.py` の監視対象になります。旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。旧 `alsa://` / `tcp://` 項目は消失防止のため残りますが、起動ログで移行対象として通知され、RTSPへ置き換えるまで使用されません。
+旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。旧 `alsa://` / `tcp://` 項目は消失防止のため残りますが、起動ログで移行対象として通知され、RTSPへ置き換えるまで使用されません。
+
+内蔵の常時 STT とウェイクワード検出は廃止されました。起動時の移行でトップレベルの
+`wake_words` / `wake_ack` と、各マイクの `stt_enabled` / `stt_retention_hours` /
+`wake_word_enabled` / `background_hearing_enabled` をバックアップ後に削除します。
+音声による呼び出しには、RTSP Assist GatewayなどからMQTT chat契約へ接続する外部経路を利用してください。
 
 ---
 

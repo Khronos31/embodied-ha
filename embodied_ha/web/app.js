@@ -19,6 +19,36 @@ let characterData = "";
 let extraContextData = "";
 let homePolicyData = "";
 let characterName = 'Claude';
+let ttsSelectionsDraft = {};
+let activeTtsEntity = '';
+let ttsLoadGeneration = 0;
+
+const mockTtsCatalog = {
+    "tts.home_assistant_cloud": {
+        languages: ["ja-JP", "en-US"],
+        voices: {
+            "ja-JP": [
+                { voice_id: "ja-JP-AoiNeural", name: "Aoi" },
+                { voice_id: "ja-JP-NanamiNeural", name: "Nanami" }
+            ],
+            "en-US": [{ voice_id: "en-US-AvaMultilingualNeural", name: "Ava" }]
+        }
+    },
+    "tts.google_ai_tts": {
+        languages: ["ja-JP", "en-US"],
+        voices: {
+            "ja-JP": [
+                { voice_id: "zephyr", name: "Zephyr (Bright)" },
+                { voice_id: "kore", name: "Kore (Firm)" }
+            ],
+            "en-US": [{ voice_id: "puck", name: "Puck (Upbeat)" }]
+        }
+    },
+    "tts.voicevox_tts_sample": {
+        languages: ["ja-JP", "en"],
+        voices: {}
+    }
+};
 
 // AI Lounge State
 let aiLoungeTimer = null;
@@ -149,6 +179,32 @@ document.addEventListener('DOMContentLoaded', () => {
         if (langError)   langError.classList.remove('visible');
         if (langSel)     langSel.classList.add('stt-loading');
         await loadSttLanguages(this.value.trim());
+    });
+    document.getElementById('setting-tts-entity')?.addEventListener('change', async function() {
+        activeTtsEntity = this.value.trim();
+        await loadTtsConfiguration(activeTtsEntity);
+    });
+    document.getElementById('setting-tts-language')?.addEventListener('change', async function() {
+        const generation = ++ttsLoadGeneration;
+        const language = this.value.trim();
+        const selection = ttsSelectionsDraft[activeTtsEntity] || {};
+        if (language) selection.language = language;
+        else delete selection.language;
+        delete selection.voice;
+        if (activeTtsEntity && Object.keys(selection).length) {
+            ttsSelectionsDraft[activeTtsEntity] = selection;
+        } else {
+            delete ttsSelectionsDraft[activeTtsEntity];
+        }
+        await loadTtsVoices(activeTtsEntity, language, '', generation);
+    });
+    document.getElementById('setting-tts-voice')?.addEventListener('change', function() {
+        if (!activeTtsEntity) return;
+        const selection = ttsSelectionsDraft[activeTtsEntity] || {};
+        const voice = this.value.trim();
+        if (voice && selection.language) selection.voice = voice;
+        else delete selection.voice;
+        ttsSelectionsDraft[activeTtsEntity] = selection;
     });
 });
 
@@ -1350,21 +1406,13 @@ async function fetchSettings() {
                         source: "rtsp://localhost:8554/study_mic",
                         label: "モックマイク",
                         room: "study",
-                        note: "RTSP音声ストリーム",
-                        stt_enabled: true,
-                        stt_retention_hours: 24,
-                        wake_word_enabled: true,
-                        background_hearing_enabled: true
+                        note: "RTSP音声ストリーム"
                     },
                     {
                         source: "rtsp://localhost:8554/kitchen_mic",
                         label: "モックキッチンマイク",
                         room: "kitchen",
-                        note: "RTSP常時計測ストリーム",
-                        stt_enabled: true,
-                        stt_retention_hours: 24,
-                        wake_word_enabled: false,
-                        background_hearing_enabled: true
+                        note: "RTSP音声ストリーム"
                     }
                 ],
                 video_media: [
@@ -1387,6 +1435,12 @@ async function fetchSettings() {
                 ],
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
+                tts_selections: {
+                    "tts.home_assistant_cloud": {
+                        language: "ja-JP",
+                        voice: "ja-JP-NanamiNeural"
+                    }
+                },
                 speakers: {
                     study: { type: "tts", entity: "media_player.example_speaker" }
                 },
@@ -1415,7 +1469,9 @@ async function fetchSettings() {
                     { entity_id: "media_player.example_living_speaker", friendly_name: "サンプルリビングスピーカー", area: "リビング" }
                 ],
                 tts: [
-                    { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null }
+                    { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null },
+                    { entity_id: "tts.google_ai_tts", friendly_name: "Google AI TTS", area: null },
+                    { entity_id: "tts.voicevox_tts_sample", friendly_name: "VOICEVOX（音声はHA側設定）", area: null }
                 ],
 
                 camera: [
@@ -1609,6 +1665,139 @@ async function loadTtsEntities(currentEntity) {
 const loadTtsProviders = loadTtsEntities;
 
 
+function replaceSelectOptions(select, options, selectedValue, emptyLabel) {
+    select.replaceChildren();
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = emptyLabel;
+    select.appendChild(empty);
+    for (const option of options) {
+        const element = document.createElement('option');
+        element.value = option.value;
+        element.textContent = option.label;
+        select.appendChild(element);
+    }
+    select.value = options.some(option => option.value === selectedValue) ? selectedValue : '';
+}
+
+
+async function getTtsInfo(provider, language = '') {
+    if (isStandaloneMode) {
+        const catalog = mockTtsCatalog[provider];
+        if (!catalog) throw new Error('TTS entity is unavailable');
+        return {
+            languages: catalog.languages,
+            voices: language ? (catalog.voices[language] || []) : []
+        };
+    }
+    const params = new URLSearchParams({ provider });
+    if (language) params.set('language', language);
+    const response = await fetch(`${base}/api/tts-info?${params}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+}
+
+
+function setTtsLoading(kind, loading) {
+    const select = document.getElementById(`setting-tts-${kind}`);
+    const indicator = document.getElementById(`tts-${kind}-loading`);
+    if (select) select.classList.toggle('stt-loading', loading);
+    if (indicator) indicator.classList.toggle('visible', loading);
+}
+
+
+async function loadTtsVoices(entity, language, preferredVoice, generation) {
+    const group = document.getElementById('tts-voice-group');
+    const select = document.getElementById('setting-tts-voice');
+    const error = document.getElementById('tts-voice-error');
+    if (!group || !select) return;
+    if (error) error.classList.remove('visible');
+    if (!entity || !language) {
+        group.style.display = 'none';
+        select.disabled = true;
+        replaceSelectOptions(select, [], '', '（HAエンティティ設定を使用）');
+        return;
+    }
+    group.style.display = '';
+    select.disabled = true;
+    setTtsLoading('voice', true);
+    try {
+        const data = await getTtsInfo(entity, language);
+        if (generation !== ttsLoadGeneration || entity !== activeTtsEntity) return;
+        const voices = Array.isArray(data.voices) ? data.voices : [];
+        if (!voices.length) {
+            group.style.display = 'none';
+            delete (ttsSelectionsDraft[entity] || {}).voice;
+            replaceSelectOptions(select, [], '', '（HAエンティティ設定を使用）');
+            return;
+        }
+        const options = voices.map(voice => ({
+            value: voice.voice_id,
+            label: voice.name ? `${voice.name} (${voice.voice_id})` : voice.voice_id
+        }));
+        const selected = options.some(option => option.value === preferredVoice) ? preferredVoice : '';
+        if (!selected) delete (ttsSelectionsDraft[entity] || {}).voice;
+        replaceSelectOptions(select, options, selected, '（HAエンティティ設定を使用）');
+        select.disabled = false;
+    } catch (err) {
+        if (generation === ttsLoadGeneration && entity === activeTtsEntity) {
+            group.style.display = '';
+            replaceSelectOptions(select, [], '', '（取得できませんでした）');
+            if (error) error.classList.add('visible');
+        }
+    } finally {
+        if (generation === ttsLoadGeneration) setTtsLoading('voice', false);
+    }
+}
+
+
+async function loadTtsConfiguration(entity) {
+    const generation = ++ttsLoadGeneration;
+    const languageSelect = document.getElementById('setting-tts-language');
+    const languageError = document.getElementById('tts-language-error');
+    const voiceGroup = document.getElementById('tts-voice-group');
+    if (!languageSelect) return;
+    if (languageError) languageError.classList.remove('visible');
+    if (voiceGroup) voiceGroup.style.display = 'none';
+    if (!entity) {
+        replaceSelectOptions(languageSelect, [], '', '（TTSエンティティ未設定）');
+        languageSelect.disabled = true;
+        return;
+    }
+    languageSelect.disabled = true;
+    setTtsLoading('language', true);
+    try {
+        const data = await getTtsInfo(entity);
+        if (generation !== ttsLoadGeneration || entity !== activeTtsEntity) return;
+        const languages = Array.isArray(data.languages) ? data.languages : [];
+        const selection = ttsSelectionsDraft[entity] || {};
+        const selectedLanguage = languages.includes(selection.language) ? selection.language : '';
+        if (!selectedLanguage) {
+            delete selection.language;
+            delete selection.voice;
+        }
+        if (Object.keys(selection).length) ttsSelectionsDraft[entity] = selection;
+        else delete ttsSelectionsDraft[entity];
+        replaceSelectOptions(
+            languageSelect,
+            languages.map(language => ({ value: language, label: language })),
+            selectedLanguage,
+            '（HAエンティティ設定を使用）'
+        );
+        languageSelect.disabled = false;
+        await loadTtsVoices(entity, selectedLanguage, selection.voice || '', generation);
+    } catch (err) {
+        if (generation === ttsLoadGeneration && entity === activeTtsEntity) {
+            replaceSelectOptions(languageSelect, [], '', '（取得できませんでした）');
+            if (languageError) languageError.classList.add('visible');
+        }
+    } finally {
+        if (generation === ttsLoadGeneration) setTtsLoading('language', false);
+    }
+}
+
+
 async function renderSettingsForm() {
     if (!prefsData) return;
 
@@ -1625,16 +1814,18 @@ async function renderSettingsForm() {
     await loadSttProviders(sttProvider);
     // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
-    await loadTtsEntities(prefsData.tts_entity || '');
+    ttsSelectionsDraft = JSON.parse(JSON.stringify(
+        prefsData.tts_selections && typeof prefsData.tts_selections === 'object'
+            ? prefsData.tts_selections
+            : {}
+    ));
+    activeTtsEntity = prefsData.tts_entity || '';
+    await loadTtsEntities(activeTtsEntity);
+    await loadTtsConfiguration(activeTtsEntity);
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
         sttLangSel.value = prefsData.stt_language || 'ja-JP';
     }
-    const wakeWordsEl = document.getElementById('setting-wake-words');
-    if (wakeWordsEl) {
-        wakeWordsEl.value = (prefsData.wake_words || []).join(", ");
-    }
-
     const speakersTbody = document.getElementById('speakers-tbody');
     if (speakersTbody) speakersTbody.innerHTML = '';
     const spk = prefsData.speakers;
@@ -2053,9 +2244,15 @@ function serializeFormToPrefs() {
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
     const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
     const tts_entity = document.getElementById('setting-tts-entity')?.value?.trim() || null;
-    const wakeWordsRaw = document.getElementById('setting-wake-words')?.value || '';
-    const wake_words = wakeWordsRaw.split(",").map(s => s.trim()).filter(Boolean);
-
+    const ttsLanguage = document.getElementById('setting-tts-language')?.value?.trim() || '';
+    const ttsVoice = document.getElementById('setting-tts-voice')?.value?.trim() || '';
+    if (tts_entity) {
+        const selection = {};
+        if (ttsLanguage) selection.language = ttsLanguage;
+        if (ttsLanguage && ttsVoice) selection.voice = ttsVoice;
+        if (Object.keys(selection).length) ttsSelectionsDraft[tts_entity] = selection;
+        else delete ttsSelectionsDraft[tts_entity];
+    }
     const singSpeakerSelect = document.getElementById('setting-sing-speaker');
     let sing_speaker = undefined;
     if (singSpeakerSelect && singSpeakerSelect.value) {
@@ -2069,7 +2266,15 @@ function serializeFormToPrefs() {
         }
     }
 
-    const { audio_sources: _audioSources, sing_speaker: _singSpeaker, tts_options: _ttsOptions, tts_provider: _ttsProvider, ...prefsBase } = prefsData || {};
+    const {
+        audio_sources: _audioSources,
+        sing_speaker: _singSpeaker,
+        tts_options: _ttsOptions,
+        tts_provider: _ttsProvider,
+        wake_words: _wakeWords,
+        wake_ack: _wakeAck,
+        ...prefsBase
+    } = prefsData || {};
 
     const returnObj = {
         ...prefsBase,
@@ -2081,7 +2286,7 @@ function serializeFormToPrefs() {
         stt_provider,
         stt_language,
         tts_entity,
-        wake_words,
+        tts_selections: ttsSelectionsDraft,
         speakers,
         entities,
         presence,
@@ -2404,6 +2609,15 @@ function cleanRowData(data) {
     return out;
 }
 
+function cleanMicRowData(data) {
+    const out = cleanRowData(data);
+    delete out.stt_enabled;
+    delete out.stt_retention_hours;
+    delete out.wake_word_enabled;
+    delete out.background_hearing_enabled;
+    return out;
+}
+
 function createCameraRow(cam = {}) {
     const tbody = document.getElementById('cameras-tbody');
     if (!tbody) return;
@@ -2482,10 +2696,6 @@ function createMicRow(mic = {}) {
     tr.dataset.entity = mic.entity || '';
     tr.dataset.label = mic.label || '';
     tr.dataset.note = mic.note || '';
-    tr.dataset.sttEnabled = mic.stt_enabled ? '1' : '0';
-    tr.dataset.sttRetention = mic.stt_retention_hours !== undefined ? String(mic.stt_retention_hours) : '60';
-    tr.dataset.wakeWordEnabled = mic.wake_word_enabled ? '1' : '0';
-    tr.dataset.backgroundHearingEnabled = mic.background_hearing_enabled !== false ? '1' : '0';
     tr.innerHTML = `
         <td>${esc(mic.room || '')}</td>
         <td>${esc(mic.source || '（未設定）')}</td>
@@ -2534,11 +2744,7 @@ function getMicsFromUI() {
         if (entity) edits.entity = entity;
         if (label) edits.label = label;
         if (note) edits.note = note;
-        edits.stt_enabled = tr.dataset.sttEnabled === '1';
-        edits.stt_retention_hours = parseInt(tr.dataset.sttRetention || '60', 10);
-        edits.wake_word_enabled = tr.dataset.wakeWordEnabled === '1';
-        edits.background_hearing_enabled = tr.dataset.backgroundHearingEnabled !== '0';
-        items.push(cleanRowData(mergeRowData(tr, edits)));
+        items.push(cleanMicRowData(mergeRowData(tr, edits)));
     });
     return items;
 }
@@ -2743,15 +2949,6 @@ function updateCameraModalEntityState(modal) {
     }
 }
 
-function toggleMicSttEnabledModal(checkbox) {
-    const modal = checkbox.closest('#edit-modal');
-    if (!modal) return;
-    const group = modal.querySelector('.mic-stt-group-modal');
-    if (group) {
-        group.style.display = checkbox.checked ? 'block' : 'none';
-    }
-}
-
 // Speaker selection is HA media_player entity only
 
 // --- Edit Modal Functions ---
@@ -2878,11 +3075,6 @@ function openEditModal(type, tr) {
         const label = tr.dataset.label || '';
         const entity = tr.dataset.entity || '';
         const note = tr.dataset.note || '';
-        const sttEnabled = tr.dataset.sttEnabled === '1';
-        const sttRetention = tr.dataset.sttRetention || '60';
-        const wakeWordEnabled = tr.dataset.wakeWordEnabled === '1';
-        const backgroundHearingEnabled = tr.dataset.backgroundHearingEnabled !== '0';
-
         bodyEl.innerHTML = `
             <div class="form-group">
                 <label class="form-label">ソース (source)</label>
@@ -2903,26 +3095,6 @@ function openEditModal(type, tr) {
             <div class="form-group">
                 <label class="form-label">メモ (note)</label>
                 <input type="text" class="mic-note-modal form-input" placeholder="メモ (任意)" value="${esc(note)}">
-            </div>
-            <div class="checkbox-group" style="margin-top: 12px; margin-bottom: 8px;">
-                <label class="checkbox-label" style="font-size: 13px;">
-                    <input type="checkbox" class="mic-stt-enabled-modal" ${sttEnabled ? 'checked' : ''} onchange="toggleMicSttEnabledModal(this)"> STTを許可 (stt_enabled)
-                </label>
-            </div>
-            <div class="checkbox-group" style="margin-bottom: 8px;">
-                <label class="checkbox-label" style="font-size: 13px;">
-                    <input type="checkbox" class="mic-wake-word-modal" ${wakeWordEnabled ? 'checked' : ''}> ウェイクワード検出を有効 (wake_word_enabled)
-                </label>
-            </div>
-            <div class="checkbox-group" style="margin-bottom: 12px;">
-                <label class="checkbox-label" style="font-size: 13px;">
-                    <input type="checkbox" class="mic-background-hearing-modal" ${backgroundHearingEnabled ? 'checked' : ''}> バックグラウンド聴取を有効 (background_hearing_enabled)
-                </label>
-            </div>
-            <div class="form-group mic-stt-group-modal" style="margin-top: 8px; display: ${sttEnabled ? 'block' : 'none'};">
-                <label class="form-label">データ保持期間（時間・stt_retention_hours）</label>
-                <input type="number" class="mic-retention-modal form-input" min="0" step="1" placeholder="60" value="${esc(String(sttRetention))}" style="max-width:160px;">
-                <p class="form-hint">STT文字起こしの保持時間。0で即時破棄。</p>
             </div>
         `;
 
@@ -3168,23 +3340,12 @@ function saveEditModal() {
         const label = modal.querySelector('.mic-label-modal').value.trim();
         const entity = modal.querySelector('.mic-entity-modal').value.trim();
         const note = modal.querySelector('.mic-note-modal').value.trim();
-        const sttEnabled = modal.querySelector('.mic-stt-enabled-modal').checked;
-        const wakeWordEnabled = modal.querySelector('.mic-wake-word-modal')?.checked || false;
-        const bgHearingEl = modal.querySelector('.mic-background-hearing-modal');
-        const backgroundHearingEnabled = bgHearingEl ? bgHearingEl.checked : true;
-        const retentionRaw = modal.querySelector('.mic-retention-modal')?.value;
-        const sttRetentionHours = (retentionRaw !== undefined && retentionRaw !== '') ? parseInt(retentionRaw, 10) : 60;
-        const original = getOriginalRowData(_currentEditTr);
-        const merged = cleanRowData(mergeRowData(_currentEditTr, {
+        const merged = cleanMicRowData(mergeRowData(_currentEditTr, {
             source,
             room,
             entity,
             label,
             note,
-            stt_enabled: sttEnabled,
-            wake_word_enabled: wakeWordEnabled,
-            background_hearing_enabled: backgroundHearingEnabled,
-            stt_retention_hours: sttRetentionHours,
         }));
 
         setOriginalRowData(_currentEditTr, merged);
@@ -3193,11 +3354,6 @@ function saveEditModal() {
         _currentEditTr.dataset.entity = entity;
         _currentEditTr.dataset.label = label;
         _currentEditTr.dataset.note = note;
-        _currentEditTr.dataset.sttEnabled = sttEnabled ? '1' : '0';
-        _currentEditTr.dataset.wakeWordEnabled = wakeWordEnabled ? '1' : '0';
-        _currentEditTr.dataset.backgroundHearingEnabled = backgroundHearingEnabled ? '1' : '0';
-        _currentEditTr.dataset.sttRetention = String(sttRetentionHours);
-
         _currentEditTr.querySelector('td:nth-child(1)').textContent = room || '（未設定）';
         _currentEditTr.querySelector('td:nth-child(2)').textContent = source || '（未設定）';
         _currentEditTr.querySelector('td:nth-child(3)').textContent = label || '（未設定）';

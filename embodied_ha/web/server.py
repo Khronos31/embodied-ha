@@ -31,11 +31,23 @@ import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import migrate_retire_always_on_audio  # type: ignore  # noqa: E402
 import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import prefs_store  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import tts_discovery  # type: ignore  # noqa: E402
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
+
+
+def merge_preferences_for_save(existing: dict, incoming: dict) -> dict:
+    """Merge unmanaged fields while refusing to revive retired audio settings."""
+
+    merged = prefs_merge.merge_preferences(existing, incoming)
+    retired, _ = migrate_retire_always_on_audio.retire_always_on_audio_preferences(
+        merged
+    )
+    return retired
 
 CHAT_LOG = os.path.join(LOG_DIR, "chat_log.jsonl")
 VOICE_INTROSPECTION_LOG = os.environ.get(
@@ -115,6 +127,33 @@ def validate_camera_history_options(prefs: dict) -> None:
         raise ValueError(
             f"camera_history_minutes は{CAMERA_HISTORY_MIN_MINUTES}〜{CAMERA_HISTORY_MAX_MINUTES}の整数で指定してください"
         )
+
+
+def validate_tts_selections(prefs: dict) -> None:
+    """Accept only per-entity language and voice selections."""
+
+    if "tts_selections" not in prefs:
+        return
+    selections = prefs["tts_selections"]
+    if not isinstance(selections, dict) or len(selections) > 100:
+        raise ValueError("tts_selections はTTSエンティティ別の設定オブジェクトで指定してください")
+    for entity_id, selection in selections.items():
+        if (
+            not isinstance(entity_id, str)
+            or not entity_id.startswith("tts.")
+            or len(entity_id) > 255
+            or not isinstance(selection, dict)
+            or set(selection) - {"language", "voice"}
+        ):
+            raise ValueError("tts_selections には言語と音声のみ指定できます")
+        for key, value in selection.items():
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > 128
+                or any(ord(char) < 32 for char in value)
+            ):
+                raise ValueError(f"tts_selections.{entity_id}.{key} が無効です")
 
 
 def _set_install_status(key: str, status: str, message: str) -> None:
@@ -2094,6 +2133,36 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     print(f"[web] /api/stt-info failed for provider={provider}: status={status} body={raw[:500]}", flush=True)
                     self.send_json({"languages": [], "error": f"HTTP {status}", "detail": raw[:500]}, 502)
+        elif path == "/api/tts-info":
+            qs = parse_qs(parsed.query)
+            provider = qs.get("provider", [""])[0].strip()
+            language = qs.get("language", [""])[0].strip()
+            if not provider:
+                self.send_json({"languages": [], "voices": []})
+                return
+            if (
+                not provider.startswith("tts.")
+                or len(provider) > 255
+                or len(language) > 128
+                or any(ord(char) < 32 for char in provider + language)
+            ):
+                self.send_json({"error": "invalid TTS selection"}, 400)
+                return
+            try:
+                self.send_json(
+                    tts_discovery.discover_tts_options(
+                        HA_URL,
+                        HA_TOKEN,
+                        provider,
+                        language,
+                    )
+                )
+            except tts_discovery.TtsDiscoveryError as exc:
+                print(f"[web] /api/tts-info failed: {exc}", flush=True)
+                self.send_json(
+                    {"languages": [], "voices": [], "error": str(exc)},
+                    502,
+                )
         elif path == "/api/extra-context":
             filepath = EXTRA_CONTEXT_FILE
             if not os.path.exists(filepath):
@@ -2127,11 +2196,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "設定データが空か無効です"}, 400)
                     return
                 validate_camera_history_options(body)
+                validate_tts_selections(body)
                 # 全置換すると、UIがフォームに持っていないキーが保存のたびに消える(findings F-21)。
                 # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。
                 prefs_store.update(
                     PREFS_FILE,
-                    lambda existing: prefs_merge.merge_preferences(existing, body),
+                    lambda existing: merge_preferences_for_save(existing, body),
                 )
                 self.send_json({"ok": True})
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:

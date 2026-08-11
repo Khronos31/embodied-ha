@@ -127,9 +127,9 @@ class IdentityResolutionTests(unittest.TestCase):
         self.assertEqual(merged["policies"], [{"note": "new"}, {"note": "new2"}])
 
     def test_scalar_lists_are_taken_as_is(self):
-        existing = {"wake_words": ["あかね", "ねえ"]}
-        merged = prefs_merge.merge_preferences(existing, {"wake_words": ["あかね"]})
-        self.assertEqual(merged["wake_words"], ["あかね"])
+        existing = {"policies": ["静かにする", "確認する"]}
+        merged = prefs_merge.merge_preferences(existing, {"policies": ["確認する"]})
+        self.assertEqual(merged["policies"], ["確認する"])
 
 
 class DegenerateInputTests(unittest.TestCase):
@@ -177,6 +177,29 @@ class PreferencesEndpointMergeTests(unittest.TestCase):
             saved = json.loads(prefs_file.read_text(encoding="utf-8"))
             self.assertEqual(saved["cameras"][0]["ptz"], {"left": "button.a"}, "ptz が消えた")
             self.assertEqual(saved["stt_language"], "ja", "言及されなかったキーが消えた")
+
+    def test_save_drops_retired_audio_keys_even_when_merge_would_preserve_them(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefs_file = Path(temp) / "preferences.json"
+            prefs_file.write_text(json.dumps({
+                "wake_words": ["legacy"],
+                "mics": [{
+                    "source": "rtsp://example/mic",
+                    "label": "Mic",
+                    "stt_enabled": True,
+                    "background_hearing_enabled": True,
+                }],
+            }), encoding="utf-8")
+            handler = self._handler({
+                "mics": [{"source": "rtsp://example/mic", "label": "Mic"}],
+            })
+            with mock.patch.object(server, "PREFS_FILE", str(prefs_file)):
+                handler.do_PUT()
+
+            saved = json.loads(prefs_file.read_text(encoding="utf-8"))
+            self.assertNotIn("wake_words", saved)
+            self.assertNotIn("stt_enabled", saved["mics"][0])
+            self.assertNotIn("background_hearing_enabled", saved["mics"][0])
 
     def test_save_is_refused_when_existing_file_is_corrupt(self):
         # 壊れたファイルを黙って上書きしない（読めない=空 として扱わない）

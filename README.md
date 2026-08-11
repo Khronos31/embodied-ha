@@ -76,13 +76,13 @@ On startup, the add-on automatically:
 
 - **Registers 7 MQTT Discovery entities** in HA (→ [HA entities](#ha-entities))
 - **Generates sensor drafts** by scanning HA entities for the initial observation configuration
-- **Starts the daemon** after authentication completes, which then launches the autonomous loop, chat, and always-on hearing
+- **Starts the daemon** after authentication completes, which then launches the autonomous loop, chat, and Web UI
 
 ---
 
 ## Features
 
-### Autonomous loop (5 modes) + chat + always-on hearing
+### Autonomous loop (5 modes) + chat + active hearing
 
 The autonomous loop runs about every 30 minutes (plus sensor triggers). Each run, the agent **picks one of 5 modes on its own**, influenced by its current mood and condition (curiosity, energy, stress, social openness).
 
@@ -99,13 +99,16 @@ Alongside the loop:
 | Channel | Purpose |
 |---|---|
 | **Chat** `chat` | Responds to chat input on demand; also handles device control, memory search, and active listening |
-| **Always-on hearing** | Continuously transcribes microphone audio; calling the wake word starts a conversation |
+| **Active hearing** | Records and transcribes an RTSP microphone only when the agent or resident asks it to listen |
+
+Embodied HA does not continuously record microphones or run a built-in wake-word detector. For spoken wake-up,
+an optional external route such as RTSP Assist Gateway can publish validated events to the MQTT chat interface.
 
 ### What you can do in chat
 
 - **Add a sensor** - “Keep an eye on the living room CO2 too”
 - **Add a camera** - “Use the front-door camera too”
-- **Use hearing** - “Did you hear something?” / “Listen to the TV” — always-on STT logs and active listening
+- **Use hearing** - “Listen to this room” / “Listen to the TV” — on-demand active listening
 - **Control devices** - “Turn off the living room lights” (`autonomous_control` is not required for chat)
 - **Manage loops** - “Remind me later” to record a pending task and bring it back naturally in observe/chat
 - **Search memory** - “What was the air conditioner setting last week?” — including hearing logs
@@ -137,7 +140,7 @@ Open it from the add-on's **Open Web UI** button. You can also access it from th
 |---|---|
 | **Conversation** | Chat and speech history with the agent |
 | **Soliloquy** | The agent's private reflections during observe/explore |
-| **Heard Sounds** | Review, replay, and label always-on STT, background audio, and sound events |
+| **Heard Sounds** | Review, replay, and label historical audio records; Core no longer produces continuous STT/background events |
 | **AI Lounge** | Browse the AI chat space and approve outgoing posts (shown when the feature is enabled) |
 
 From the settings screen (⚙), you can edit the character, sensors, speakers, cameras, microphones, media sources, and home policy.
@@ -225,8 +228,8 @@ All logs and settings are saved under `/config/embodied-ha/` and survive add-on 
 | `log/open_loops.jsonl` | Open tasks and promises |
 | `log/actions.jsonl` | Audit trail of device operations |
 | `log/counterfactuals.jsonl` | Records of actions considered but not taken |
-| `log/auditory_events.jsonl` | Words heard via always-on STT |
-| `log/background_audio_log.jsonl` | Sounds heard in the background |
+| `log/auditory_events.jsonl` | Historical always-on STT records (no new Core writes) |
+| `log/background_audio_log.jsonl` | Historical background-audio records (no new Core writes) |
 | `log/active_listen_log.jsonl` | Audio actively listened to |
 | `log/non_speech_audio_events.jsonl` | Notable non-speech sounds |
 | `log/audio_event_tags.jsonl` | Human/external labels for sound events |

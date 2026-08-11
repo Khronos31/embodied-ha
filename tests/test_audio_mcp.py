@@ -79,6 +79,23 @@ class AudioMcpTests(unittest.TestCase):
             ):
                 self.audio_mcp.build_record_command(source, 5)
 
+    def test_active_listen_retention_ignores_retired_per_mic_setting(self):
+        with mock.patch.dict(
+            os.environ,
+            {"EHA_ACTIVE_LISTEN_RETENTION_HOURS": "12"},
+            clear=False,
+        ), mock.patch.object(
+            self.audio_mcp,
+            "_source_config_map",
+            return_value={
+                "rtsp://localhost:8554/room": {"stt_retention_hours": 1}
+            },
+        ):
+            retention = self.audio_mcp.active_listen_retention_hours(
+                "rtsp://localhost:8554/room"
+            )
+        self.assertEqual(retention, 12)
+
     def test_speaker_file_path_contract_names_raw_format_and_conversion(self):
         for tool in (
             self.audio_mcp.TOOL_SPEAK,

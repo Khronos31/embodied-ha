@@ -306,6 +306,15 @@ fi
 # 旧2キー構成なら新4キーへ一度だけ移行（冪等・バックアップ+アトミック）
 python3 "$SCRIPT_DIR/migrate_source_schema.py" --apply "$EHA_PREFS_FILE" 2>&1 | sed 's/^/[run][migrate] /' || true
 
+# --- built-in always-on audio retirement ---
+# Remove only settings owned by the retired background listener.  Keeping
+# stt_provider/stt_language preserves agent-initiated listen tools.  A backup
+# makes an operator-requested rollback possible without silently starting the
+# old listener alongside an external wake gateway.
+python3 "$SCRIPT_DIR/migrate_retire_always_on_audio.py" "$EHA_PREFS_FILE" --apply 2>&1 \
+    | sed 's/^/[run][migrate] /' \
+    || echo "[run][migrate] Always-on audio settings could not be retired; continuing without the removed listener"
+
 # --- MQTT discovery（HA にエンティティを生やす）---
 MQTT=$(printf 'Authorization: Bearer %s\n' "$SUPERVISOR_TOKEN" \
     | curl -sf -H @- http://supervisor/services/mqtt 2>/dev/null || echo "")

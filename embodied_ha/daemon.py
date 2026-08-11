@@ -23,6 +23,7 @@ import body_state
 import camera_history
 import claude_setup
 import codex_setup
+import concentrate_hearing_files
 import desire_state
 import harness_state
 import harness_status
@@ -36,7 +37,6 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
 CHAT_PY = os.path.join(_SCRIPT_DIR, "chat.py")
 LOOP_PY = os.path.join(_SCRIPT_DIR, "loop.py")
-AUDIO_DAEMON = os.path.join(_SCRIPT_DIR, "audio_daemon.py")
 WEB_SERVER = os.path.join(_SCRIPT_DIR, "web", "server.py")
 HA_URL = os.environ["HA_URL"]
 LOOP_INTERVAL = 1800   # 自律ループ(loop.py)の定期実行間隔（秒）= 30分
@@ -83,7 +83,6 @@ _setup_wait_notification_lock = threading.Lock()
 _loop_failure_lock = threading.Lock()
 _SETUP_WAIT_NOTIFICATION_ID = f"{MQTT_PREFIX}_harness_setup_required"
 _LOOP_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_loop_invoke_failing"
-_AUDIO_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_audio_daemon_failing"
 _WEB_FAILURE_NOTIFICATION_ID = f"{MQTT_PREFIX}_web_server_failing"
 _DAYBOOK_LIVENESS_NOTIFICATION_ID = f"{MQTT_PREFIX}_daybook_liveness_failing"
 _last_daybook_liveness_check = None
@@ -115,22 +114,6 @@ class ChildWatchdogFailures:
 
     def mark_alerted(self) -> None:
         self.alerted = True
-
-
-def load_enabled_mics() -> list[dict]:
-    prefs_file = os.environ.get("EHA_PREFS_FILE", "")
-    if not prefs_file:
-        return []
-    try:
-        with open(prefs_file, encoding="utf-8") as f:
-            prefs = json.load(f)
-    except Exception as e:
-        print(f"[daemon] failed to load preferences for audio daemon: {e}", flush=True)
-        return []
-    sources = prefs.get("mics")
-    if not isinstance(sources, list):
-        return []
-    return [item for item in sources if isinstance(item, dict) and item.get("stt_enabled") is True]
 
 
 def harness_ready() -> bool:
@@ -946,12 +929,6 @@ def _child_process_watchdog(
         time.sleep(CHILD_WATCHDOG_RESTART_DELAY)
 
 
-def audio_daemon_watchdog():
-    _child_process_watchdog(
-        "audio daemon", AUDIO_DAEMON, _AUDIO_FAILURE_NOTIFICATION_ID, "音声デーモン",
-    )
-
-
 def web_server_watchdog():
     _child_process_watchdog(
         "web server", WEB_SERVER, _WEB_FAILURE_NOTIFICATION_ID, "Webサーバー",
@@ -999,8 +976,12 @@ def start_runtime_threads() -> bool:
             print("[daemon] 警告: MQTT_HOST 未設定。チャット/観察トリガーを受信できません"
                   "（MQTT統合・Mosquitto が必要）。定期ループのみ動作します。", flush=True)
         threading.Thread(target=loop_scheduler, daemon=True).start()
-        threading.Thread(target=audio_daemon_watchdog, daemon=True).start()
-        print("[daemon] audio daemon watchdog enabled", flush=True)
+        threading.Thread(
+            target=concentrate_hearing_files.cleanup_forever,
+            daemon=True,
+            name="concentrate-hearing-cleanup",
+        ).start()
+        print("[daemon] concentrate-hearing cleanup enabled", flush=True)
         threading.Thread(target=camera_history.run_from_environment, daemon=True).start()
         print("[daemon] camera history worker enabled", flush=True)
         print("[daemon] started (I/O + loop-sched)", flush=True)

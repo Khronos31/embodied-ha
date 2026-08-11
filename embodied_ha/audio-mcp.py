@@ -116,7 +116,7 @@ def concentrate_hearing_cooldown_seconds() -> int:
     try:
         configured = clean(os.environ.get("EHA_CONCENTRATE_HEARING_COOLDOWN_SECONDS"))
         return max(5, int(configured or CONCENTRATE_HEARING_COOLDOWN_SECONDS))
-    except (TypeError, ValueError):
+    except (OSError, json.JSONDecodeError):
         return CONCENTRATE_HEARING_COOLDOWN_SECONDS
 
 
@@ -177,7 +177,7 @@ def load_preferences() -> dict:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except Exception:
+    except (TypeError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -304,7 +304,7 @@ TOOL_LISTEN_MEDIA = {
 TOOL_READ_AUDIO_LOG = {
 
     "name": "read_audio_log",
-    "description": "最近の常時STT生ログを読む。VAD/STTの成功・失敗・スキップ診断を含む。",
+    "description": "旧常時STTの生ログを読む。本体からは新規生成せず、既存のVAD/STT診断履歴を参照するためのツール。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -323,7 +323,7 @@ TOOL_READ_AUDIO_LOG = {
 
 TOOL_READ_HEARD_AUDIO_LOG = {
     "name": "read_heard_audio_log",
-    "description": "最近の常時STTで聞こえた発話ログを読む。会話コンテキストに入る聴覚イベント。",
+    "description": "旧常時STTで聞こえた発話履歴を読む。本体からは新規生成しない。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -342,7 +342,7 @@ TOOL_READ_HEARD_AUDIO_LOG = {
 
 TOOL_READ_ACTIVE_LISTEN_LOG = {
     "name": "read_active_listen_log",
-    "description": "最近、自分から listen で聞きに行った音声ログを読む。常時STTログとは別。",
+    "description": "最近、自分から listen で聞きに行った音声ログを読む。旧常時STT履歴とは別。",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -440,19 +440,10 @@ def sensory_for_source(source: str, label: str, modality: str = "auditory") -> d
     )
 
 
-def active_listen_retention_hours(source: str) -> int:
-    item = _source_config_map().get(clean(source))
-    if item:
-        try:
-            retention = int(item.get("stt_retention_hours", 0))
-        except Exception:
-            retention = 0
-        if retention > 0:
-            return retention
-
+def active_listen_retention_hours(_source: str) -> int:
     try:
         fallback = int(clean(os.environ.get("EHA_ACTIVE_LISTEN_RETENTION_HOURS")) or 24)
-    except Exception:
+    except (TypeError, ValueError):
         fallback = 24
     return max(1, fallback)
 

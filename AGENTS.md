@@ -12,7 +12,7 @@ This groups files by role so you know where to look.
 embodied_ha/
   # --- entrypoints / core loop ---
   daemon.py           # Main process: loop_scheduler thread (autonomous loop timing/probability),
-                       #   MQTT listener threads (chat/loop triggers), audio_daemon watchdog thread,
+                       #   MQTT listener threads (chat/loop triggers), temporary-audio cleanup thread,
                        #   body/desire/anomaly state ticking. Single-instance guarded via flock.
   chat.py             # Direct conversation loop (voice or text) — replies + home appliance control
   loop.py             # Autonomous loop dispatcher — MODE selects: observe / explore / reflect / web / social
@@ -46,7 +46,6 @@ embodied_ha/
   boundary.py             # autonomous action / interruption boundary checks
 
   # --- audio ---
-  audio_daemon.py     # always-on background listening daemon
   audio_stt.py        # speech-to-text transcription helpers
   concentrate_hearing_files.py  # temporary deep-listen audio-file lifecycle + stale cleanup
 
