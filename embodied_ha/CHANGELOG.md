@@ -8,6 +8,17 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.19] - 2026-08-11
+
+### Added / 追加
+
+- RTSP Assist Gatewayのversion 1 activation envelopeで、既存の`ha_stt`に加えて
+  `microwakeword` backendを受理します。その他のbackendは従来どおりfail closedで拒否し、
+  request IDの永続dedup、時刻・room・source検証、voice chat契約は共通です。
+  Accepts the `microwakeword` backend in RTSP Assist Gateway version 1 activation envelopes alongside
+  `ha_stt`. Unknown backends remain fail-closed, while persistent request-ID deduplication and the existing
+  timestamp, room, source, and voice-chat contracts remain shared.
+
 ## [2.1.18] - 2026-08-11
 
 ### Fixed / 修正
