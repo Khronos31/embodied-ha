@@ -835,6 +835,28 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 chat_rows = self.read_jsonl(tmp / "log" / "chat_log.jsonl")
                 self.assertEqual(chat_rows[-1]["source"], mode)
 
+    def test_extra_context_runs_once_and_reaches_every_mode_with_shared_separator(self):
+        for mode in ["observe", "explore", "reflect", "web", "social"]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                marker = tmp / "extra-context-count"
+                Path(tmp, "extra_context.conf").write_text(
+                    f"printf x >> {marker}; printf 'loop-contract kind=%s source=%s' \"$EHA_EXTRA_CONTEXT_KIND\" \"$EHA_EXTRA_CONTEXT_SOURCE\"\n",
+                    encoding="utf-8",
+                )
+                result = loop.run(
+                    self.make_env(tmp, mode),
+                    run_subprocess=self.fake_run_factory([]),
+                )
+
+                expected = "loop-contract kind=loop source="
+                block = loop.chat_invoke.build_extra_context_block(expected)
+                self.assertEqual(result["context"]["sys_prompt"].count(block), 1)
+                self.assertEqual(marker.read_text(encoding="utf-8"), "x")
+
+    def test_empty_extra_context_adds_no_block(self):
+        self.assertEqual(loop.chat_invoke.build_extra_context_block("\n  "), "")
+
     def test_projected_camera_is_never_passively_injected(self):
         for mode in ["observe", "explore", "reflect", "web", "social"]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmpdir:

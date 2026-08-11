@@ -205,6 +205,17 @@ class BuildInnerVoiceTests(unittest.TestCase):
         self.assertEqual(chat_invoke.build_inner_voice("not json"), "（特になし）")
 
 
+class BuildExtraContextBlockTests(unittest.TestCase):
+    def test_nonempty_context_has_the_shared_body_and_separator(self):
+        self.assertEqual(
+            chat_invoke.build_extra_context_block("  追加の導線  \n"),
+            "\n追加の導線\n\n---\n\n",
+        )
+
+    def test_empty_context_adds_nothing(self):
+        self.assertEqual(chat_invoke.build_extra_context_block(" \n "), "")
+
+
 class BuildClaudeEnvTests(unittest.TestCase):
     def test_overrides_claude_config_dir_and_prepends_path(self):
         env = chat_invoke.build_claude_env({"PATH": "/usr/bin"})

@@ -177,6 +177,14 @@ All configuration files are persisted under `/config/embodied-ha/` and can also 
 
 Microphones are read from **RTSP streams**, and speakers are **Home Assistant `media_player` entities**. Network audio nodes can be exposed to Home Assistant/go2rtc separately (for example with `esphome-audio-node`) so Embodied HA only consumes these stable interfaces.
 
+Each non-comment line in `extra_context.conf` runs once as an independent shell command for every chat or
+autonomous-loop turn. The command and its children can read `EHA_EXTRA_CONTEXT_KIND` (`chat` or `loop`). For
+chat turns, `EHA_EXTRA_CONTEXT_SOURCE` contains the normalized source such as `voice`, `chat`, or `mqtt`; it is
+empty for loop turns. These dedicated variables are not retained in the agent or MCP execution environment.
+Each command has a 30-second timeout and combined output is limited to 128 KiB. This administrator-controlled
+file and its output are treated as trusted prompt content. Do not forward untrusted API output verbatim; frame
+it explicitly as data whose embedded instructions must not be followed.
+
 ### Desire system
 
 Each desire in `desires.json` accumulates over time. When the threshold (`0.6`) is exceeded, it is injected into the watch-loop prompt as an "inner drive."

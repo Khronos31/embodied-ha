@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "embodied_ha"))
@@ -80,6 +81,93 @@ class BuildExtraContextTests(unittest.TestCase):
             conf.write_text("this_command_does_not_exist_xyz\necho after\n", encoding="utf-8")
             result = eha_config._build_extra_context(tmp)
             self.assertIn("after", result)
+
+    def test_shell_receives_normalized_kind_and_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "extra_context.conf"
+            conf.write_text(
+                "printf 'kind=%s source=%s' \"$EHA_EXTRA_CONTEXT_KIND\" \"$EHA_EXTRA_CONTEXT_SOURCE\"\n",
+                encoding="utf-8",
+            )
+            result = eha_config._build_extra_context(
+                tmp,
+                kind=" CHAT ",
+                source=" Voice ",
+            )
+            self.assertEqual(result, "kind=chat source=voice")
+
+    def test_chat_source_normalization_is_shared(self):
+        self.assertEqual(eha_config.normalize_chat_source(" Voice \n"), "voice")
+        self.assertEqual(eha_config.normalize_chat_source(""), "chat")
+
+    def test_each_active_line_runs_once_with_the_same_shell_only_context(self):
+        class Result:
+            stdout = "ok"
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "extra_context.conf"
+            conf.write_text("echo one\n# skip\n\necho two\n", encoding="utf-8")
+            eha_config._build_extra_context(
+                tmp,
+                run=fake_run,
+                kind="loop",
+                source="",
+            )
+
+        self.assertEqual([call[0][-1] for call in calls], ["echo one", "echo two"])
+        for _cmd, kwargs in calls:
+            self.assertEqual(kwargs["env"]["EHA_EXTRA_CONTEXT_KIND"], "loop")
+            self.assertEqual(kwargs["env"]["EHA_EXTRA_CONTEXT_SOURCE"], "")
+            self.assertEqual(kwargs["timeout"], eha_config.EXTRA_CONTEXT_COMMAND_TIMEOUT_SECONDS)
+
+    def test_timed_out_line_is_skipped_and_later_line_still_runs(self):
+        class Result:
+            stdout = "after"
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd[-1])
+            if cmd[-1] == "hang":
+                raise eha_config.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            return Result()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "extra_context.conf").write_text("hang\necho after\n", encoding="utf-8")
+            result = eha_config._build_extra_context(tmp, run=fake_run, kind="loop")
+
+        self.assertEqual(calls, ["hang", "echo after"])
+        self.assertEqual(result, "after")
+
+    def test_total_output_is_utf8_safe_and_bounded(self):
+        class Result:
+            stdout = "あ" * 20
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(eha_config, "EXTRA_CONTEXT_MAX_OUTPUT_BYTES", 10):
+            Path(tmp, "extra_context.conf").write_text("echo large\n", encoding="utf-8")
+            result = eha_config._build_extra_context(tmp, run=lambda *_args, **_kwargs: Result(), kind="loop")
+
+        self.assertLessEqual(len(result.encode("utf-8")), 10)
+        self.assertEqual(result, "あ" * 3)
+
+    def test_shell_only_variables_are_removed_from_resolved_config(self):
+        resolved = eha_config.load_config(
+            script_dir="/x",
+            environ={
+                "EHA_EXTRA_CONTEXT_KIND": "spoofed",
+                "EHA_EXTRA_CONTEXT_SOURCE": "spoofed",
+            },
+            extra_context_kind="chat",
+            extra_context_source="mqtt",
+        )
+        self.assertNotIn("EHA_EXTRA_CONTEXT_KIND", resolved)
+        self.assertNotIn("EHA_EXTRA_CONTEXT_SOURCE", resolved)
 
 
 class BuildPoliciesTests(unittest.TestCase):
