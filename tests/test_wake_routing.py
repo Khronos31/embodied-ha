@@ -30,7 +30,13 @@ def load_daemon(name: str):
     return module
 
 
-def valid_envelope(*, request_id: str | None = None, timestamp: str | None = None, message="電気を消して"):
+def valid_envelope(
+    *,
+    request_id: str | None = None,
+    timestamp: str | None = None,
+    message="電気を消して",
+    backend="ha_stt",
+):
     return {
         "version": 1,
         "event": "wake_command_detected",
@@ -40,7 +46,7 @@ def valid_envelope(*, request_id: str | None = None, timestamp: str | None = Non
         "source_id": "study",
         "room": "study",
         "wake_word_id": "sample_agent",
-        "backend": "ha_stt",
+        "backend": backend,
         "timestamp": timestamp or dt.datetime.now(dt.UTC).isoformat(),
     }
 
@@ -69,6 +75,17 @@ def test_valid_versioned_envelope_is_voice_bound_to_room() -> None:
     assert trigger.source == "voice"
     assert trigger.room == "study"
     assert trigger.message == "電気を消して"
+
+
+@pytest.mark.parametrize("backend", ["ha_stt", "microwakeword"])
+def test_supported_gateway_backends_share_the_same_voice_contract(backend: str) -> None:
+    trigger = wake_routing.parse_chat_trigger(
+        json.dumps(valid_envelope(backend=backend), ensure_ascii=False)
+    )
+    assert trigger is not None
+    assert trigger.backend == backend
+    assert trigger.source == "voice"
+    assert trigger.room == "study"
 
 
 @pytest.mark.parametrize(
