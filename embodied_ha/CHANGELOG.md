@@ -8,6 +8,8 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.18] - 2026-08-11
+
 ### Fixed / 修正
 
 - `extra_context.conf`の出力がchatにだけ入り、自律loopでは実行後に捨てられていた問題を修正しました。
