@@ -12,19 +12,24 @@ class WebUITests(unittest.TestCase):
         self.app_js = APP_JS_PATH.read_text(encoding="utf-8")
         self.index_html = INDEX_HTML_PATH.read_text(encoding="utf-8")
 
-    def test_tts_settings_use_ha_entity_without_voicevox_overrides(self):
+    def test_tts_settings_offer_only_dynamic_language_and_voice(self):
         self.assertIn('id="setting-tts-entity"', self.index_html)
+        self.assertIn('id="setting-tts-language"', self.index_html)
+        self.assertIn('id="setting-tts-voice"', self.index_html)
         for removed_id in (
             "setting-tts-provider",
             "setting-tts-speaker",
             "setting-tts-volume",
             "setting-tts-pitch",
             "setting-tts-speed",
+            "setting-tts-emotion",
         ):
             self.assertNotIn(f'id="{removed_id}"', self.index_html)
 
         self.assertIn("tts_entity,", self.app_js)
+        self.assertIn("tts_selections: ttsSelectionsDraft", self.app_js)
         self.assertIn("tts_options: _ttsOptions", self.app_js)
+        self.assertIn("/api/tts-info", self.app_js)
         self.assertNotIn("/api/tts/voicevox/speakers", self.app_js)
 
     def test_always_on_audio_settings_are_retired_but_active_stt_remains(self):

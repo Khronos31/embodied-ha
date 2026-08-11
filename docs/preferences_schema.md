@@ -25,9 +25,39 @@
 | string | `"tts.home_assistant_cloud"` 例 |
 
 グローバルのHA TTSエンティティです。すべての`speakers`に対する通常読み上げに使います。
-話者・言語・速度・音量などはHome Assistant側のTTSエンティティ設定を使用し、Embodied HAからは上書きしません。
+対応情報を公開するTTS統合では、`tts_selections`で言語・音声だけを任意指定できます。
+速度・音量・ピッチ・感情など、それ以外のプロバイダー固有オプションは今後もEmbodied HAでは扱わず、
+Home Assistant側のTTSエンティティ設定を使用します。
 既存ファイルに残る旧`tts_options`は互換データとして保持されることがありますが、通常読み上げでは使用されません。
 VOICEVOX Song用の`sing_speaker`は別機能です。
+
+---
+
+### `tts_selections`
+
+| 型 | デフォルト |
+|---|---|
+| object | `{}` |
+
+TTSエンティティごとの任意の言語・音声選択です。Web UIはHome Assistantが公開する対応言語と、
+選択した言語に対応する音声から候補を動的に生成します。音声一覧を公開しない統合では`voice`を指定せず、
+HA側のエンティティ設定を使います。
+
+```json
+{
+  "tts_selections": {
+    "tts.home_assistant_cloud": {
+      "language": "ja-JP",
+      "voice": "ja-JP-NanamiNeural"
+    },
+    "tts.voicevox_tts_sample": {
+      "language": "ja-JP"
+    }
+  }
+}
+```
+
+保存できるキーは`language`と`voice`だけです。エンティティを切り替えても各選択は個別に保持されます。
 
 ---
 

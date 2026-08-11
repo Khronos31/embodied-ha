@@ -8,6 +8,13 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added / 追加
+
+- Home Assistantが公開するTTS対応言語と音声をWeb UIから動的に選べるようにしました。
+  言語・音声以外のプロバイダー固有オプションは扱わず、HA側のTTSエンティティ設定を使用します。
+  Added dynamic language and voice selection from Home Assistant TTS metadata. Other provider-specific
+  options remain controlled by the Home Assistant TTS entity.
+
 ### Removed / 削除
 
 - アドオン内蔵の常時音声デーモン、常時STT、ウェイクワード検出、背景音イベント生成と、

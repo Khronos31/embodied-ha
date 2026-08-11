@@ -402,13 +402,50 @@
                                 </div>
                             </div>
                             <div class="accordion-content" style="display: none;">
-                                <p class="section-desc">Home Assistant の TTS エンティティを選択します。</p>
+                                <p class="section-desc">
+                                    Home Assistant の TTS エンティティと、対応している言語・音声を選択します。
+                                    速度・音量など、それ以外の設定はHA側のTTSエンティティ設定を使用します。
+                                </p>
                                 <div class="form-group" style="max-width:480px;">
                                     <label class="form-label" for="setting-tts-entity">TTS エンティティ (tts_entity)</label>
                                     <select id="setting-tts-entity" class="form-input">
                                         <option value="">(未選択)</option>
                                     </select>
                                     <p class="form-hint">Home Assistant で設定されている TTS エンティティ（tts.*）を選択します。</p>
+                                </div>
+                                <div class="form-group" style="max-width:480px;">
+                                    <label class="form-label" for="setting-tts-language">言語</label>
+                                    <div class="stt-select-wrapper">
+                                        <select id="setting-tts-language" class="form-input stt-loading" disabled>
+                                            <option value="">（HAエンティティ設定を使用）</option>
+                                        </select>
+                                    </div>
+                                    <div class="stt-loading-indicator" id="tts-language-loading">
+                                        <span class="stt-spinner"></span>
+                                        <span>対応言語を読み込んでいます…</span>
+                                    </div>
+                                    <div class="stt-error-banner" id="tts-language-error">
+                                        <span class="stt-error-icon">⚠️</span>
+                                        <span>対応言語の取得に失敗しました。HAの接続を確認してください。</span>
+                                    </div>
+                                    <p class="form-hint">未選択の場合はHA側のTTSエンティティ設定を使います。</p>
+                                </div>
+                                <div class="form-group" id="tts-voice-group" style="max-width:480px; display:none;">
+                                    <label class="form-label" for="setting-tts-voice">音声</label>
+                                    <div class="stt-select-wrapper">
+                                        <select id="setting-tts-voice" class="form-input" disabled>
+                                            <option value="">（HAエンティティ設定を使用）</option>
+                                        </select>
+                                    </div>
+                                    <div class="stt-loading-indicator" id="tts-voice-loading">
+                                        <span class="stt-spinner"></span>
+                                        <span>対応音声を読み込んでいます…</span>
+                                    </div>
+                                    <div class="stt-error-banner" id="tts-voice-error">
+                                        <span class="stt-error-icon">⚠️</span>
+                                        <span>対応音声の取得に失敗しました。</span>
+                                    </div>
+                                    <p class="form-hint">選択した言語で利用できる音声のみ表示します。</p>
                                 </div>
                             </div>
                         </section>

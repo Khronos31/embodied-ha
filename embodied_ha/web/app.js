@@ -19,6 +19,36 @@ let characterData = "";
 let extraContextData = "";
 let homePolicyData = "";
 let characterName = 'Claude';
+let ttsSelectionsDraft = {};
+let activeTtsEntity = '';
+let ttsLoadGeneration = 0;
+
+const mockTtsCatalog = {
+    "tts.home_assistant_cloud": {
+        languages: ["ja-JP", "en-US"],
+        voices: {
+            "ja-JP": [
+                { voice_id: "ja-JP-AoiNeural", name: "Aoi" },
+                { voice_id: "ja-JP-NanamiNeural", name: "Nanami" }
+            ],
+            "en-US": [{ voice_id: "en-US-AvaMultilingualNeural", name: "Ava" }]
+        }
+    },
+    "tts.google_ai_tts": {
+        languages: ["ja-JP", "en-US"],
+        voices: {
+            "ja-JP": [
+                { voice_id: "zephyr", name: "Zephyr (Bright)" },
+                { voice_id: "kore", name: "Kore (Firm)" }
+            ],
+            "en-US": [{ voice_id: "puck", name: "Puck (Upbeat)" }]
+        }
+    },
+    "tts.voicevox_tts_sample": {
+        languages: ["ja-JP", "en"],
+        voices: {}
+    }
+};
 
 // AI Lounge State
 let aiLoungeTimer = null;
@@ -149,6 +179,32 @@ document.addEventListener('DOMContentLoaded', () => {
         if (langError)   langError.classList.remove('visible');
         if (langSel)     langSel.classList.add('stt-loading');
         await loadSttLanguages(this.value.trim());
+    });
+    document.getElementById('setting-tts-entity')?.addEventListener('change', async function() {
+        activeTtsEntity = this.value.trim();
+        await loadTtsConfiguration(activeTtsEntity);
+    });
+    document.getElementById('setting-tts-language')?.addEventListener('change', async function() {
+        const generation = ++ttsLoadGeneration;
+        const language = this.value.trim();
+        const selection = ttsSelectionsDraft[activeTtsEntity] || {};
+        if (language) selection.language = language;
+        else delete selection.language;
+        delete selection.voice;
+        if (activeTtsEntity && Object.keys(selection).length) {
+            ttsSelectionsDraft[activeTtsEntity] = selection;
+        } else {
+            delete ttsSelectionsDraft[activeTtsEntity];
+        }
+        await loadTtsVoices(activeTtsEntity, language, '', generation);
+    });
+    document.getElementById('setting-tts-voice')?.addEventListener('change', function() {
+        if (!activeTtsEntity) return;
+        const selection = ttsSelectionsDraft[activeTtsEntity] || {};
+        const voice = this.value.trim();
+        if (voice && selection.language) selection.voice = voice;
+        else delete selection.voice;
+        ttsSelectionsDraft[activeTtsEntity] = selection;
     });
 });
 
@@ -1379,6 +1435,12 @@ async function fetchSettings() {
                 ],
                 stt_provider: "wyoming",
                 tts_entity: "tts.home_assistant_cloud",
+                tts_selections: {
+                    "tts.home_assistant_cloud": {
+                        language: "ja-JP",
+                        voice: "ja-JP-NanamiNeural"
+                    }
+                },
                 speakers: {
                     study: { type: "tts", entity: "media_player.example_speaker" }
                 },
@@ -1407,7 +1469,9 @@ async function fetchSettings() {
                     { entity_id: "media_player.example_living_speaker", friendly_name: "サンプルリビングスピーカー", area: "リビング" }
                 ],
                 tts: [
-                    { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null }
+                    { entity_id: "tts.home_assistant_cloud", friendly_name: "Home Assistant Cloud", area: null },
+                    { entity_id: "tts.google_ai_tts", friendly_name: "Google AI TTS", area: null },
+                    { entity_id: "tts.voicevox_tts_sample", friendly_name: "VOICEVOX（音声はHA側設定）", area: null }
                 ],
 
                 camera: [
@@ -1601,6 +1665,139 @@ async function loadTtsEntities(currentEntity) {
 const loadTtsProviders = loadTtsEntities;
 
 
+function replaceSelectOptions(select, options, selectedValue, emptyLabel) {
+    select.replaceChildren();
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = emptyLabel;
+    select.appendChild(empty);
+    for (const option of options) {
+        const element = document.createElement('option');
+        element.value = option.value;
+        element.textContent = option.label;
+        select.appendChild(element);
+    }
+    select.value = options.some(option => option.value === selectedValue) ? selectedValue : '';
+}
+
+
+async function getTtsInfo(provider, language = '') {
+    if (isStandaloneMode) {
+        const catalog = mockTtsCatalog[provider];
+        if (!catalog) throw new Error('TTS entity is unavailable');
+        return {
+            languages: catalog.languages,
+            voices: language ? (catalog.voices[language] || []) : []
+        };
+    }
+    const params = new URLSearchParams({ provider });
+    if (language) params.set('language', language);
+    const response = await fetch(`${base}/api/tts-info?${params}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    return data;
+}
+
+
+function setTtsLoading(kind, loading) {
+    const select = document.getElementById(`setting-tts-${kind}`);
+    const indicator = document.getElementById(`tts-${kind}-loading`);
+    if (select) select.classList.toggle('stt-loading', loading);
+    if (indicator) indicator.classList.toggle('visible', loading);
+}
+
+
+async function loadTtsVoices(entity, language, preferredVoice, generation) {
+    const group = document.getElementById('tts-voice-group');
+    const select = document.getElementById('setting-tts-voice');
+    const error = document.getElementById('tts-voice-error');
+    if (!group || !select) return;
+    if (error) error.classList.remove('visible');
+    if (!entity || !language) {
+        group.style.display = 'none';
+        select.disabled = true;
+        replaceSelectOptions(select, [], '', '（HAエンティティ設定を使用）');
+        return;
+    }
+    group.style.display = '';
+    select.disabled = true;
+    setTtsLoading('voice', true);
+    try {
+        const data = await getTtsInfo(entity, language);
+        if (generation !== ttsLoadGeneration || entity !== activeTtsEntity) return;
+        const voices = Array.isArray(data.voices) ? data.voices : [];
+        if (!voices.length) {
+            group.style.display = 'none';
+            delete (ttsSelectionsDraft[entity] || {}).voice;
+            replaceSelectOptions(select, [], '', '（HAエンティティ設定を使用）');
+            return;
+        }
+        const options = voices.map(voice => ({
+            value: voice.voice_id,
+            label: voice.name ? `${voice.name} (${voice.voice_id})` : voice.voice_id
+        }));
+        const selected = options.some(option => option.value === preferredVoice) ? preferredVoice : '';
+        if (!selected) delete (ttsSelectionsDraft[entity] || {}).voice;
+        replaceSelectOptions(select, options, selected, '（HAエンティティ設定を使用）');
+        select.disabled = false;
+    } catch (err) {
+        if (generation === ttsLoadGeneration && entity === activeTtsEntity) {
+            group.style.display = '';
+            replaceSelectOptions(select, [], '', '（取得できませんでした）');
+            if (error) error.classList.add('visible');
+        }
+    } finally {
+        if (generation === ttsLoadGeneration) setTtsLoading('voice', false);
+    }
+}
+
+
+async function loadTtsConfiguration(entity) {
+    const generation = ++ttsLoadGeneration;
+    const languageSelect = document.getElementById('setting-tts-language');
+    const languageError = document.getElementById('tts-language-error');
+    const voiceGroup = document.getElementById('tts-voice-group');
+    if (!languageSelect) return;
+    if (languageError) languageError.classList.remove('visible');
+    if (voiceGroup) voiceGroup.style.display = 'none';
+    if (!entity) {
+        replaceSelectOptions(languageSelect, [], '', '（TTSエンティティ未設定）');
+        languageSelect.disabled = true;
+        return;
+    }
+    languageSelect.disabled = true;
+    setTtsLoading('language', true);
+    try {
+        const data = await getTtsInfo(entity);
+        if (generation !== ttsLoadGeneration || entity !== activeTtsEntity) return;
+        const languages = Array.isArray(data.languages) ? data.languages : [];
+        const selection = ttsSelectionsDraft[entity] || {};
+        const selectedLanguage = languages.includes(selection.language) ? selection.language : '';
+        if (!selectedLanguage) {
+            delete selection.language;
+            delete selection.voice;
+        }
+        if (Object.keys(selection).length) ttsSelectionsDraft[entity] = selection;
+        else delete ttsSelectionsDraft[entity];
+        replaceSelectOptions(
+            languageSelect,
+            languages.map(language => ({ value: language, label: language })),
+            selectedLanguage,
+            '（HAエンティティ設定を使用）'
+        );
+        languageSelect.disabled = false;
+        await loadTtsVoices(entity, selectedLanguage, selection.voice || '', generation);
+    } catch (err) {
+        if (generation === ttsLoadGeneration && entity === activeTtsEntity) {
+            replaceSelectOptions(languageSelect, [], '', '（取得できませんでした）');
+            if (languageError) languageError.classList.add('visible');
+        }
+    } finally {
+        if (generation === ttsLoadGeneration) setTtsLoading('language', false);
+    }
+}
+
+
 async function renderSettingsForm() {
     if (!prefsData) return;
 
@@ -1617,7 +1814,14 @@ async function renderSettingsForm() {
     await loadSttProviders(sttProvider);
     // まず言語一覧を読み込んでからセットする
     await loadSttLanguages(sttProvider);
-    await loadTtsEntities(prefsData.tts_entity || '');
+    ttsSelectionsDraft = JSON.parse(JSON.stringify(
+        prefsData.tts_selections && typeof prefsData.tts_selections === 'object'
+            ? prefsData.tts_selections
+            : {}
+    ));
+    activeTtsEntity = prefsData.tts_entity || '';
+    await loadTtsEntities(activeTtsEntity);
+    await loadTtsConfiguration(activeTtsEntity);
     const sttLangSel = document.getElementById('setting-stt-language');
     if (sttLangSel) {
         sttLangSel.value = prefsData.stt_language || 'ja-JP';
@@ -2040,6 +2244,15 @@ function serializeFormToPrefs() {
     const stt_provider = document.getElementById('setting-stt-provider')?.value?.trim() || null;
     const stt_language = document.getElementById('setting-stt-language')?.value?.trim() || 'ja-JP';
     const tts_entity = document.getElementById('setting-tts-entity')?.value?.trim() || null;
+    const ttsLanguage = document.getElementById('setting-tts-language')?.value?.trim() || '';
+    const ttsVoice = document.getElementById('setting-tts-voice')?.value?.trim() || '';
+    if (tts_entity) {
+        const selection = {};
+        if (ttsLanguage) selection.language = ttsLanguage;
+        if (ttsLanguage && ttsVoice) selection.voice = ttsVoice;
+        if (Object.keys(selection).length) ttsSelectionsDraft[tts_entity] = selection;
+        else delete ttsSelectionsDraft[tts_entity];
+    }
     const singSpeakerSelect = document.getElementById('setting-sing-speaker');
     let sing_speaker = undefined;
     if (singSpeakerSelect && singSpeakerSelect.value) {
@@ -2073,6 +2286,7 @@ function serializeFormToPrefs() {
         stt_provider,
         stt_language,
         tts_entity,
+        tts_selections: ttsSelectionsDraft,
         speakers,
         entities,
         presence,

@@ -1,8 +1,11 @@
 {
   "_doc": "会話で育てる設定ファイル。chat.py の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
   "character_name": "Claude",
-  "_tts_entity_doc": "通常読み上げに使うHAのtts.*エンティティ。声・言語・速度・音量等はHA側のエンティティ設定を使用し、Embodied HAからは上書きしない。",
+  "_tts_entity_doc": "通常読み上げに使うHAのtts.*エンティティ。対応する言語・音声だけ任意指定できる。速度・音量等はHA側のエンティティ設定を使用し、Embodied HAからは今後も上書きしない。",
   "tts_entity": "tts.home_assistant_cloud",
+  "tts_selections": {
+    "tts.home_assistant_cloud": {"language": "ja-JP", "voice": "ja-JP-NanamiNeural"}
+  },
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
   "stt_provider": "stt.home_assistant_cloud",
   "stt_language": "ja-JP",
