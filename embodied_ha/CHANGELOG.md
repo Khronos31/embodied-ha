@@ -8,6 +8,22 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed / 修正
+
+- `extra_context.conf`の出力がchatにだけ入り、自律loopでは実行後に捨てられていた問題を修正しました。
+  全loop modeへchatと同じ本文・区切りで一度だけ追加し、空の出力では余分なブロックを作りません。
+  Fixed `extra_context.conf` output being discarded after execution in autonomous loops. Every loop mode now
+  receives the same single prompt block used by chat, while empty output adds no block.
+
+### Added / 追加
+
+- `extra_context.conf`のshellコマンド専用に`EHA_EXTRA_CONTEXT_KIND`と`EHA_EXTRA_CONTEXT_SOURCE`を追加しました。
+  入口やchat発信元による条件分岐に使えますが、LLM／MCP実行環境には残りません。chat本体と発信元の
+  正規化を共有し、各コマンド30秒・合計出力128 KiBの上限を設けました。
+  Added shell-only `EHA_EXTRA_CONTEXT_KIND` and `EHA_EXTRA_CONTEXT_SOURCE` variables for conditional context
+  commands without retaining them in the LLM or MCP environment. Chat source normalization is shared with the
+  main chat path, with a 30-second per-command timeout and a 128 KiB combined output limit.
+
 ## [2.1.17] - 2026-08-11
 
 ### Added / 追加

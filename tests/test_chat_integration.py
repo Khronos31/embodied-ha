@@ -61,6 +61,30 @@ def _make_isolated_env(tmp, **overrides):
 
 
 class ChatRunIntegrationTests(unittest.TestCase):
+    def test_extra_context_shell_gets_chat_kind_and_source_and_prompt_gets_output_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env, _log_dir, _prefs_file = _make_isolated_env(tmp, CHAT_SOURCE=" Voice ")
+            Path(tmp, "extra_context.conf").write_text(
+                "printf 'contract kind=%s source=%s' \"$EHA_EXTRA_CONTEXT_KIND\" \"$EHA_EXTRA_CONTEXT_SOURCE\"\n",
+                encoding="utf-8",
+            )
+            captured_calls = []
+
+            with patch.object(chat, "_web_ui_status"), \
+                 patch.object(chat.chat_invoke, "invoke_chat_claude", side_effect=lambda **kwargs: captured_calls.append(kwargs) or _fake_chat_response()), \
+                 patch.object(chat, "_build_long_memory", return_value="なし"), \
+                 patch.object(chat, "_build_recent_chat_context", return_value=""), \
+                 patch.object(chat, "_build_open_loops", return_value="なし"), \
+                 patch.object(chat, "_build_sensors", return_value=""), \
+                 patch.object(chat, "_build_body_location_context", return_value=""), \
+                 patch.object(chat, "_build_features_presented", return_value=""):
+                chat.run(env)
+
+            self.assertEqual(len(captured_calls), 1)
+            block = chat.chat_invoke.build_extra_context_block("contract kind=chat source=voice")
+            self.assertEqual(captured_calls[0]["prompt"].count(block), 1)
+            self.assertIn("# 声で呼ばれた", captured_calls[0]["prompt"])
+
     def test_full_turn_chat_mode_writes_chat_log_and_web_ui_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             env, log_dir, prefs_file = _make_isolated_env(tmp)

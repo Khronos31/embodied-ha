@@ -880,7 +880,8 @@ def build_loop_prompt_context(cfg: dict[str, str], mode: str, paths: LoopPaths, 
     body_narrative = chat_invoke.build_body_narrative(cfg.get("EHA_BODY_STATE", "") or "{}")
     body_location_context = _run_text(["python3", os.path.join(SCRIPT_DIR, "body-context.py")], fallback="# 身体位置\n取得失敗", run=run)
     inner_voice = chat_invoke.build_inner_voice(cfg.get("ACTIVE_DESIRES", ""))
-    sys_prompt = f"{character}\n\n# 内なる衝動\n{inner_voice}\n\n# 身体状態\n{body_narrative}\n\n{projected_camera_note}\n\n{body_location_context}\n\n{recent_auditory_input}\n\n{anomaly_context}\n\n{policy_note}\n\n{behavior_policy_note}\n\n{unread_chat_note}\n\nいまは『{config.label}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n{config.tools_desc}\n\n{config.task}\n{autonomous_note}\n{features_note}\n{build_json_format(resident)}"
+    extra_context_block = chat_invoke.build_extra_context_block(cfg.get("EXTRA_CONTEXT", ""))
+    sys_prompt = f"{character}\n\n# 内なる衝動\n{inner_voice}\n\n# 身体状態\n{body_narrative}\n\n{projected_camera_note}\n\n{body_location_context}\n\n{recent_auditory_input}\n\n{anomaly_context}\n\n{policy_note}\n\n{behavior_policy_note}\n\n{unread_chat_note}\n\n{extra_context_block}いまは『{config.label}』です。決まった手順はありません。自分の判断で過ごしてください。\n\n{config.tools_desc}\n\n{config.task}\n{autonomous_note}\n{features_note}\n{build_json_format(resident)}"
     user_prompt = f"{config.label}です。今は{hour}時台。\n\n【あなたの長期記憶】\n{build_long_memory(paths.memory_file, run=run)}{build_recent_facts_block(selected_mode, paths)}\n\n【直近の探索メモ】\n{build_previous_explore(paths.explore_log)}\n\n【気にかけていること（やりかけ・約束）】\n{open_loops}\n\nでは、始めてください。"
     return {
         "cfg": cfg,
@@ -1022,7 +1023,12 @@ def postprocess_loop_response(parsed: dict[str, Any], response: str, context: di
 
 def run(environ: dict[str, str] | None = None, *, run_subprocess=subprocess.run) -> dict[str, Any]:
     environ = dict(environ if environ is not None else os.environ)
-    cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
+    cfg = eha_config.load_config(
+        script_dir=SCRIPT_DIR,
+        environ=environ,
+        extra_context_kind="loop",
+        extra_context_source="",
+    )
     paths = resolve_paths(cfg)
     Path(paths.log_dir).mkdir(parents=True, exist_ok=True)
     Path(paths.tmp_dir).mkdir(parents=True, exist_ok=True)

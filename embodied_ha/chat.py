@@ -119,7 +119,14 @@ def _build_features_presented(script_dir):
 
 def run(environ=None):
     environ = dict(environ if environ is not None else os.environ)
-    cfg = eha_config.load_config(script_dir=SCRIPT_DIR, environ=environ)
+    chat_source = eha_config.normalize_chat_source(environ.get("CHAT_SOURCE"))
+    environ["CHAT_SOURCE"] = chat_source
+    cfg = eha_config.load_config(
+        script_dir=SCRIPT_DIR,
+        environ=environ,
+        extra_context_kind="chat",
+        extra_context_source=chat_source,
+    )
 
     log_dir = cfg.get("EHA_LOG_DIR") or os.path.join(SCRIPT_DIR, "log")
     log_file = os.path.join(log_dir, "observations.jsonl")

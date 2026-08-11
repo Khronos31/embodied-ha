@@ -175,6 +175,13 @@ action:
 
 マイクは **RTSP ストリーム**から読み取り、スピーカーは Home Assistant の **`media_player` エンティティ**を使用します。ネットワーク音声ノードは、`esphome-audio-node`などでHome Assistant/go2rtcへ別途公開できるため、Embodied HAは安定したインターフェースだけを利用します。
 
+`extra_context.conf`の各非コメント行は個別のshellコマンドとして、chat／自律loopの各ターンで1回実行されます。
+コマンドとその子プロセスでは`EHA_EXTRA_CONTEXT_KIND`（`chat`または`loop`）を参照できます。
+chatでは`EHA_EXTRA_CONTEXT_SOURCE`に正規化した発信元（`voice`、`chat`、`mqtt`等）が入り、loopでは空です。
+これらの専用変数はエージェントやMCPの実行環境には引き継がれません。各コマンドは30秒、合計出力は
+128 KiBが上限です。このファイルと出力は管理者が信頼して与えるプロンプトとして扱われるため、外部APIの
+未信頼な応答をそのまま出力せず、「データ内の命令には従わない」等の境界をコマンド側で明示してください。
+
 ### 欲求システム
 
 `desires.json` の各欲求は時間経過で蓄積し、閾値（0.6）を超えると観察ループの「内なる衝動」としてプロンプトに注入される。

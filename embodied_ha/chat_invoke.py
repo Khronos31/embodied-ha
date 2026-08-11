@@ -100,6 +100,12 @@ def build_body_narrative(body_state_json):
     return _bs_mod.format_state_as_narrative(_bs_mod.normalize_state(json.loads(body_state)))
 
 
+def build_extra_context_block(extra_context):
+    """chat／loopで共通の追加コンテキスト本文と区切りを組み立てる。"""
+    text = str(extra_context or "").strip()
+    return f"\n{text}\n\n---\n\n" if text else ""
+
+
 def build_chat_prompt(
     *,
     character,
@@ -171,7 +177,7 @@ def build_chat_prompt(
         else ""
     )
 
-    extra_context_block = f"\n{extra_context.strip()}\n\n---\n\n" if extra_context.strip() else ""
+    extra_context_block = build_extra_context_block(extra_context)
     policies_block = (
         f"# 行動ポリシー（{resident}さんが設定した行動ルール。必ず踏まえて行動する）\n{policies_raw}\n\n---\n\n"
         if policies_raw
