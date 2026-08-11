@@ -8,6 +8,8 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.17] - 2026-08-11
+
 ### Added / 追加
 
 - Home Assistantが公開するTTS対応言語と音声をWeb UIから動的に選べるようにしました。
