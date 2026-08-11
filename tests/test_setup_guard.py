@@ -44,6 +44,7 @@ class SetupGuardTests(unittest.TestCase):
         ("POST", "/api/setup/codex/uninstall"),
         ("POST", "/api/setup/codex/clear-auth"),
         ("POST", "/api/setup/codex/logout"),
+        ("POST", "/api/setup/terms"),
     )
 
     def setUp(self):

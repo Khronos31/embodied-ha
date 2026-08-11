@@ -22,10 +22,19 @@ from web import server  # noqa: E402
 
 class SetupMutationLockTests(unittest.TestCase):
     def setUp(self):
+        self.terms_dir = tempfile.TemporaryDirectory()
         self.setup_guard_env = mock.patch.dict(
-            os.environ, {"EHA_SETUP_GUARD": "off"}, clear=False
+            os.environ,
+            {
+                "EHA_SETUP_GUARD": "off",
+                "EHA_SETUP_TERMS_FILE": os.path.join(
+                    self.terms_dir.name, "setup_terms_consent.json"
+                ),
+            },
+            clear=False,
         )
         self.setup_guard_env.start()
+        server.setup_terms.accept(server.setup_terms.CONSENT_VERSION)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
@@ -36,6 +45,7 @@ class SetupMutationLockTests(unittest.TestCase):
         self.thread.join()
         self.httpd.server_close()
         self.setup_guard_env.stop()
+        self.terms_dir.cleanup()
 
     def _post_json(self, path, body=None):
         request = urllib.request.Request(
