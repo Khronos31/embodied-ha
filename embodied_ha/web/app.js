@@ -11,6 +11,8 @@ let unreadCounts = {
 let isTyping = false;
 let typingType = 'chat'; // 'chat', 'loop', 'explore', 'private'
 let setupMode = false;
+let harnessSetupOverview = null;
+let harnessTermsVersion = '';
 
 // Settings State
 let prefsData = null;
@@ -1130,17 +1132,113 @@ const HARNESS_ENDPOINTS = {
 
 function enterHarnessSetup(overview) {
     setupMode = true;
+    harnessSetupOverview = overview || null;
     const picker = document.getElementById('harness-picker');
     if (picker) picker.hidden = false;
-    // A harness is chosen but not yet ready (interrupted install/auth) -> resume it.
-    if (overview && overview.selection_state === 'valid' && overview.selected) {
-        selectHarness(overview.selected);
-    }
+    initializeHarnessTerms();
 }
 
 async function fetchOverview() {
     const res = await fetch(`${base}/api/setup/overview`);
     return res.json();
+}
+
+function harnessSetTermsStatus(text, kind) {
+    const el = document.getElementById('harness-terms-status');
+    if (!el) return;
+    el.hidden = !text;
+    el.textContent = text || '';
+    el.className = 'form-hint' + (kind ? ' ' + kind : '');
+}
+
+function showHarnessTerms(status) {
+    const termsPanel = document.getElementById('harness-terms-panel');
+    const selectionPanel = document.getElementById('harness-selection-panel');
+    if (termsPanel) termsPanel.hidden = false;
+    if (selectionPanel) selectionPanel.hidden = true;
+
+    harnessTermsVersion = (status && status.version) || '';
+    const statement = document.getElementById('harness-terms-statement');
+    if (statement && status && status.statement) statement.textContent = status.statement;
+
+    const links = document.getElementById('harness-terms-links');
+    if (links) {
+        links.innerHTML = '';
+        for (const item of ((status && status.terms) || [])) {
+            const li = document.createElement('li');
+            const anchor = document.createElement('a');
+            anchor.href = item.url;
+            anchor.target = '_blank';
+            anchor.rel = 'noopener';
+            anchor.textContent = `${item.provider}: ${item.label}`;
+            li.appendChild(anchor);
+            links.appendChild(li);
+        }
+    }
+
+    const checkbox = document.getElementById('harness-terms-checkbox');
+    if (checkbox) checkbox.checked = false;
+    harnessTermsCheckboxChanged();
+}
+
+function revealHarnessSelection() {
+    const termsPanel = document.getElementById('harness-terms-panel');
+    const selectionPanel = document.getElementById('harness-selection-panel');
+    if (termsPanel) termsPanel.hidden = true;
+    if (selectionPanel) selectionPanel.hidden = false;
+    harnessSetTermsStatus('');
+
+    // A harness is chosen but not yet ready (interrupted install/auth) -> resume it.
+    const overview = harnessSetupOverview;
+    if (overview && overview.selection_state === 'valid' && overview.selected) {
+        selectHarness(overview.selected);
+    }
+}
+
+async function initializeHarnessTerms() {
+    const termsPanel = document.getElementById('harness-terms-panel');
+    const selectionPanel = document.getElementById('harness-selection-panel');
+    if (termsPanel) termsPanel.hidden = true;
+    if (selectionPanel) selectionPanel.hidden = true;
+    try {
+        const response = await fetch(`${base}/api/setup/terms`);
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const status = await response.json();
+        if (status.required) showHarnessTerms(status);
+        else revealHarnessSelection();
+    } catch (error) {
+        showHarnessTerms({ version: '', terms: [] });
+        harnessSetTermsStatus('利用規約の確認状態を取得できません。ページを再読み込みしてください。', 'error');
+    }
+}
+
+function harnessTermsCheckboxChanged() {
+    const checkbox = document.getElementById('harness-terms-checkbox');
+    const button = document.getElementById('harness-terms-accept');
+    if (button) button.disabled = !(checkbox && checkbox.checked && harnessTermsVersion);
+}
+
+async function acceptHarnessTerms() {
+    const checkbox = document.getElementById('harness-terms-checkbox');
+    const button = document.getElementById('harness-terms-accept');
+    if (!checkbox || !checkbox.checked || !harnessTermsVersion) return;
+    if (button) button.disabled = true;
+    harnessSetTermsStatus('同意を保存しています…');
+    try {
+        const response = await fetch(`${base}/api/setup/terms`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accepted: true, version: harnessTermsVersion }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.accepted) {
+            throw new Error(payload.error || 'HTTP ' + response.status);
+        }
+        revealHarnessSelection();
+    } catch (error) {
+        harnessSetTermsStatus('同意を保存できませんでした: ' + error, 'error');
+        harnessTermsCheckboxChanged();
+    }
 }
 
 function harnessShowProgress() {

@@ -8,6 +8,23 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.20] - 2026-08-12
+
+### Added / 追加
+
+- 初回セットアップでエージェントCLIをインストールまたは認証する前に、各提供元の公式規約へのリンクと
+  代行操作に関する明示的な同意ゲートを追加しました。同意はversion付き・時刻付きで永続データ領域に保存します。
+  Added an explicit first-run acknowledgement gate with links to each provider's official terms before
+  Embodied HA installs or authenticates an agent CLI. The versioned, timestamped acknowledgement is stored
+  in the persistent data directory.
+
+### Changed / 変更
+
+- AntigravityのCLI内規約確認もEmbodied HAが自動操作することを同意画面に明記しました。既存の有効なハーネス選択は
+  アップグレード後も稼働を継続し、新規・未完了セットアップだけをfail closedで保護します。
+  Disclosed that Embodied HA also drives Antigravity's in-CLI terms prompt. Existing valid harness selections
+  remain operational after upgrade; only new or incomplete setup is protected by the fail-closed gate.
+
 ## [2.1.19] - 2026-08-11
 
 ### Added / 追加

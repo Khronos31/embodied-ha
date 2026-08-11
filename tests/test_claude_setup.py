@@ -351,11 +351,15 @@ class ClaudeSetupEndpointTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.harness_flag_dir)
         self.harness_flag_env = mock.patch.dict(
             os.environ,
-            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            {
+                "EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness"),
+                "EHA_SETUP_TERMS_FILE": os.path.join(self.harness_flag_dir, "setup_terms_consent.json"),
+            },
             clear=False,
         )
         self.harness_flag_env.start()
         self.addCleanup(self.harness_flag_env.stop)
+        server.setup_terms.accept(server.setup_terms.CONSENT_VERSION)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()

@@ -30,6 +30,7 @@ except Exception:
 import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import setup_terms  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import migrate_retire_always_on_audio  # type: ignore  # noqa: E402
 import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
@@ -514,12 +515,22 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
     "/api/setup/agent-prefs",
+    "/api/setup/terms",
 })
 # Paths in _SETUP_MUTATION_PATHS that are a *read* on GET (guarded only on their
 # mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
 # reads while POST stays ingress-guarded (sol Med).
-_SETUP_GET_READS = frozenset({"/api/setup/agent-prefs"})
+_SETUP_GET_READS = frozenset({"/api/setup/agent-prefs", "/api/setup/terms"})
 _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
+_SETUP_TERMS_ERROR = "利用規約を確認し、インストールと認証の代行に同意してください"
+_SETUP_TERMS_GATED_PATHS = frozenset({
+    "/api/setup/login", "/api/setup/login-code",
+    "/api/setup/claude/login", "/api/setup/claude/login-code",
+    "/api/setup/claude/install",
+    "/api/setup/antigravity/install", "/api/setup/antigravity/login",
+    "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
+    "/api/setup/codex/install", "/api/setup/codex/login",
+})
 
 
 def setup_guard(client_address) -> bool:
@@ -1192,6 +1203,17 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and path in _SETUP_GET_READS:
             return False
         self.send_json({"error": _SETUP_GUARD_ERROR}, 403)
+        return True
+
+    def _block_setup_without_terms(self, path: str) -> bool:
+        """Fail closed before any CLI install/authentication side effect."""
+        if path not in _SETUP_TERMS_GATED_PATHS or not setup_terms.is_required():
+            return False
+        self.send_json({
+            "error": _SETUP_TERMS_ERROR,
+            "terms_endpoint": "/api/setup/terms",
+            "version": setup_terms.CONSENT_VERSION,
+        }, 428)
         return True
 
     def serve_index(self):
@@ -1939,6 +1961,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if self._block_loopback_setup_mutation(path, "GET"):
             return
+        if self._block_setup_without_terms(path):
+            return
 
         if path in ("/", ""):
             self.serve_index()
@@ -2054,6 +2078,8 @@ class Handler(BaseHTTPRequestHandler):
             # 集約 readiness(Step4増分1a)。フロント gate はこれ1本でピッカー/再開/通常モードを
             # 分岐できる。読み取りのみ・公開schema固定(path/token/version を載せない・sol L11)。
             self.send_json(harness_status.snapshot())
+        elif path == "/api/setup/terms":
+            self.send_json(setup_terms.public_status())
         elif path == "/api/setup/agent-prefs":
             # default ティアの model/effort 現在値(Step4増分2)。UI 初期表示用・読み取りのみ・
             # 機密なし(model/effort 選択のみ)。
@@ -2344,6 +2370,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if self._block_loopback_setup_mutation(path):
             return
+        if self._block_setup_without_terms(path):
+            return
 
         if path == "/api/status":
             length = int(self.headers.get("Content-Length", 0))
@@ -2373,6 +2401,22 @@ class Handler(BaseHTTPRequestHandler):
                 with open(read_path, "w", encoding="utf-8") as f:
                     json.dump(existing, f, ensure_ascii=False)
                 self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        elif path == "/api/setup/terms":
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 4096:
+                self.send_json({"error": "request body is too large"}, 413)
+                return
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+                if not isinstance(body, dict) or body.get("accepted") is not True:
+                    self.send_json({"error": "明示的な同意が必要です"}, 400)
+                    return
+                status = setup_terms.accept(str(body.get("version", "")))
+                self.send_json({"ok": True, **status})
+            except ValueError as e:
+                self.send_json({"error": str(e)}, 409)
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
         elif path in ("/api/setup/login-code", "/api/setup/claude/login-code"):

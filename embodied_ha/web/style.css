@@ -2743,6 +2743,8 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
    =========================== */
 .setup-overlay[hidden],
 #harness-picker[hidden],
+#harness-terms-panel[hidden],
+#harness-selection-panel[hidden],
 #harness-picker-progress[hidden],
 #harness-auth-url[hidden],
 #harness-auth-code-display[hidden],
@@ -2806,6 +2808,85 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
 
 .harness-picker-intro strong {
     color: var(--claude-text-main);
+}
+
+.harness-terms-panel {
+    max-width: 760px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.harness-terms-copy {
+    background: var(--claude-card-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    color: var(--claude-text-main);
+    line-height: 1.65;
+}
+
+.harness-terms-copy h3 {
+    font-family: var(--font-serif);
+    font-size: 18px;
+    margin: 0 0 8px;
+}
+
+.harness-terms-copy p {
+    margin: 0;
+}
+
+.harness-terms-links {
+    margin: 14px 0;
+    padding-left: 22px;
+}
+
+.harness-terms-links a {
+    color: var(--claude-accent);
+}
+
+.harness-terms-note {
+    color: var(--claude-text-sub);
+    font-size: 12px;
+}
+
+.harness-terms-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: var(--claude-sidebar-bg);
+    border: 1px solid var(--claude-border);
+    border-radius: 10px;
+    color: var(--claude-text-main);
+    font-size: 13px;
+    line-height: 1.55;
+    cursor: pointer;
+}
+
+.harness-terms-check input {
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+
+.harness-terms-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.harness-terms-actions .harness-select-btn {
+    width: auto;
+    min-width: 180px;
+}
+
+.harness-select-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#harness-terms-status {
+    margin-top: 10px;
 }
 
 /* カードコンテナ：枚数に依存しない縦積みレイアウト */
@@ -3061,6 +3142,5 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     flex-shrink: 0;
     white-space: nowrap;
 }
-
 
 

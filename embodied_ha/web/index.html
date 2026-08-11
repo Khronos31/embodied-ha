@@ -824,7 +824,25 @@
                 </div>
             </header>
 
-            <div class="harness-cards-grid">
+            <section id="harness-terms-panel" class="harness-terms-panel" hidden>
+                <div class="harness-terms-copy">
+                    <h3>利用規約の確認</h3>
+                    <p>Embodied HAは、選択したエージェントCLIのインストールと認証操作を代行します。利用するサービスの最新の規約を確認してください。</p>
+                    <ul id="harness-terms-links" class="harness-terms-links"></ul>
+                    <p class="harness-terms-note">Antigravityを選択した場合は、CLI内に表示される規約確認画面もEmbodied HAが自動操作します。</p>
+                </div>
+                <label class="harness-terms-check">
+                    <input type="checkbox" id="harness-terms-checkbox" onchange="harnessTermsCheckboxChanged()">
+                    <span id="harness-terms-statement">Embodied HAがツールのインストールと認証操作を代行することを理解し、事前に利用する各ツールの利用規約を確認して同意しました。</span>
+                </label>
+                <div class="harness-terms-actions">
+                    <button type="button" id="harness-terms-accept" class="harness-select-btn" onclick="acceptHarnessTerms()" disabled>同意して次へ</button>
+                </div>
+                <div id="harness-terms-status" class="form-hint" hidden></div>
+            </section>
+
+            <section id="harness-selection-panel" hidden>
+              <div class="harness-cards-grid">
                 <!-- Claude Card -->
                 <div class="harness-card" id="harness-card-claude" data-harness="claude">
                     <div class="harness-card-header">
@@ -875,23 +893,24 @@
                         <button class="harness-select-btn" data-harness="agy" onclick="selectHarness('agy')">この子で始める</button>
                     </div>
                 </div>
-            </div>
+              </div>
 
-            <div class="harness-picker-notice">
-                <span class="notice-icon">💡</span>
-                <span>未インストールのものは選択後にダウンロード→ログインへ進みます。</span>
-            </div>
+              <div class="harness-picker-notice">
+                  <span class="notice-icon">💡</span>
+                  <span>未インストールのものは選択後にダウンロード→ログインへ進みます。</span>
+              </div>
 
-            <!-- 選択後の進行状況・認証表示領域 -->
-            <div id="harness-picker-progress" class="setup-choices" style="margin-top: 16px;" hidden>
-                <div id="harness-auth-url" hidden></div>
-                <div id="harness-auth-code-display" hidden></div>
-                <div id="harness-auth-code-row" class="setup-input-row" hidden>
-                    <input type="text" id="harness-auth-code" class="setup-input" placeholder="OAuth認証コードを入力..." autocomplete="off">
-                    <button type="button" id="harness-auth-code-submit" class="setup-send-btn">送信</button>
-                </div>
-                <div id="harness-picker-status" class="form-hint" hidden></div>
-            </div>
+              <!-- 選択後の進行状況・認証表示領域 -->
+              <div id="harness-picker-progress" class="setup-choices" style="margin-top: 16px;" hidden>
+                  <div id="harness-auth-url" hidden></div>
+                  <div id="harness-auth-code-display" hidden></div>
+                  <div id="harness-auth-code-row" class="setup-input-row" hidden>
+                      <input type="text" id="harness-auth-code" class="setup-input" placeholder="OAuth認証コードを入力..." autocomplete="off">
+                      <button type="button" id="harness-auth-code-submit" class="setup-send-btn">送信</button>
+                  </div>
+                  <div id="harness-picker-status" class="form-hint" hidden></div>
+              </div>
+            </section>
         </div>
     </div>
 
