@@ -1,10 +1,6 @@
 {
   "_doc": "会話で育てる設定ファイル。chat.py の preferences_update JSON フィールドで Claude が書き込む。このファイルはサンプル。実際の設定は preferences.json に保存される（.gitignore 済み）。",
   "character_name": "Claude",
-  "wake_words": [
-    "ねえクロード",
-    "クロード"
-  ],
   "_tts_entity_doc": "通常読み上げに使うHAのtts.*エンティティ。声・言語・速度・音量等はHA側のエンティティ設定を使用し、Embodied HAからは上書きしない。",
   "tts_entity": "tts.home_assistant_cloud",
   "sing_speaker": {"name": "春日部つむぎ", "style_id": 3008},
@@ -128,7 +124,7 @@
       }
     ]
   },
-  "_mics_doc": "マイク（耳）: 侵入して聴く実デバイス。entity は侵入時のID、source はRTSP URL。ハードウェア入力はgo2rtc等でRTSP配信する。stt_enabled で文字起こし対象を切り替える。",
+  "_mics_doc": "マイク（耳）: 侵入して能動的に聴く実デバイス。entity は侵入時のID、source はRTSP URL。ハードウェア入力はgo2rtc等でRTSP配信する。",
   "_video_media_doc": "映像ソース（観る）: 侵入不要で届くフレーム。id はメディア用 ID、source は camera_proxy / go2rtc / 直接 URL など。room は文脈用。",
   "_audio_media_doc": "音声ソース（聴く）: 侵入不要で届く音。id はメディア用 ID、source は音声取得元。video_media で対応する映像ソースを参照できる。",
   "mics": [
@@ -136,15 +132,13 @@
       "entity": "mic_study",
       "source": "rtsp://homeassistant.local:8554/study_microphone",
       "room": "study",
-      "label": "書斎マイク",
-      "stt_enabled": true
+      "label": "書斎マイク"
     },
     {
       "entity": "mic_hallway",
       "source": "rtsp://homeassistant.local:8554/hallway_microphone",
       "room": "hallway",
-      "label": "廊下マイク",
-      "stt_enabled": true
+      "label": "廊下マイク"
     }
   ],
   "video_media": [

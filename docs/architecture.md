@@ -13,7 +13,7 @@ embodied_ha/daemon.py   ← 常駐プロセス
     ├── MQTT 購読スレッド × 2（chat/loop トリガー）
     ├── loop_scheduler スレッド（30分周期の自律ループ）
     ├── web_server_watchdog スレッド（Ingress UI を常駐再起動）
-    └── audio_daemon_watchdog スレッド（`mics.stt_enabled` があれば起動）
+    └── concentrate-hearing-cleanup スレッド（一時録音の期限切れ削除）
 ```
 
 ## `run.sh` の役割
@@ -33,9 +33,12 @@ embodied_ha/daemon.py   ← 常駐プロセス
 - `embodied_ha/chat/set` を受けると `chat.py` を起動する
 - `embodied_ha/loop/trigger` を受けると `loop.py` を `MODE=observe` で起動する
 - 30分ごとに `loop_scheduler` が走り、`body_state.advance_tick()` と `desire_state.decay_tick()` を通して `compute_run_chance()` を評価する
-- `mics` に `stt_enabled: true` があれば `audio_daemon.py` を監視起動する
+- `concentrate_hearing` の一時録音を期限切れ後に削除する
 - `web/server.py` は別スレッドで常駐再起動する
 - `flock` で多重起動を防ぐ
+
+常時 STT と内蔵ウェイクワード検出は行いません。音声による呼び出しは任意の外部経路
+（RTSP Assist Gatewayなど）がMQTT chatイベントを発行し、`daemon.py` が受け取ります。
 
 ### ループ確率
 
@@ -78,4 +81,4 @@ daemon.py
 | `log/daybooks/` | 日次要約 |
 | `log/actions.jsonl` | 家電操作ログ |
 | `log/body_location_log.jsonl` | 位置移動ログ |
-| `log/audio_log.jsonl` | 常時 STT ログ |
+| `log/audio_log.jsonl` | 旧常時 STT の履歴（本体からは新規生成しない） |

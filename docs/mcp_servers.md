@@ -51,8 +51,8 @@ GitHub App情報を受け取ります。`http` は `EHA_HTTP_ALLOW_POST` が無�
 
 - `listen` — 音声を短時間だけ録音する。`source` 省略時は `preferences.json` の `mics` と `body_location.json` を見て自動選択する
 - `listen_media` — `audio_media` を侵入なしで聴く。`audio_media` の文脈部屋を使うが、身体的侵入はしない
-- `read_audio_log` — 常時 STT のログを読む
-- `read_heard_audio_log` — 聞き取った発話ログを読む
+- `read_audio_log` — 旧常時 STT の履歴を読む（本体からは新規生成しない）
+- `read_heard_audio_log` — 旧常時聴取で聞き取った発話履歴を読む
 - `read_active_listen_log` — 能動聴取ログを読む
 - `read_non_speech_audio_events` — 非音声イベントログを読む
 - `read_audio_event_tags` — タグ付き音声イベントを読む

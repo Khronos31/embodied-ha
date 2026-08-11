@@ -282,5 +282,24 @@ class RecentAuditoryInputTests(unittest.TestCase):
                     "voice", "さっきの音は何？", None, str(bl_file)
                 )
             self.assertIn("ピンポン", result)
+
+    def test_voice_with_stale_event_does_not_inject_frozen_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events_file = Path(tmp) / "auditory_events.jsonl"
+            bl_file = Path(tmp) / "body_location.json"
+            with open(bl_file, "w", encoding="utf-8") as fh:
+                json.dump({"current_entity": ""}, fh)
+            stale = datetime.datetime.now().astimezone() - datetime.timedelta(days=30)
+            with open(events_file, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "timestamp": stale.isoformat(),
+                    "transcript": "古い常時STTの記録",
+                    "source": "リビング",
+                }, ensure_ascii=False) + "\n")
+            with patch.dict("os.environ", {"EHA_AUDITORY_EVENTS_FILE": str(events_file)}):
+                result = chat_context.build_recent_auditory_input(
+                    "voice", "いま聞こえた？", None, str(bl_file)
+                )
+            self.assertEqual(result, "")
 if __name__ == "__main__":
     unittest.main()

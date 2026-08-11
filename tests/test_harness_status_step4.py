@@ -197,8 +197,7 @@ class RuntimeWiringTests(unittest.TestCase):
         with self._clean_env():
             with mock.patch.object(daemon.harness_status, "snapshot", return_value=ready_snap), \
                  mock.patch.object(daemon, "threading", mock.MagicMock()), \
-                 mock.patch.object(daemon, "MQTT_HOST", ""), \
-                 mock.patch.object(daemon, "load_enabled_mics", return_value=[]):
+                 mock.patch.object(daemon, "MQTT_HOST", ""):
                 daemon.start_runtime_threads()
                 self.assertEqual(os.environ.get("EHA_AGENT_HARNESS"), "codex")
                 self.assertTrue(daemon._runtime_started.is_set())
@@ -216,8 +215,7 @@ class RuntimeWiringTests(unittest.TestCase):
             os.environ["EHA_AGENT_HARNESS"] = "agy"  # 古い継承値
             with mock.patch.object(daemon.harness_status, "snapshot", return_value=snap), \
                  mock.patch.object(daemon, "threading", mock.MagicMock()), \
-                 mock.patch.object(daemon, "MQTT_HOST", ""), \
-                 mock.patch.object(daemon, "load_enabled_mics", return_value=[]):
+                 mock.patch.object(daemon, "MQTT_HOST", ""):
                 daemon.start_runtime_threads()
                 self.assertEqual(os.environ.get("EHA_AGENT_HARNESS"), "claude")
         daemon._runtime_started.clear()
@@ -233,8 +231,7 @@ class RuntimeWiringTests(unittest.TestCase):
         with self._clean_env():
             with mock.patch.object(daemon.harness_status, "snapshot", return_value=snap), \
                  mock.patch.object(daemon, "threading", mock.MagicMock()) as Thread, \
-                 mock.patch.object(daemon, "MQTT_HOST", ""), \
-                 mock.patch.object(daemon, "load_enabled_mics", return_value=[]):
+                 mock.patch.object(daemon, "MQTT_HOST", ""):
                 daemon.start_runtime_threads()
                 self.assertIsNone(os.environ.get("EHA_AGENT_HARNESS"))
                 self.assertFalse(daemon._runtime_started.is_set())

@@ -31,11 +31,22 @@ import claude_setup  # type: ignore  # noqa: E402 (sys.path調整後のimportが
 import harness_state  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import harness_status  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import agent_prefs  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
+import migrate_retire_always_on_audio  # type: ignore  # noqa: E402
 import prefs_merge  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 import prefs_store  # type: ignore  # noqa: E402 (sys.path調整後のimportが必要)
 from instance_identity import MQTT_PREFIX  # type: ignore  # noqa: E402
 LOG_DIR    = os.environ.get("EHA_LOG_DIR", os.path.join(SCRIPT_DIR, "log"))
 PORT       = int(os.environ.get("INGRESS_PORT", 8099))
+
+
+def merge_preferences_for_save(existing: dict, incoming: dict) -> dict:
+    """Merge unmanaged fields while refusing to revive retired audio settings."""
+
+    merged = prefs_merge.merge_preferences(existing, incoming)
+    retired, _ = migrate_retire_always_on_audio.retire_always_on_audio_preferences(
+        merged
+    )
+    return retired
 
 CHAT_LOG = os.path.join(LOG_DIR, "chat_log.jsonl")
 VOICE_INTROSPECTION_LOG = os.environ.get(
@@ -2131,7 +2142,7 @@ class Handler(BaseHTTPRequestHandler):
                 # UIが言及しなかったキーは既存から引き継ぐ。項目そのものの削除は壊さない。
                 prefs_store.update(
                     PREFS_FILE,
-                    lambda existing: prefs_merge.merge_preferences(existing, body),
+                    lambda existing: merge_preferences_for_save(existing, body),
                 )
                 self.send_json({"ok": True})
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:

@@ -6,6 +6,23 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Removed / 削除
+
+- アドオン内蔵の常時音声デーモン、常時STT、ウェイクワード検出、背景音イベント生成と、
+  それらの設定項目を削除しました。音声による呼び出しには任意のRTSP Assist Gateway等を利用します。
+  Removed the built-in always-on audio daemon, continuous STT, wake-word detection, background-audio event
+  production, and their settings. Spoken wake-up now uses an optional external route such as RTSP Assist Gateway.
+
+### Changed / 変更
+
+- `listen`、`use_device_microphone`、音声チャットなどの能動聴取と既存音声履歴の参照は維持します。
+  起動時に廃止設定をバックアップ付きで除去し、古い常時STT履歴は24時間を超えると自動的な
+  会話コンテキストへ注入しません。
+  Kept active listening, voice chat, and read-only access to existing audio history. Startup now backs up and
+  removes retired settings, and frozen always-on STT history older than 24 hours is no longer auto-injected.
+
 ## [2.1.16] - 2026-08-11
 
 ### Added / 追加

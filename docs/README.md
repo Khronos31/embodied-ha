@@ -19,5 +19,4 @@
 - `embodied_ha/desire_state.py` + `desires.json` — 欲求システム
 - `embodied_ha/anomaly_state.py` — 異常検知と explore 緊急度
 - `embodied_ha/sociality_state.py` — 関係・同意・ターンテイキング状態
-- `embodied_ha/audio_daemon.py` — 常時 STT と録音ウォッチャー
-
+- `embodied_ha/audio-mcp.py` — 能動聴取、音声履歴の参照、発話

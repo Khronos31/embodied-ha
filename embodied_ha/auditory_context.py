@@ -5,13 +5,12 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 from datetime import timedelta
 
 from state_utils import clean, get_device_capabilities, now, parse_ts
 
 DEFAULT_AUDITORY_EVENTS_FILE = "/data/embodied-ha/log/auditory_events.jsonl"
-_AUDITORY_EVENTS_LOCK = threading.Lock()
+DEFAULT_AUDITORY_CONTEXT_MAX_AGE_HOURS = 24
 
 
 def default_auditory_events_path() -> str:
@@ -29,65 +28,26 @@ def auditory_events_path() -> str:
     )
 
 
-def append_auditory_event(
-    entry: dict,
-    retention_hours: int | None = None,
-    source_label: str | None = None,
-) -> None:
-    path = auditory_events_path()
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-
-    with _AUDITORY_EVENTS_LOCK:
-        if retention_hours is None:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            return
-
-        try:
-            retention = int(retention_hours)
-        except Exception:
-            retention = 1
-        if retention <= 0:
-            return
-
-        source = clean(source_label) or clean(entry.get("source"))
-        cutoff = now() - timedelta(hours=retention)
-        entries: list[dict] = []
-        if os.path.exists(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            parsed = json.loads(line)
-                        except Exception:
-                            continue
-                        if not isinstance(parsed, dict):
-                            continue
-                        ts = parse_ts(parsed.get("timestamp"))
-                        if source and clean(parsed.get("source")) == source and ts and ts < cutoff:
-                            continue
-                        entries.append(parsed)
-            except Exception:
-                entries = []
-        entries.append(entry)
-        tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            for item in entries:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        os.replace(tmp_path, path)
-
-
 def load_recent_auditory_events(
     user_msg: str,
     limit: int = 3,
     source_filter: str | None = None,
+    max_age_hours: int | None = None,
 ) -> list[dict]:
     path = auditory_events_path()
     if not os.path.exists(path):
         return []
+
+    if max_age_hours is None:
+        try:
+            max_age_hours = int(
+                clean(os.environ.get("EHA_AUDITORY_CONTEXT_MAX_AGE_HOURS"))
+                or DEFAULT_AUDITORY_CONTEXT_MAX_AGE_HOURS
+            )
+        except (TypeError, ValueError):
+            max_age_hours = DEFAULT_AUDITORY_CONTEXT_MAX_AGE_HOURS
+    max_age_hours = max(1, max_age_hours)
+    cutoff = now() - timedelta(hours=max_age_hours)
 
     entries: list[dict] = []
     try:
@@ -98,11 +58,13 @@ def load_recent_auditory_events(
                     continue
                 try:
                     parsed = json.loads(line)
-                except Exception:
+                except json.JSONDecodeError:
                     continue
                 if isinstance(parsed, dict):
-                    entries.append(parsed)
-    except Exception:
+                    timestamp = parse_ts(parsed.get("timestamp"))
+                    if timestamp is not None and timestamp >= cutoff:
+                        entries.append(parsed)
+    except OSError:
         return []
 
     if source_filter:

@@ -10,8 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir faster-whisper --quiet 2>/dev/null || true
-RUN python3 -m pip install --break-system-packages --no-cache-dir "pysilero-vad==3.2.0" \
-    && python3 -c "from pysilero_vad import SileroVoiceActivityDetector; SileroVoiceActivityDetector()"
 
 # Claude CLI は同梱しない（増分5a）。Web UI から DIY 配置（/data/claude-cli/bin/claude、
 # claude_setup.install() 経由）する。run.sh が CLAUDE_BIN/EHA_CLAUDE_BIN を配置先へ配線する。

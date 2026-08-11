@@ -27,6 +27,24 @@ class WebUITests(unittest.TestCase):
         self.assertIn("tts_options: _ttsOptions", self.app_js)
         self.assertNotIn("/api/tts/voicevox/speakers", self.app_js)
 
+    def test_always_on_audio_settings_are_retired_but_active_stt_remains(self):
+        self.assertIn('id="setting-stt-provider"', self.index_html)
+        self.assertIn('id="setting-stt-language"', self.index_html)
+        self.assertNotIn('id="setting-wake-words"', self.index_html)
+        for removed in (
+            "mic-stt-enabled-modal",
+            "mic-wake-word-modal",
+            "mic-background-hearing-modal",
+            "mic-retention-modal",
+            "toggleMicSttEnabledModal",
+            "dataset.sttEnabled",
+            "dataset.wakeWordEnabled",
+            "dataset.backgroundHearingEnabled",
+            "dataset.sttRetention",
+        ):
+            self.assertNotIn(removed, self.app_js)
+        self.assertIn("function cleanMicRowData", self.app_js)
+
     def test_badge_helpers_for_chat_and_voice(self):
         """getBadgeText と getBadgeClass が chat と voice に対して正しいラベル/クラスを返し、自律モードに対しては空を返すこと"""
 

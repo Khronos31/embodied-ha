@@ -18,16 +18,6 @@
 
 ---
 
-### `wake_words`
-
-| 型 | デフォルト |
-|---|---|
-| array of string | `[]` |
-
-ウェイクワードの一覧です。`audio_daemon.py` が参照します。
-
----
-
 ### `tts_entity`
 
 | 型 | デフォルト |
@@ -47,7 +37,7 @@ VOICEVOX Song用の`sing_speaker`は別機能です。
 |---|---|
 | string | `"stt.home_assistant_cloud"` 例 |
 
-音声認識プロバイダーです。
+`listen`、`use_device_microphone`、音声チャットなどの能動聴取で使う音声認識プロバイダーです。
 
 ---
 
@@ -57,7 +47,7 @@ VOICEVOX Song用の`sing_speaker`は別機能です。
 |---|---|
 | string | `"ja-JP"` 例 |
 
-STT の言語コードです。
+能動聴取で使う STT の言語コードです。
 
 ---
 
@@ -99,7 +89,7 @@ STT の言語コードです。
 |---|---|
 | array of object | `[]` |
 
-耳として使うマイク一覧です。侵入が必要な身体的知覚で、`audio-mcp` の `listen` と `use_device_microphone`、`audio_daemon.py` が参照します。
+耳として使うマイク一覧です。侵入が必要な身体的知覚で、`audio-mcp` の `listen` と `use_device_microphone` が参照します。
 
 各要素の主なフィールド:
 
@@ -109,10 +99,14 @@ STT の言語コードです。
 | `source` | string | ○ | `rtsp://...` の音声ストリーム |
 | `room` | string | ○ | 所在部屋 |
 | `label` | string | ○ | 表示名 |
-| `stt_enabled` | boolean | — | 常時 STT を有効にするか |
 | `note` | string | — | 補足 |
 
-`stt_enabled: true` の `mics` は `audio_daemon.py` の監視対象になります。旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。旧 `alsa://` / `tcp://` 項目は消失防止のため残りますが、起動ログで移行対象として通知され、RTSPへ置き換えるまで使用されません。
+旧 `audio_sources` からの移行は `run.sh` 起動時に `migrate_source_schema.py` が自動で行います。旧 `alsa://` / `tcp://` 項目は消失防止のため残りますが、起動ログで移行対象として通知され、RTSPへ置き換えるまで使用されません。
+
+内蔵の常時 STT とウェイクワード検出は廃止されました。起動時の移行でトップレベルの
+`wake_words` / `wake_ack` と、各マイクの `stt_enabled` / `stt_retention_hours` /
+`wake_word_enabled` / `background_hearing_enabled` をバックアップ後に削除します。
+音声による呼び出しには、RTSP Assist GatewayなどからMQTT chat契約へ接続する外部経路を利用してください。
 
 ---
 

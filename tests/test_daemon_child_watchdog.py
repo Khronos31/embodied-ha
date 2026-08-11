@@ -1,4 +1,4 @@
-"""Repeated audio/Web child exits must become visible without slowing recovery."""
+"""Repeated Web child exits must become visible without slowing recovery."""
 import json
 import os
 import sys
@@ -55,18 +55,18 @@ class ChildWatchdogFailuresTests(unittest.TestCase):
         response.__exit__.return_value = False
         with mock.patch.object(self.daemon.urllib.request, "urlopen", return_value=response) as urlopen:
             sent = self.daemon.notify_child_watchdog_failing(
-                "音声デーモン", self.daemon._AUDIO_FAILURE_NOTIFICATION_ID, 5,
+                "Webサーバー", self.daemon._WEB_FAILURE_NOTIFICATION_ID, 5,
             )
         self.assertTrue(sent)
         payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
-        self.assertEqual(payload["notification_id"], self.daemon._AUDIO_FAILURE_NOTIFICATION_ID)
+        self.assertEqual(payload["notification_id"], self.daemon._WEB_FAILURE_NOTIFICATION_ID)
         self.assertIn("5回続けて停止", payload["message"])
         self.assertIn("自動再起動", payload["message"])
 
     def test_watchdogs_keep_the_existing_restart_delay(self):
         self.assertEqual(self.daemon.CHILD_WATCHDOG_RESTART_DELAY, 60)
 
-    def test_audio_watchdog_notifies_after_five_real_restart_iterations(self):
+    def test_web_watchdog_notifies_after_five_real_restart_iterations(self):
         class StopWatchdog(BaseException):
             pass
 
@@ -91,12 +91,12 @@ class ChildWatchdogFailuresTests(unittest.TestCase):
                  self.daemon, "notify_child_watchdog_failing", return_value=True,
              ) as notify:
             with self.assertRaises(StopWatchdog):
-                self.daemon.audio_daemon_watchdog()
+                self.daemon.web_server_watchdog()
 
         self.assertEqual(popen.call_count, 5)
         self.assertEqual(sleeps, [60] * 5)
         notify.assert_called_once_with(
-            "音声デーモン", self.daemon._AUDIO_FAILURE_NOTIFICATION_ID, 5,
+            "Webサーバー", self.daemon._WEB_FAILURE_NOTIFICATION_ID, 5,
         )
 
 
