@@ -168,6 +168,30 @@ class ResolveVoiceUserRoomTests(unittest.TestCase):
             self.assertEqual(user_room, "キッチン")
             self.assertEqual(speaker, "media_player.kitchen")
 
+    def test_direct_room_override_wins_and_resolves_its_speaker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefs_file = Path(tmp) / "preferences.json"
+            with open(Path(tmp) / "location_belief.json", "w", encoding="utf-8") as fh:
+                json.dump({"room": "リビング"}, fh)
+            with open(prefs_file, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {
+                        "speakers": [
+                            {"room": "リビング", "entity": "media_player.living"},
+                            {"room": "スタディ", "entity": "media_player.study"},
+                        ]
+                    },
+                    fh,
+                )
+            user_room, speaker = chat_invoke.resolve_voice_user_room(
+                "voice",
+                tmp,
+                str(prefs_file),
+                "スタディ",
+            )
+            self.assertEqual(user_room, "スタディ")
+            self.assertEqual(speaker, "media_player.study")
+
 
 class BuildInnerVoiceTests(unittest.TestCase):
     def test_empty_returns_placeholder(self):

@@ -6,6 +6,24 @@ Notable changes to this add-on. Tracked from **2.0.0** onward; for earlier histo
 形式は [Keep a Changelog](https://keepachangelog.com/) に準拠します。
 Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.16] - 2026-08-11
+
+### Added / 追加
+
+- RTSP Assist Gatewayが発行するversion付きウェイクイベントをMQTTで受け取り、検証済みの部屋を
+  その音声chatへ直接結び付けて処理できるようにしました。旧形式のテキスト／JSON入力は維持します。
+  Added support for versioned MQTT wake events from RTSP Assist Gateway, binding the validated room directly
+  to the resulting voice chat while preserving legacy text and JSON inputs.
+- stale・不正・重複イベントを拒否し、再起動後も同一request IDを再実行しないboundedな永続台帳を追加しました。
+  Added a bounded persistent request ledger that rejects malformed, stale, or duplicate events, including
+  replay of the same request ID after an add-on restart.
+
+### Changed / 変更
+
+- MQTT chatを順次処理し、Gateway由来の有効な入力は実行中chatの終了を上限付きで待つようにしました。
+  MQTT chat messages are now processed sequentially, and valid Gateway inputs wait for an active chat with a
+  bounded timeout instead of being silently discarded.
+
 ## [2.1.15] - 2026-08-10
 
 ### Changed / 変更
