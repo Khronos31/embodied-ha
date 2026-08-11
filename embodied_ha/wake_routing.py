@@ -21,6 +21,7 @@ MAX_FUTURE_SKEW_SECONDS = 30
 REPLAY_TTL_SECONDS = 3600
 REPLAY_MAX_ENTRIES = 256
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+SUPPORTED_BACKENDS = frozenset({"ha_stt", "microwakeword"})
 
 
 class TriggerError(ValueError):
@@ -120,7 +121,7 @@ def parse_chat_trigger(raw_payload: str, *, now: dt.datetime | None = None) -> C
         raise TriggerError("unsupported_event")
     if parsed.get("source") != "rtsp_assist_gateway":
         raise TriggerError("unsupported_source")
-    if parsed.get("backend") != "ha_stt":
+    if parsed.get("backend") not in SUPPORTED_BACKENDS:
         raise TriggerError("unsupported_backend")
 
     message = _clean_label(parsed.get("message"), "message", maximum=MAX_COMMAND_LENGTH)
