@@ -105,15 +105,15 @@ def read_json(path: str, default: Any = None) -> Any:
         return default
 
 
-
 def load_prefs(prefs_file: str) -> dict[str, Any]:
     """Read ``preferences.json`` and return a dict on failure."""
     prefs = read_json(prefs_file, {})
     return prefs if isinstance(prefs, dict) else {}
 
 
-
-def get_device_capabilities(current_entity: str, prefs: Mapping[str, Any]) -> dict[str, Any]:
+def get_device_capabilities(
+    current_entity: str, prefs: Mapping[str, Any]
+) -> dict[str, Any]:
     """Return device capability metadata for ``current_entity``.
 
     The result includes boolean capability flags and the matching manifest
@@ -125,15 +125,22 @@ def get_device_capabilities(current_entity: str, prefs: Mapping[str, Any]) -> di
             "is_mic": False,
             "is_speaker": False,
             "is_camera": False,
+            "mic": None,
             "mic_source": None,
             "mic_label": None,
+            "mic_room": None,
             "speaker": None,
             "camera": None,
         }
 
-    def _find_entry(items: Any, extra_keys: tuple[str, ...] = ()) -> dict[str, Any] | None:
+    def _find_entry(
+        items: Any, extra_keys: tuple[str, ...] = ()
+    ) -> dict[str, Any] | None:
         if isinstance(items, dict):
-            items = [{**(value if isinstance(value, dict) else {}), "room": key} for key, value in items.items()]
+            items = [
+                {**(value if isinstance(value, dict) else {}), "room": key}
+                for key, value in items.items()
+            ]
         if not isinstance(items, list):
             return None
         for item in items:
@@ -156,8 +163,10 @@ def get_device_capabilities(current_entity: str, prefs: Mapping[str, Any]) -> di
         # Keep the legacy HA entity fallback while also recognizing configured
         # go2rtc stream names, which do not have a ``camera.`` prefix.
         "is_camera": camera_entry is not None or entity.startswith("camera."),
+        "mic": mic_entry,
         "mic_source": clean(mic_entry.get("source")) if mic_entry else None,
         "mic_label": clean(mic_entry.get("label")) if mic_entry else None,
+        "mic_room": clean(mic_entry.get("room")) if mic_entry else None,
         "speaker": speaker_entry,
         "camera": camera_entry,
     }
