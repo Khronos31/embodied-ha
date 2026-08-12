@@ -57,10 +57,14 @@ First-party companions are not installed automatically and are not required unle
 2. Add the following repository URL and press **Add**
 
 ```
-https://github.com/Khronos31/embodied-ha
+https://github.com/Khronos31/embodied-ha-addons
 ```
 
 3. Reload the store, then install **Embodied HA** when it appears
+
+That URL is the [Embodied HA add-on catalog](https://github.com/Khronos31/embodied-ha-addons), which
+lists this add-on alongside the first-party companions. This repository holds the source; it is no
+longer an add-on repository of its own, so adding *this* URL to the store will not work.
 
 ---
 

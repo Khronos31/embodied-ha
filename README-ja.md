@@ -55,10 +55,14 @@ First-party companionは自動インストールされず、選択した構成�
 2. 以下の URL を追加して **追加** を押す
 
 ```
-https://github.com/Khronos31/embodied-ha
+https://github.com/Khronos31/embodied-ha-addons
 ```
 
 3. ストアをリロードすると「Embodied HA」が表示されるのでインストール
+
+このURLは[Embodied HA アドオンカタログ](https://github.com/Khronos31/embodied-ha-addons)で、
+このアドオンと周辺アドオンが並んでいます。**このリポジトリはソースの置き場であり、
+アドオンリポジトリではなくなりました**。こちらのURLをストアに追加しても表示されません。
 
 ---
 
