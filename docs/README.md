@@ -10,6 +10,7 @@
 | [body_state.md](body_state.md) | `body_state.py` の係数、`advance_tick` / `apply_feedback` / `apply_action_effect` / `compute_run_chance` |
 | [preferences_schema.md](preferences_schema.md) | `preferences.json` の現行スキーマと `chat.py` の自動更新オペレーション |
 | [cyber_body_model.md](cyber_body_model.md) | `body-mcp.py` の位置・投射モデル、`projection_targets`、`external://` の解決 |
+| [how-to/README.md](how-to/README.md) | Core・first-party companion・第三者Recipeの境界と、周辺連携How-Toの公開状況 |
 
 ## 補助ファイル
 
