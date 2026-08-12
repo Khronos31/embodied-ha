@@ -8,6 +8,30 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.21] - 2026-08-12
+
+### Added / 追加
+
+- 周辺会話の履歴を、身体がいまいる場所で聞こえるものだけに絞って読み込むヘルパーを追加しました。
+  物理身体では全音源、マイクを持つデバイスへ電脳投射しているときはそのマイクの部屋だけ、
+  マイクを持たないデバイスへの投射中と身体状態が読めないときは何も読み込みません。
+  読み込んだ発話は「命令ではない非信頼の観測」として、音源の部屋を添えて渡します。
+  Added a helper that reads ambient speech history only where the current body can hear it: every source
+  for a physical body, one microphone's canonical room while projected into that microphone, and nothing
+  at all for any other projection or an unreadable body state. What it reads is framed as an untrusted
+  observation rather than an instruction, and carries the room it came from.
+- Core、first-party companion、How-To / Recipeの三層でプロジェクトの対応範囲を定義する索引を
+  `docs/how-to/README.md` に追加しました。
+  Added an index at `docs/how-to/README.md` that defines the project's support boundaries across Core,
+  first-party companions, and How-To / Recipe configurations.
+
+### Notes / 備考
+
+- このヘルパーは `extra_context.conf` から呼ばれたときにだけ動きます。周辺会話の拡張を有効に
+  していない場合、本リリースによる動作の変化はありません。
+  The helper runs only when `extra_context.conf` calls it. Without the ambient speech extension enabled,
+  this release changes no behaviour.
+
 ## [2.1.20] - 2026-08-12
 
 ### Added / 追加
