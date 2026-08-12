@@ -1,10 +1,9 @@
 import importlib.util
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
-import sys
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "embodied_ha"))
@@ -34,6 +33,24 @@ class StateUtilsTests(unittest.TestCase):
         self.assertTrue(legacy["is_camera"])
         self.assertIsNone(legacy["camera"])
         self.assertFalse(other["is_camera"])
+
+    def test_microphone_capability_exposes_canonical_room(self):
+        prefs = {
+            "mics": [
+                {
+                    "entity": "study_mic",
+                    "source": "rtsp://example.invalid/study",
+                    "label": "Study microphone",
+                    "room": "study",
+                }
+            ]
+        }
+
+        capabilities = state_utils.get_device_capabilities("study_mic", prefs)
+
+        self.assertTrue(capabilities["is_mic"])
+        self.assertEqual(capabilities["mic_room"], "study")
+        self.assertEqual(capabilities["mic"]["label"], "Study microphone")
 
     def test_file_lock_blocks_same_path_but_not_other_paths(self):
         with tempfile.TemporaryDirectory() as tmpdir:
