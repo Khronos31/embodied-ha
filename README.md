@@ -26,6 +26,22 @@ Not a tool that makes your home more convenient — a resident that moves in, wa
 
 ---
 
+## Project scope
+
+**Embodied HA is a project for connecting Home Assistant with LLM agents so they can act with a sense of embodiment in the home.** This repository contains its core implementation: the Embodied HA HAOS add-on.
+
+Related software and setup recipes are kept outside the core when Home Assistant or another focused component can own that responsibility. They are labeled by support boundary:
+
+| Tier | Meaning | Current examples |
+|---|---|---|
+| **Core** | Shipped, tested, versioned, and supported as part of this add-on | Embodied HA HAOS add-on in this repository |
+| **First-party companion** | Maintained by the Embodied HA project, but installed, versioned, and supported separately | [RTSP Assist Gateway](https://github.com/Khronos31/rtsp-assist-gateway), [ESPHome Audio Node](https://github.com/Khronos31/esphome-audio-node), [Embodied HA MCP Lab](https://github.com/Khronos31/embodied-ha-mcp-lab) |
+| **How-To / Recipe** | Optional configurations that combine Home Assistant or third-party components; not bundled with the add-on and not a guarantee of third-party behavior | go2rtc audio, Wyoming/microWakeWord, Home Assistant automations |
+
+First-party companions are not installed automatically and are not required unless a setup explicitly chooses them. See the [Ecosystem and How-To index (Japanese canonical)](docs/how-to/README.md) for maturity, verified versions, privacy boundaries, rollback, and the correct support owner.
+
+---
+
 ## Requirements
 
 - **Home Assistant OS** with Supervisor

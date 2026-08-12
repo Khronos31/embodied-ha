@@ -24,6 +24,22 @@ Home Assistant の中に住み込む、**自律エージェント HAOS アドオ
 
 ---
 
+## プロジェクトの範囲
+
+**Embodied HAは、Home AssistantとLLMエージェントを連携させ、家庭内で身体性を持って活動できるようにするプロジェクトです。** このリポジトリには、その基幹実装であるEmbodied HA HAOSアドオンを収録しています。
+
+Home Assistantや責務の明確な別コンポーネントで実現できる周辺機能は、Coreへ抱え込まず、次の区分を明示して案内します。
+
+| 区分 | 意味 | 現在の例 |
+|---|---|---|
+| **Core** | このアドオンへ同梱され、同じversion・テスト・不具合対応範囲で扱う | このリポジトリのEmbodied HA HAOSアドオン |
+| **First-party companion** | Embodied HAプロジェクトとして保守するが、別途インストールし、独立したversion・release・issue境界を持つ | [RTSP Assist Gateway](https://github.com/Khronos31/rtsp-assist-gateway)、[ESPHome Audio Node](https://github.com/Khronos31/esphome-audio-node)、[Embodied HA MCP Lab](https://github.com/Khronos31/embodied-ha-mcp-lab) |
+| **How-To / Recipe** | Home Assistantや第三者部品を組み合わせる任意の参考構成。本体へは同梱せず、第三者部品全体の動作を保証しない | go2rtc音声、Wyoming/microWakeWord、Home Assistantオートメーション |
+
+First-party companionは自動インストールされず、選択した構成で必要になる場合を除いて必須ではありません。成熟度、検証version、privacy境界、rollback、不具合のownerは[エコシステム／How-To索引](docs/how-to/README.md)で確認してください。
+
+---
+
 ## 必要なもの
 
 - **Home Assistant OS**（Supervisor 付き）
