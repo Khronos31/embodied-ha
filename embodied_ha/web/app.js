@@ -1358,6 +1358,250 @@ async function harnessStreamSSE(method, url, body, handlers) {
     }
 }
 
+// ==========================================
+// Antigravity CLI バージョン・更新管理機能
+// ==========================================
+
+// ステート保持
+let g_agUpdateInProgress = false;
+
+/**
+ * Antigravity のバージョン状態を取得して画面に反映する
+ * @param {boolean} checkVendor - true の場合ベンダー最新版の問い合せを行う (?check=1)
+ */
+async function fetchAntigravityUpdateStatus(checkVendor = false) {
+    const sectionEl = document.getElementById('antigravity-version-section');
+    if (!sectionEl) return;
+
+    const url = checkVendor 
+        ? `${base}/api/setup/antigravity/update-status?check=1` 
+        : `${base}/api/setup/antigravity/update-status`;
+
+    try {
+        const res = await fetch(url, { method: 'GET' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        
+        // installed_version が null または未定義の場合は節ごと隠す
+        if (!data || data.installed_version == null) {
+            sectionEl.style.display = 'none';
+            return;
+        }
+
+        // 節を表示
+        sectionEl.style.display = 'block';
+        renderAntigravityVersionUI(data);
+    } catch (e) {
+        console.error('Failed to fetch Antigravity update status:', e);
+    }
+}
+
+/**
+ * 取得した JSON データを UI に反映
+ */
+function renderAntigravityVersionUI(data) {
+    const installedEl = document.getElementById('ag-installed-version');
+    const pinnedEl = document.getElementById('ag-pinned-version');
+    const availableEl = document.getElementById('ag-available-version');
+    const mismatchAlert = document.getElementById('ag-version-mismatch-alert');
+    const mismatchText = document.getElementById('ag-version-mismatch-text');
+    const updateAlert = document.getElementById('ag-update-available-alert');
+    const btnUpdate = document.getElementById('ag-btn-do-update');
+
+    if (installedEl) installedEl.textContent = data.installed_version || '-';
+    if (pinnedEl) pinnedEl.textContent = data.pinned_version || '-';
+    if (availableEl) availableEl.textContent = data.available_version || '未確認';
+
+    // 1. 記録と実物の食い違い警告 (pinned_version != installed_version)
+    if (data.pinned_version && data.installed_version && data.pinned_version !== data.installed_version) {
+        mismatchText.textContent = `記録上の固定バージョン (${data.pinned_version}) と実際のインストール済みバージョン (${data.installed_version}) が食い違っています。手動変更された可能性があります。`;
+        mismatchAlert.style.display = 'block';
+    } else {
+        mismatchAlert.style.display = 'none';
+    }
+
+    // 2. 更新通知・ボタン状態
+    if (data.update_available) {
+        updateAlert.style.display = 'block';
+        if (btnUpdate && !g_agUpdateInProgress) btnUpdate.disabled = false;
+    } else {
+        updateAlert.style.display = 'none';
+        if (btnUpdate && !g_agUpdateInProgress) btnUpdate.disabled = true;
+    }
+
+    // 3. 保管中バージョン一覧の描画
+    renderRetainedVersionsTable(data.retained || []);
+}
+
+/**
+ * 保管中バージョンテーブルの描画
+ */
+function renderRetainedVersionsTable(retainedList) {
+    const emptyEl = document.getElementById('ag-retained-list-empty');
+    const tableEl = document.getElementById('ag-retained-table');
+    const tbodyEl = document.getElementById('ag-retained-tbody');
+
+    if (!retainedList || retainedList.length === 0) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (tableEl) tableEl.style.display = 'none';
+        return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (tableEl) tableEl.style.display = 'table';
+
+    tbodyEl.innerHTML = '';
+    retainedList.forEach((item) => {
+        const tr = document.createElement('tr');
+        
+        const dateStr = item.retained_at 
+            ? new Date(item.retained_at).toLocaleString() 
+            : '不明';
+
+        tr.innerHTML = `
+            <td style="font-family: monospace; font-weight: 600;">${escapeHtml(item.version || '')}</td>
+            <td style="color: var(--claude-text-sub); font-size: 0.85rem;">${escapeHtml(dateStr)}</td>
+            <td>
+                <button type="button" class="btn btn-secondary btn-sm" 
+                    onclick="runAntigravityRollback('${escapeHtml(item.version)}')"
+                    ${g_agUpdateInProgress ? 'disabled' : ''}>
+                    このバージョンに戻す
+                </button>
+            </td>
+        `;
+        tbodyEl.appendChild(tr);
+    });
+}
+
+/**
+ * 「更新を確認」ボタン押下
+ */
+async function checkAntigravityUpdate() {
+    const btnCheck = document.getElementById('ag-btn-check-update');
+    if (btnCheck) {
+        btnCheck.disabled = true;
+        btnCheck.textContent = '確認中...';
+    }
+    try {
+        await fetchAntigravityUpdateStatus(true);
+    } finally {
+        if (btnCheck) {
+            btnCheck.disabled = false;
+            btnCheck.textContent = '更新を確認';
+        }
+    }
+}
+
+/**
+ * 「更新する」実行
+ */
+function runAntigravityUpdate() {
+    if (g_agUpdateInProgress) return;
+    if (!confirm('Antigravity CLI を更新しますか？\n（実行中の会話は維持され、旧バージョンは自動保管されます）')) {
+        return;
+    }
+
+    startAgOperationUI('Antigravity CLI を更新中… ⏳');
+
+    // GET リクエストで SSE ストリームを受信
+    harnessStreamSSE('GET', '/api/setup/antigravity/update', null, {
+        onLine: (payload) => {
+            appendAgLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
+        },
+        onDone: (payload) => {
+            const version = payload && payload.version ? payload.version : '';
+            appendAgLogLine(`\n✅ 更新が完了しました (v${version})`);
+            finishAgOperationUI('更新完了');
+            fetchAntigravityUpdateStatus(false);
+        },
+        onError: (err) => {
+            appendAgLogLine(`\n❌ エラーが発生しました: ${err}`);
+            finishAgOperationUI('エラー発生');
+            fetchAntigravityUpdateStatus(false);
+        }
+    });
+}
+
+/**
+ * 「ロールバック」実行
+ * @param {string} version 
+ */
+function runAntigravityRollback(version) {
+    if (g_agUpdateInProgress) return;
+    const targetText = version ? `バージョン ${version}` : '直近の保管バージョン';
+    if (!confirm(`${targetText} へ戻しますか？`)) {
+        return;
+    }
+
+    startAgOperationUI(`バージョン ${version || ''} へロールバック中… ⏳`);
+
+    const query = version ? `?version=${encodeURIComponent(version)}` : '';
+    // GET リクエストで SSE ストリームを受信
+    harnessStreamSSE('GET', `/api/setup/antigravity/rollback${query}`, null, {
+        onLine: (payload) => {
+            appendAgLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
+        },
+        onDone: (payload) => {
+            const resVersion = payload && payload.version ? payload.version : version;
+            appendAgLogLine(`\n✅ ロールバックが完了しました (v${resVersion})`);
+            finishAgOperationUI('ロールバック完了');
+            fetchAntigravityUpdateStatus(false);
+        },
+        onError: (err) => {
+            appendAgLogLine(`\n❌ エラーが発生しました: ${err}`);
+            finishAgOperationUI('エラー発生');
+            fetchAntigravityUpdateStatus(false);
+        }
+    });
+}
+
+// --- 操作中のUI制御ユーティリティ ---
+
+function startAgOperationUI(statusText) {
+    g_agUpdateInProgress = true;
+    
+    const spinner = document.getElementById('ag-status-spinner');
+    const logContainer = document.getElementById('ag-log-container');
+    const logStatus = document.getElementById('ag-log-status-text');
+    const logOutput = document.getElementById('ag-log-output');
+    const btnCheck = document.getElementById('ag-btn-check-update');
+    const btnUpdate = document.getElementById('ag-btn-do-update');
+
+    if (spinner) {
+        spinner.textContent = statusText;
+        spinner.style.display = 'inline';
+    }
+    if (logContainer) logContainer.style.display = 'block';
+    if (logStatus) logStatus.textContent = statusText;
+    if (logOutput) logOutput.textContent = '';
+
+    if (btnCheck) btnCheck.disabled = true;
+    if (btnUpdate) btnUpdate.disabled = true;
+
+    // テーブル内のロールバックボタンも無効化
+    const retainedButtons = document.querySelectorAll('#ag-retained-tbody button');
+    retainedButtons.forEach(b => b.disabled = true);
+}
+
+function finishAgOperationUI(statusText) {
+    g_agUpdateInProgress = false;
+
+    const spinner = document.getElementById('ag-status-spinner');
+    const logStatus = document.getElementById('ag-log-status-text');
+    const btnCheck = document.getElementById('ag-btn-check-update');
+
+    if (spinner) spinner.style.display = 'none';
+    if (logStatus) logStatus.textContent = statusText;
+    if (btnCheck) btnCheck.disabled = false;
+}
+
+function appendAgLogLine(line) {
+    const logOutput = document.getElementById('ag-log-output');
+    if (!logOutput) return;
+    logOutput.textContent += line + '\n';
+    logOutput.scrollTop = logOutput.scrollHeight;
+}
+
 function harnessInstall(harness) {
     const ep = HARNESS_ENDPOINTS[harness].install;
     harnessSetStatus('ダウンロード / インストール中… ⏳');
@@ -2048,6 +2292,9 @@ async function switchSettingsTab(tabName) {
                 initJsonEditor(jsonText);
             }, 50);
         }
+
+        // Antigravity バージョン情報の読み込み (記録のみ読む)
+        fetchAntigravityUpdateStatus(false);
     }
 
     activeSettingsTab = tabName;

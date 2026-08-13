@@ -104,6 +104,43 @@ class SetupGuardTests(unittest.TestCase):
                 f"frontend install method for {path} ({m.group(1)}) != backend verb ({method})",
             )
 
+    def test_frontend_binary_update_calls_use_the_backend_verb(self):
+        """更新/ロールバックの SSE 呼び出しが GET で宣言されていること。
+
+        install で一度起きた失敗（フロントが POST と宣言し、backend の GET dispatch に
+        届かず 404 へフォールスルーして汎用エラーだけが出る）を、あとから増えた
+        バイナリ差し替え経路でも防ぐ。app.js は経路ごとに harnessStreamSSE を直接
+        呼ぶ形なので、宣言テーブルではなく呼び出しそのものを読む。
+        """
+        import re
+
+        app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
+        backend_verb = dict((path, method) for method, path in self.MUTATION_ROUTES)
+        for path in ("/api/setup/antigravity/update", "/api/setup/antigravity/rollback"):
+            # 第2引数は素の文字列とテンプレートリテラル（?version= 付き）の両方があり得る。
+            calls = re.findall(
+                r"harnessStreamSSE\(\s*'(\w+)'\s*,\s*[`']" + re.escape(path),
+                app_js,
+            )
+            self.assertTrue(calls, f"app.js に {path} を呼ぶ harnessStreamSSE が無い")
+            for method in calls:
+                self.assertEqual(
+                    method,
+                    backend_verb[path],
+                    f"frontend method for {path} ({method}) != backend verb ({backend_verb[path]})",
+                )
+
+    def test_frontend_update_status_is_read_only_by_default(self):
+        """状態表示は既定でベンダーへ問い合わせないこと。
+
+        `?check=1` は更新の凍結を一時解除して外部へ出る。画面を開いただけで
+        その窓が開くと、利用者が明示的に更新を選ぶという設計契約が崩れる。
+        """
+        app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("fetchAntigravityUpdateStatus(false)", app_js)
+        # check=1 は「更新を確認」ボタン経路にだけ現れる。
+        self.assertEqual(app_js.count("update-status?check=1"), 1)
+
     def test_only_ingress_source_is_allowed_unless_overridden_or_disabled(self):
         handler = object.__new__(server.Handler)
         handler.send_json = mock.Mock()

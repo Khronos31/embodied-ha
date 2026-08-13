@@ -3143,4 +3143,110 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     white-space: nowrap;
 }
 
+/* ==========================================
+   Antigravity CLI バージョン・更新管理スタイル
+   ========================================== */
 
+.version-status-card {
+    background-color: var(--claude-sidebar-bg, #f3efe6);
+    border: 1px solid var(--claude-border, #e5dfd5);
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 12px;
+}
+
+.version-info-grid {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.version-info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.version-label {
+    font-size: 0.8rem;
+    color: var(--claude-text-sub, #6b6359);
+    font-weight: 500;
+}
+
+.version-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--claude-text-main, #191919);
+    font-family: monospace;
+}
+
+.version-alert {
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    line-height: 1.4;
+}
+
+.version-alert.alert-warning {
+    background-color: #fff3cd;
+    border: 1px solid #ffeba8;
+    color: #856404;
+}
+
+.version-alert.alert-warning p {
+    margin: 4px 0 0 0;
+    font-size: 0.85rem;
+}
+
+.version-alert.alert-info {
+    background-color: #e8f4fd;
+    border: 1px solid #b6e0fe;
+    color: #0c5460;
+}
+
+/* ターミナル風ログ表示エリア */
+.version-log-container {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: monospace;
+    font-size: 0.825rem;
+}
+
+.version-log-header {
+    background-color: #2d2d2d;
+    padding: 6px 12px;
+    color: #aaa;
+    font-size: 0.775rem;
+    border-bottom: 1px solid #3c3c3c;
+}
+
+.version-log-output {
+    padding: 12px;
+    margin: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* 保管済みバージョンテーブル */
+.retained-table {
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.retained-table th, 
+.retained-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--claude-border, #e5dfd5);
+}
+
+.retained-table th {
+    background-color: var(--claude-sidebar-bg, #f3efe6);
+    color: var(--claude-text-sub, #6b6359);
+    font-weight: 600;
+}

@@ -550,6 +550,10 @@ def rollback(version: str | None = None, progress: Progress = None) -> dict[str,
     path = target.get("path")
     if not path:
         raise UpdateError("retained Antigravity build has no recorded path")
+    # 存在確認を先に行う。順序を逆にすると、消えた保管版に対して素の
+    # FileNotFoundError が利用者へそのまま出る（Playwright 検証で実際に出た）。
+    if not os.path.isfile(path):
+        raise UpdateError(f"retained Antigravity binary is missing: {path}")
     expected = target.get("binary_sha512")
     if expected and _sha512_of(path) != expected:
         raise UpdateError("retained Antigravity binary does not match its recorded SHA-512")

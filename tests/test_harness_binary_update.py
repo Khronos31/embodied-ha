@@ -342,6 +342,14 @@ class AntigravityUpdateTests(unittest.TestCase):
             updater.rollback()
         self.assertEqual(self.binary.read_bytes(), self.new_payload)
 
+    def test_rollback_to_a_deleted_retained_build_reports_it_plainly(self):
+        """消えた保管版で素の FileNotFoundError を出さないこと。"""
+        harness_pin.add_retained("agy", "1.1.6", str(self.bin_dir / "agy-1.1.6"), binary_sha512="ab")
+        with self.versions(["1.1.9"]), self.assertRaises(updater.UpdateError) as raised:
+            updater.rollback("1.1.6")
+        self.assertIn("missing", str(raised.exception))
+        self.assertEqual(self.binary.read_bytes(), b"old-binary")
+
     def test_rollback_without_any_retained_build_is_refused(self):
         with self.assertRaises(updater.UpdateError):
             updater.rollback()
