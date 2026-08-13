@@ -550,7 +550,75 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(result.stdout, "")
             self.assertIn("agy structured output failed: schema rejected", result.stderr)
 
-    def test_agy_non_daybook_schema_keeps_prompt_fallback(self):
+    def test_agy_observe_uses_native_schema_with_enum_null_converted(self):
+        """observe は native `--json-schema` を使い、enum 内 null は変換して渡す。
+
+        ⚠️ **これは既存テストの期待値を反転させたもの**（元:
+        `test_agy_non_daybook_schema_keeps_prompt_fallback`）。挙動変更が目的で、
+        テストを通すための緩和ではない。根拠:
+
+        - 旧実装のコメントは「loop schemas は nullable type union を使っており
+          1.1.9 がそれを拒否する」としていたが、**1.1.9 / 1.1.12 の実測で union は通る**。
+          拒否されるのは `enum` に `null` が入る場合だけだった（2026-08-13）
+        - 正本の observe スキーマそのものを 1.1.9 に食わせると、変換前は 0 トークンで
+          即 ERROR、`emotion` を変換すると SUCCESS で `structured_output` が返る
+        - その誤診のあいだ、agy 個体の observe は 1 日 4〜6 回 JSON にならず捨てられていた
+          （直近7日で35件・他2個体は0件）
+
+        gate 外のサイトが prompt fallback のままであることは下の別テストで守る。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "agy.json"
+            fake = tmpdir / "agy"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import sys
+                from pathlib import Path
+
+                args = sys.argv[1:]
+                if "--help" in args:
+                    print("--output-format --json-schema")
+                    raise SystemExit(0)
+                Path({record.as_posix()!r}).write_text(json.dumps(args), encoding="utf-8")
+                print('{{"ok":true}}')
+                """,
+            )
+            schema = json.dumps(
+                {
+                    "type": "object",
+                    "properties": {"emotion": {"type": "string", "enum": ["calm", None]}},
+                },
+                ensure_ascii=False,
+            )
+
+            result = self.run_wrapper(
+                ["--json-schema", schema, "--agent-site", "observe", "hello"],
+                {
+                    "EHA_AGENT_HARNESS": "agy",
+                    "EHA_ANTIGRAVITY_BIN": fake.as_posix(),
+                    "EHA_ANTIGRAVITY_HOME": (tmpdir / "agy-home").as_posix(),
+                    "EHA_AGENT_CWD": (tmpdir / "workdir").as_posix(),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            args = json.loads(record.read_text(encoding="utf-8"))
+            self.assertIn("--output-format", args)
+            passed = json.loads(args[args.index("--json-schema") + 1])
+            emotion = passed["properties"]["emotion"]
+            self.assertIn("anyOf", emotion, "enum 内 null が変換されていない")
+            self.assertNotIn(None, emotion["anyOf"][0]["enum"])
+
+    def test_agy_ungated_site_keeps_prompt_fallback(self):
+        """gate に入っていないサイトは従来どおり prompt 埋め込みのまま。
+
+        元の `test_agy_non_daybook_schema_keeps_prompt_fallback` が守っていた保護を、
+        gate の外側（observe/daybook 以外）で引き継ぐ。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             record = tmpdir / "agy.json"
@@ -574,7 +642,7 @@ class InvokeAgentTests(unittest.TestCase):
             schema = '{"type":"object"}'
 
             result = self.run_wrapper(
-                ["--json-schema", schema, "--agent-site", "observe", "hello"],
+                ["--json-schema", schema, "--agent-site", "explore", "hello"],
                 {
                     "EHA_AGENT_HARNESS": "agy",
                     "EHA_ANTIGRAVITY_BIN": fake.as_posix(),

@@ -868,16 +868,27 @@ run_agy() {
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
   local structured_args=()
-  # Antigravity 1.1.8 added native structured output. Use it for the F-51
-  # daybook path whose exact schema is live-verified. Current loop schemas use
-  # nullable type unions that Antigravity 1.1.9 rejects before model execution,
-  # so other sites deliberately retain the prompt-schema fallback.
-  if [[ "$agent_site" == "daybook" && -n "$json_schema" ]]; then
+  # Antigravity 1.1.8 added native structured output.
+  #
+  # ⚠️ ここには長らく「loop schemas は nullable type union を使っており 1.1.9 が
+  # それを拒否するので daybook 以外は prompt 埋め込みのまま」と書いてあったが、
+  # **誤診だった**。1.1.9 / 1.1.12 の実測（2026-08-13）では union は通り、
+  # 拒否されるのは `enum` の要素に `null` が入っている場合だけ。該当は
+  # `_EMOTION`（observe/explore/reflect/web/social の5モード）1箇所。
+  # その誤診のあいだ、ソラの observe は 1 日 4〜6 回 JSON にならず捨てられていた。
+  #
+  # agy_schema.py が enum 内 null を anyOf へ書き換える（受け入れる値は変えない）。
+  # 変換は **agy へ渡す直前だけ**。正本スキーマは触らないので claude(native) と
+  # codex(prompt 埋め込み) の経路は変わらない。
+  if [[ -n "$json_schema" ]] && [[ "$agent_site" == "daybook" || "$agent_site" == "observe" ]]; then
     local agy_help
     agy_help="$("$bin" --help 2>&1 || true)"
     if grep -q -- '--output-format' <<< "$agy_help" \
         && grep -q -- '--json-schema' <<< "$agy_help"; then
-      structured_args=(--output-format json --json-schema "$json_schema")
+      local agy_json_schema
+      agy_json_schema="$(printf '%s' "$json_schema" \
+        | python3 "$(dirname "${BASH_SOURCE[0]}")/agy_schema.py")"
+      structured_args=(--output-format json --json-schema "$agy_json_schema")
     fi
   fi
   ensure_agy_native_safety_policy "$agy_home"
