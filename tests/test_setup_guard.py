@@ -136,15 +136,19 @@ class SetupGuardTests(unittest.TestCase):
                     method, "GET", f"frontend method for /{operation} ({method}) != backend verb GET"
                 )
 
-    def test_frontend_update_status_is_read_only_by_default(self):
-        """状態表示は既定でベンダーへ問い合わせないこと。
+    def test_frontend_checks_the_vendor_when_the_screen_opens(self):
+        """バージョン画面を開いたら最新版を確認しにいくこと。
 
-        `?check=1` は更新の凍結を一時解除して外部へ出る。画面を開いただけで
-        その窓が開くと、利用者が明示的に更新を選ぶという設計契約が崩れる。
+        当初は逆の契約だった——`?check=1` が agy では更新の凍結を一時解除するため、
+        押されるまで問い合わせない設計にしていた。ゆの指摘で覆した（2026-08-13）:
+        「バージョン管理の画面を開いておいて『まだ確認していません』と出るのは、
+        こちらの都合を利用者に説明しているだけ」。**決定が変わったのでテストの意図ごと
+        差し替えている**（実装に合わせて期待値を緩めたのではない）。
+
+        問い合わせ口は1箇所に保つ。増えると、どこから外へ出るのかを追えなくなる。
         """
         app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("fetchHarnessUpdateStatus(false)", app_js)
-        # check=1 は「更新を確認」ボタン経路にだけ現れる。
+        self.assertIn("checkVendor = true", app_js)
         self.assertEqual(app_js.count("update-status?check=1"), 1)
 
     def test_only_ingress_source_is_allowed_unless_overridden_or_disabled(self):

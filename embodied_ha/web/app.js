@@ -1391,10 +1391,16 @@ function getHarnessDisplayName(harnessKey) {
  * 選択中ハーネスのバージョン状態を取得して画面に反映する
  * @param {boolean} checkVendor - true の場合ベンダー最新版の問い合わせを行う (?check=1)
  */
-async function fetchHarnessUpdateStatus(checkVendor = false) {
+async function fetchHarnessUpdateStatus(checkVendor = true) {
     const sectionEl = document.getElementById('harness-version-section');
     const placeholderEl = document.getElementById('experimental-placeholder');
+    const btnCheck = document.getElementById('harness-btn-check-update');
     if (!sectionEl) return;
+
+    if (btnCheck) {
+        btnCheck.disabled = true;
+        btnCheck.textContent = '確認中...';
+    }
 
     try {
         // 1. 選択中のハーネス情報を overview から取得
@@ -1416,9 +1422,26 @@ async function fetchHarnessUpdateStatus(checkVendor = false) {
             ? `${base}/api/setup/${endpointKey}/update-status?check=1` 
             : `${base}/api/setup/${endpointKey}/update-status`;
 
-        // 2. update-status を取得
-        const res = await fetch(url, { method: 'GET' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        let res;
+        let checkFailed = false;
+
+        try {
+            // 2. update-status を取得
+            res = await fetch(url, { method: 'GET' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (vendorErr) {
+            console.warn('Failed to check vendor update status, falling back to cached status:', vendorErr);
+            if (checkVendor) {
+                // check=1 が失敗した場合 (HTTP 502 やオフラインなど)、ローカル記録のみを取得するフォールバック処理を実施
+                checkFailed = true;
+                const fallbackUrl = `${base}/api/setup/${endpointKey}/update-status`;
+                res = await fetch(fallbackUrl, { method: 'GET' });
+                if (!res.ok) throw vendorErr;
+            } else {
+                throw vendorErr;
+            }
+        }
+
         const data = await res.json();
         
         // installed_version が null または未定義の場合は節を隠してプレースホルダ表示
@@ -1432,24 +1455,28 @@ async function fetchHarnessUpdateStatus(checkVendor = false) {
         if (placeholderEl) placeholderEl.style.display = 'none';
         sectionEl.style.display = 'block';
         
-        renderHarnessVersionUI(data, selected);
+        renderHarnessVersionUI(data, selected, checkFailed);
     } catch (e) {
         console.error('Failed to fetch harness update status:', e);
         sectionEl.style.display = 'none';
         if (placeholderEl) placeholderEl.style.display = 'block';
+    } finally {
+        if (btnCheck) {
+            btnCheck.disabled = false;
+            btnCheck.textContent = '再確認';
+        }
     }
 }
 
-/**
- * 取得した JSON データを UI に反映
- */
-function renderHarnessVersionUI(data, harnessKey) {
+// ---- 描画 ----
+function renderHarnessVersionUI(data, harnessKey, checkFailed = false) {
     const titleEl = document.getElementById('harness-version-title');
     const descEl = document.getElementById('harness-version-desc');
     const installedEl = document.getElementById('harness-installed-version');
     const availableEl = document.getElementById('harness-available-version');
     const mismatchAlert = document.getElementById('harness-version-mismatch-alert');
     const mismatchText = document.getElementById('harness-version-mismatch-text');
+    const checkErrorAlert = document.getElementById('harness-version-check-error-alert');
     const updateAlert = document.getElementById('harness-update-available-alert');
     const btnUpdate = document.getElementById('harness-btn-do-update');
 
@@ -1462,7 +1489,15 @@ function renderHarnessVersionUI(data, harnessKey) {
     }
 
     if (installedEl) installedEl.textContent = data.installed_version || '-';
-    if (availableEl) availableEl.textContent = data.available_version || '-';
+
+    // 最新バージョン確認失敗時の表示切り替え
+    if (checkFailed) {
+        if (availableEl) availableEl.textContent = '取得失敗';
+        if (checkErrorAlert) checkErrorAlert.style.display = 'flex';
+    } else {
+        if (availableEl) availableEl.textContent = data.available_version || '-';
+        if (checkErrorAlert) checkErrorAlert.style.display = 'none';
+    }
 
     // 1. 記録と実物の食い違い警告 (pinned_version != installed_version)
     if (data.pinned_version && data.installed_version && data.pinned_version !== data.installed_version) {
@@ -1475,7 +1510,7 @@ function renderHarnessVersionUI(data, harnessKey) {
     }
 
     // 2. 更新通知・ボタン状態
-    if (data.update_available) {
+    if (!checkFailed && data.update_available) {
         if (updateAlert) updateAlert.style.display = 'flex';
         if (btnUpdate && !g_harnessUpdateInProgress) btnUpdate.disabled = false;
     } else {
@@ -1484,66 +1519,11 @@ function renderHarnessVersionUI(data, harnessKey) {
     }
 
     // 3. 保管中バージョン一覧の描画
-    renderRetainedVersionsTable(data.retained || []);
 }
 
-/**
- * 保管中バージョンテーブルの描画
- */
-function renderRetainedVersionsTable(retainedList) {
-    const emptyEl = document.getElementById('harness-retained-list-empty');
-    const tableEl = document.getElementById('harness-retained-table');
-    const tbodyEl = document.getElementById('harness-retained-tbody');
-
-    if (!retainedList || retainedList.length === 0) {
-        if (emptyEl) emptyEl.style.display = 'block';
-        if (tableEl) tableEl.style.display = 'none';
-        return;
-    }
-
-    if (emptyEl) emptyEl.style.display = 'none';
-    if (tableEl) tableEl.style.display = 'table';
-
-    tbodyEl.innerHTML = '';
-    retainedList.forEach((item) => {
-        const tr = document.createElement('tr');
-        
-        const dateStr = item.retained_at 
-            ? new Date(item.retained_at).toLocaleString() 
-            : '不明';
-
-        tr.innerHTML = `
-            <td style="font-family: monospace; font-weight: 600;">${escapeHtml(item.version || '')}</td>
-            <td style="color: var(--claude-text-sub); font-size: 0.85rem;">${escapeHtml(dateStr)}</td>
-            <td>
-                <button type="button" class="btn btn-secondary btn-sm" 
-                    onclick="runHarnessRollback('${escapeHtml(item.version)}')"
-                    ${g_harnessUpdateInProgress ? 'disabled' : ''}>
-                    このバージョンに戻す
-                </button>
-            </td>
-        `;
-        tbodyEl.appendChild(tr);
-    });
-}
-
-/**
- * 「更新を確認」ボタン押下
- */
+// ---- 確認ボタン ----
 async function checkHarnessUpdate() {
-    const btnCheck = document.getElementById('harness-btn-check-update');
-    if (btnCheck) {
-        btnCheck.disabled = true;
-        btnCheck.textContent = '確認中...';
-    }
-    try {
-        await fetchHarnessUpdateStatus(true);
-    } finally {
-        if (btnCheck) {
-            btnCheck.disabled = false;
-            btnCheck.textContent = '更新を確認';
-        }
-    }
+    await fetchHarnessUpdateStatus(true);
 }
 
 /**
@@ -2360,9 +2340,11 @@ async function switchSettingsTab(tabName) {
     }
 
     if (tabName === 'experimental') {
-        // ハーネス バージョン情報の読み込み (記録のみ読む)
-        fetchHarnessUpdateStatus(false);
+        // ハーネス バージョン情報の読み込み (タブを開いた時点で ?check=1 で問い合わせる)
+        fetchHarnessUpdateStatus(true);
     }
+
+    activeSettingsTab = tabName;
 
     activeSettingsTab = tabName;
 

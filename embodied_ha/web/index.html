@@ -709,7 +709,7 @@
                                         <span class="version-value" id="harness-installed-version">-</span>
                                     </div>
                                     <div class="version-info-item">
-                                        <span class="version-label">確認済み最新バージョン (available)</span>
+                                        <span class="version-label">最新バージョン (available)</span>
                                         <span class="version-value" id="harness-available-version">-</span>
                                     </div>
                                 </div>
@@ -723,11 +723,33 @@
                                     </div>
                                 </div>
 
+                                <!-- 最新バージョン確認失敗警告 -->
+                                <div class="version-alert alert-warning" id="harness-version-check-error-alert" style="display: none;">
+                                    <span class="emoji-icon">⚠️</span>
+                                    <div>
+                                        <strong>最新バージョンの確認に失敗しました</strong>
+                                        <p style="margin: 4px 0 0 0;">オフライン環境またはベンダーサーバーに接続できません。通信環境を確認の上、「再確認」ボタンをお試しください。</p>
+                                    </div>
+                                </div>
+
                                 <!-- 更新利用可能バッジ -->
                                 <div class="version-alert alert-info" id="harness-update-available-alert" style="display: none;">
                                     <span class="emoji-icon">✨</span>
                                     <span>新しいバージョンが利用可能です。</span>
                                 </div>
+                            </div>
+
+                            <!-- 操作ボタン群 -->
+                            <div class="version-actions" style="margin-top: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="harness-btn-check-update" onclick="checkHarnessUpdate()">
+                                    再確認
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" id="harness-btn-do-update" onclick="runHarnessUpdate()" disabled>
+                                    更新する
+                                </button>
+                                <span class="spinner-sm" id="harness-status-spinner" style="display: none; color: var(--claude-text-sub); font-size: 0.875rem;">
+                                    <span class="emoji-icon">⏳</span> 処理中...
+                                </span>
                             </div>
 
                             <!-- 操作ボタン群 -->
