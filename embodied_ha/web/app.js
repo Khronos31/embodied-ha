@@ -1358,75 +1358,129 @@ async function harnessStreamSSE(method, url, body, handlers) {
     }
 }
 
-// ==========================================
-// Antigravity CLI バージョン・更新管理機能
-// ==========================================
+// ハーネス CLI バージョン・更新管理機能 (claude / codex / agy 共通)
+// ================================================================
 
 // ステート保持
-let g_agUpdateInProgress = false;
+let g_harnessUpdateInProgress = false;
+let g_currentHarnessSelected = null; // 'claude' | 'codex' | 'agy'
 
 /**
- * Antigravity のバージョン状態を取得して画面に反映する
- * @param {boolean} checkVendor - true の場合ベンダー最新版の問い合せを行う (?check=1)
+ * ハーネスキーを API 用の URL パス文字列に変換
+ * 'agy' の場合のみ 'antigravity' にマッピング
  */
-async function fetchAntigravityUpdateStatus(checkVendor = false) {
-    const sectionEl = document.getElementById('antigravity-version-section');
+function getHarnessEndpointKey(harnessKey) {
+    if (!harnessKey) return null;
+    const lower = harnessKey.toLowerCase();
+    return lower === 'agy' ? 'antigravity' : lower;
+}
+
+/**
+ * 表示用のハーネス名を取得
+ */
+function getHarnessDisplayName(harnessKey) {
+    if (!harnessKey) return 'CLI';
+    const lower = harnessKey.toLowerCase();
+    if (lower === 'agy') return 'Antigravity CLI';
+    if (lower === 'claude') return 'Claude Code CLI';
+    if (lower === 'codex') return 'Codex CLI';
+    return `${harnessKey} CLI`;
+}
+
+/**
+ * 選択中ハーネスのバージョン状態を取得して画面に反映する
+ * @param {boolean} checkVendor - true の場合ベンダー最新版の問い合わせを行う (?check=1)
+ */
+async function fetchHarnessUpdateStatus(checkVendor = false) {
+    const sectionEl = document.getElementById('harness-version-section');
+    const placeholderEl = document.getElementById('experimental-placeholder');
     if (!sectionEl) return;
 
-    const url = checkVendor 
-        ? `${base}/api/setup/antigravity/update-status?check=1` 
-        : `${base}/api/setup/antigravity/update-status`;
-
     try {
+        // 1. 選択中のハーネス情報を overview から取得
+        const overviewRes = await fetch(`${base}/api/setup/overview`, { method: 'GET' });
+        if (!overviewRes.ok) throw new Error(`Overview HTTP ${overviewRes.status}`);
+        const overviewData = await overviewRes.json();
+        
+        const selected = overviewData.selected || overviewData.effective;
+        g_currentHarnessSelected = selected;
+
+        if (!selected) {
+            sectionEl.style.display = 'none';
+            if (placeholderEl) placeholderEl.style.display = 'block';
+            return;
+        }
+
+        const endpointKey = getHarnessEndpointKey(selected);
+        const url = checkVendor 
+            ? `${base}/api/setup/${endpointKey}/update-status?check=1` 
+            : `${base}/api/setup/${endpointKey}/update-status`;
+
+        // 2. update-status を取得
         const res = await fetch(url, { method: 'GET' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         
-        // installed_version が null または未定義の場合は節ごと隠す
+        // installed_version が null または未定義の場合は節を隠してプレースホルダ表示
         if (!data || data.installed_version == null) {
             sectionEl.style.display = 'none';
+            if (placeholderEl) placeholderEl.style.display = 'block';
             return;
         }
 
-        // 節を表示
+        // 表示切替
+        if (placeholderEl) placeholderEl.style.display = 'none';
         sectionEl.style.display = 'block';
-        renderAntigravityVersionUI(data);
+        
+        renderHarnessVersionUI(data, selected);
     } catch (e) {
-        console.error('Failed to fetch Antigravity update status:', e);
+        console.error('Failed to fetch harness update status:', e);
+        sectionEl.style.display = 'none';
+        if (placeholderEl) placeholderEl.style.display = 'block';
     }
 }
 
 /**
  * 取得した JSON データを UI に反映
  */
-function renderAntigravityVersionUI(data) {
-    const installedEl = document.getElementById('ag-installed-version');
-    const pinnedEl = document.getElementById('ag-pinned-version');
-    const availableEl = document.getElementById('ag-available-version');
-    const mismatchAlert = document.getElementById('ag-version-mismatch-alert');
-    const mismatchText = document.getElementById('ag-version-mismatch-text');
-    const updateAlert = document.getElementById('ag-update-available-alert');
-    const btnUpdate = document.getElementById('ag-btn-do-update');
+function renderHarnessVersionUI(data, harnessKey) {
+    const titleEl = document.getElementById('harness-version-title');
+    const descEl = document.getElementById('harness-version-desc');
+    const installedEl = document.getElementById('harness-installed-version');
+    const availableEl = document.getElementById('harness-available-version');
+    const mismatchAlert = document.getElementById('harness-version-mismatch-alert');
+    const mismatchText = document.getElementById('harness-version-mismatch-text');
+    const updateAlert = document.getElementById('harness-update-available-alert');
+    const btnUpdate = document.getElementById('harness-btn-do-update');
+
+    const displayName = getHarnessDisplayName(harnessKey || data.harness);
+
+    if (titleEl) titleEl.textContent = `${displayName} バージョン・更新管理`;
+    if (descEl) {
+        descEl.innerHTML = `${escapeHtml(displayName)} のバージョン確認および手動更新・ロールバック管理を行います。<br>` +
+            `更新時は旧バイナリが自動保存され、実行中の会話セッションを維持したまま安全に切り替わります。検証失敗時は自動で元に戻ります。`;
+    }
 
     if (installedEl) installedEl.textContent = data.installed_version || '-';
-    if (pinnedEl) pinnedEl.textContent = data.pinned_version || '-';
-    if (availableEl) availableEl.textContent = data.available_version || '未確認';
+    if (availableEl) availableEl.textContent = data.available_version || '-';
 
     // 1. 記録と実物の食い違い警告 (pinned_version != installed_version)
     if (data.pinned_version && data.installed_version && data.pinned_version !== data.installed_version) {
-        mismatchText.textContent = `記録上の固定バージョン (${data.pinned_version}) と実際のインストール済みバージョン (${data.installed_version}) が食い違っています。手動変更された可能性があります。`;
-        mismatchAlert.style.display = 'block';
+        if (mismatchText) {
+            mismatchText.textContent = `記録上の固定バージョン (${data.pinned_version}) と実際のインストール済みバージョン (${data.installed_version}) が食い違っています。手動変更された可能性があります。`;
+        }
+        if (mismatchAlert) mismatchAlert.style.display = 'flex';
     } else {
-        mismatchAlert.style.display = 'none';
+        if (mismatchAlert) mismatchAlert.style.display = 'none';
     }
 
     // 2. 更新通知・ボタン状態
     if (data.update_available) {
-        updateAlert.style.display = 'block';
-        if (btnUpdate && !g_agUpdateInProgress) btnUpdate.disabled = false;
+        if (updateAlert) updateAlert.style.display = 'flex';
+        if (btnUpdate && !g_harnessUpdateInProgress) btnUpdate.disabled = false;
     } else {
-        updateAlert.style.display = 'none';
-        if (btnUpdate && !g_agUpdateInProgress) btnUpdate.disabled = true;
+        if (updateAlert) updateAlert.style.display = 'none';
+        if (btnUpdate && !g_harnessUpdateInProgress) btnUpdate.disabled = true;
     }
 
     // 3. 保管中バージョン一覧の描画
@@ -1437,9 +1491,9 @@ function renderAntigravityVersionUI(data) {
  * 保管中バージョンテーブルの描画
  */
 function renderRetainedVersionsTable(retainedList) {
-    const emptyEl = document.getElementById('ag-retained-list-empty');
-    const tableEl = document.getElementById('ag-retained-table');
-    const tbodyEl = document.getElementById('ag-retained-tbody');
+    const emptyEl = document.getElementById('harness-retained-list-empty');
+    const tableEl = document.getElementById('harness-retained-table');
+    const tbodyEl = document.getElementById('harness-retained-tbody');
 
     if (!retainedList || retainedList.length === 0) {
         if (emptyEl) emptyEl.style.display = 'block';
@@ -1463,8 +1517,8 @@ function renderRetainedVersionsTable(retainedList) {
             <td style="color: var(--claude-text-sub); font-size: 0.85rem;">${escapeHtml(dateStr)}</td>
             <td>
                 <button type="button" class="btn btn-secondary btn-sm" 
-                    onclick="runAntigravityRollback('${escapeHtml(item.version)}')"
-                    ${g_agUpdateInProgress ? 'disabled' : ''}>
+                    onclick="runHarnessRollback('${escapeHtml(item.version)}')"
+                    ${g_harnessUpdateInProgress ? 'disabled' : ''}>
                     このバージョンに戻す
                 </button>
             </td>
@@ -1476,14 +1530,14 @@ function renderRetainedVersionsTable(retainedList) {
 /**
  * 「更新を確認」ボタン押下
  */
-async function checkAntigravityUpdate() {
-    const btnCheck = document.getElementById('ag-btn-check-update');
+async function checkHarnessUpdate() {
+    const btnCheck = document.getElementById('harness-btn-check-update');
     if (btnCheck) {
         btnCheck.disabled = true;
         btnCheck.textContent = '確認中...';
     }
     try {
-        await fetchAntigravityUpdateStatus(true);
+        await fetchHarnessUpdateStatus(true);
     } finally {
         if (btnCheck) {
             btnCheck.disabled = false;
@@ -1495,29 +1549,33 @@ async function checkAntigravityUpdate() {
 /**
  * 「更新する」実行
  */
-function runAntigravityUpdate() {
-    if (g_agUpdateInProgress) return;
-    if (!confirm('Antigravity CLI を更新しますか？\n（実行中の会話は維持され、旧バージョンは自動保管されます）')) {
+function runHarnessUpdate() {
+    if (g_harnessUpdateInProgress || !g_currentHarnessSelected) return;
+
+    const displayName = getHarnessDisplayName(g_currentHarnessSelected);
+    const endpointKey = getHarnessEndpointKey(g_currentHarnessSelected);
+
+    if (!confirm(`${displayName} を更新しますか？\n（実行中の会話は維持され、旧バージョンは自動保管されます）`)) {
         return;
     }
 
-    startAgOperationUI('Antigravity CLI を更新中… ⏳');
+    startHarnessOperationUI(`${displayName} を更新中… ⏳`);
 
     // GET リクエストで SSE ストリームを受信
-    harnessStreamSSE('GET', '/api/setup/antigravity/update', null, {
+    harnessStreamSSE('GET', `/api/setup/${endpointKey}/update`, null, {
         onLine: (payload) => {
-            appendAgLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
+            appendHarnessLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
         },
         onDone: (payload) => {
             const version = payload && payload.version ? payload.version : '';
-            appendAgLogLine(`\n✅ 更新が完了しました (v${version})`);
-            finishAgOperationUI('更新完了');
-            fetchAntigravityUpdateStatus(false);
+            appendHarnessLogLine(`\n<span class="emoji-icon">✅</span> 更新が完了しました (v${version})`);
+            finishHarnessOperationUI('更新完了');
+            fetchHarnessUpdateStatus(false);
         },
         onError: (err) => {
-            appendAgLogLine(`\n❌ エラーが発生しました: ${err}`);
-            finishAgOperationUI('エラー発生');
-            fetchAntigravityUpdateStatus(false);
+            appendHarnessLogLine(`\n<span class="emoji-icon">❌</span> エラーが発生しました: ${err}`);
+            finishHarnessOperationUI('エラー発生');
+            fetchHarnessUpdateStatus(false);
         }
     });
 }
@@ -1526,50 +1584,54 @@ function runAntigravityUpdate() {
  * 「ロールバック」実行
  * @param {string} version 
  */
-function runAntigravityRollback(version) {
-    if (g_agUpdateInProgress) return;
+function runHarnessRollback(version) {
+    if (g_harnessUpdateInProgress || !g_currentHarnessSelected) return;
+
+    const displayName = getHarnessDisplayName(g_currentHarnessSelected);
+    const endpointKey = getHarnessEndpointKey(g_currentHarnessSelected);
     const targetText = version ? `バージョン ${version}` : '直近の保管バージョン';
-    if (!confirm(`${targetText} へ戻しますか？`)) {
+
+    if (!confirm(`${displayName} を ${targetText} へ戻しますか？`)) {
         return;
     }
 
-    startAgOperationUI(`バージョン ${version || ''} へロールバック中… ⏳`);
+    startHarnessOperationUI(`バージョン ${version || ''} へロールバック中… ⏳`);
 
     const query = version ? `?version=${encodeURIComponent(version)}` : '';
     // GET リクエストで SSE ストリームを受信
-    harnessStreamSSE('GET', `/api/setup/antigravity/rollback${query}`, null, {
+    harnessStreamSSE('GET', `/api/setup/${endpointKey}/rollback${query}`, null, {
         onLine: (payload) => {
-            appendAgLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
+            appendHarnessLogLine(payload && payload.text ? payload.text : JSON.stringify(payload));
         },
         onDone: (payload) => {
             const resVersion = payload && payload.version ? payload.version : version;
-            appendAgLogLine(`\n✅ ロールバックが完了しました (v${resVersion})`);
-            finishAgOperationUI('ロールバック完了');
-            fetchAntigravityUpdateStatus(false);
+            appendHarnessLogLine(`\n<span class="emoji-icon">✅</span> ロールバックが完了しました (v${resVersion})`);
+            finishHarnessOperationUI('ロールバック完了');
+            fetchHarnessUpdateStatus(false);
         },
         onError: (err) => {
-            appendAgLogLine(`\n❌ エラーが発生しました: ${err}`);
-            finishAgOperationUI('エラー発生');
-            fetchAntigravityUpdateStatus(false);
+            appendHarnessLogLine(`\n<span class="emoji-icon">❌</span> エラーが発生しました: ${err}`);
+            finishHarnessOperationUI('エラー発生');
+            fetchHarnessUpdateStatus(false);
         }
     });
 }
 
 // --- 操作中のUI制御ユーティリティ ---
 
-function startAgOperationUI(statusText) {
-    g_agUpdateInProgress = true;
+function startHarnessOperationUI(statusText) {
+    g_harnessUpdateInProgress = true;
     
-    const spinner = document.getElementById('ag-status-spinner');
-    const logContainer = document.getElementById('ag-log-container');
-    const logStatus = document.getElementById('ag-log-status-text');
-    const logOutput = document.getElementById('ag-log-output');
-    const btnCheck = document.getElementById('ag-btn-check-update');
-    const btnUpdate = document.getElementById('ag-btn-do-update');
+    const spinner = document.getElementById('harness-status-spinner');
+    const logContainer = document.getElementById('harness-log-container');
+    const logStatus = document.getElementById('harness-log-status-text');
+    const logOutput = document.getElementById('harness-log-output');
+    const btnCheck = document.getElementById('harness-btn-check-update');
+    const btnUpdate = document.getElementById('harness-btn-do-update');
 
     if (spinner) {
-        spinner.textContent = statusText;
-        spinner.style.display = 'inline';
+        spinner.innerHTML = `<span class="emoji-icon">⏳</span> ${escapeHtml(statusText)}`;
+        spinner.style.display = 'inline-block';
     }
     if (logContainer) logContainer.style.display = 'block';
     if (logStatus) logStatus.textContent = statusText;
@@ -1579,26 +1641,29 @@ function startAgOperationUI(statusText) {
     if (btnUpdate) btnUpdate.disabled = true;
 
     // テーブル内のロールバックボタンも無効化
-    const retainedButtons = document.querySelectorAll('#ag-retained-tbody button');
+    const retainedButtons = document.querySelectorAll('#harness-retained-tbody button');
     retainedButtons.forEach(b => b.disabled = true);
 }
 
-function finishAgOperationUI(statusText) {
-    g_agUpdateInProgress = false;
+function finishHarnessOperationUI(statusText) {
+    g_harnessUpdateInProgress = false;
 
-    const spinner = document.getElementById('ag-status-spinner');
-    const logStatus = document.getElementById('ag-log-status-text');
-    const btnCheck = document.getElementById('ag-btn-check-update');
+    const spinner = document.getElementById('harness-status-spinner');
+    const logStatus = document.getElementById('harness-log-status-text');
+    const btnCheck = document.getElementById('harness-btn-check-update');
 
     if (spinner) spinner.style.display = 'none';
     if (logStatus) logStatus.textContent = statusText;
     if (btnCheck) btnCheck.disabled = false;
 }
 
-function appendAgLogLine(line) {
-    const logOutput = document.getElementById('ag-log-output');
+function appendHarnessLogLine(line) {
+    const logOutput = document.getElementById('harness-log-output');
     if (!logOutput) return;
-    logOutput.textContent += line + '\n';
+    // HTML タグが含まれる可能性があるため innerHTML または DOM 挿入を調整
+    const div = document.createElement('div');
+    div.innerHTML = line;
+    logOutput.appendChild(div);
     logOutput.scrollTop = logOutput.scrollHeight;
 }
 
@@ -2292,9 +2357,11 @@ async function switchSettingsTab(tabName) {
                 initJsonEditor(jsonText);
             }, 50);
         }
+    }
 
-        // Antigravity バージョン情報の読み込み (記録のみ読む)
-        fetchAntigravityUpdateStatus(false);
+    if (tabName === 'experimental') {
+        // ハーネス バージョン情報の読み込み (記録のみ読む)
+        fetchHarnessUpdateStatus(false);
     }
 
     activeSettingsTab = tabName;

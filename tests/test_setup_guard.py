@@ -121,19 +121,19 @@ class SetupGuardTests(unittest.TestCase):
         import re
 
         app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
-        backend_verb = dict((path, method) for method, path in self.MUTATION_ROUTES)
-        for path in ("/api/setup/antigravity/update", "/api/setup/antigravity/rollback"):
-            # 第2引数は素の文字列とテンプレートリテラル（?version= 付き）の両方があり得る。
+        # パスはハーネス名を差し込むテンプレートリテラルなので、末尾の操作名で照合する。
+        # backend は3ハーネスとも同じ verb で dispatch するため、期待値は1つに定まる。
+        expected = {method for method, path in self.MUTATION_ROUTES if path.endswith("/update")}
+        self.assertEqual(expected, {"GET"}, "backend の update verb が分岐している")
+        for operation in ("update", "rollback"):
             calls = re.findall(
-                r"harnessStreamSSE\(\s*'(\w+)'\s*,\s*[`']" + re.escape(path),
+                r"harnessStreamSSE\(\s*'(\w+)'\s*,\s*[`'][^`']*/" + operation + r"[`$]",
                 app_js,
             )
-            self.assertTrue(calls, f"app.js に {path} を呼ぶ harnessStreamSSE が無い")
+            self.assertTrue(calls, f"app.js に /{operation} を呼ぶ harnessStreamSSE が無い")
             for method in calls:
                 self.assertEqual(
-                    method,
-                    backend_verb[path],
-                    f"frontend method for {path} ({method}) != backend verb ({backend_verb[path]})",
+                    method, "GET", f"frontend method for /{operation} ({method}) != backend verb GET"
                 )
 
     def test_frontend_update_status_is_read_only_by_default(self):
@@ -143,7 +143,7 @@ class SetupGuardTests(unittest.TestCase):
         その窓が開くと、利用者が明示的に更新を選ぶという設計契約が崩れる。
         """
         app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("fetchAntigravityUpdateStatus(false)", app_js)
+        self.assertIn("fetchHarnessUpdateStatus(false)", app_js)
         # check=1 は「更新を確認」ボタン経路にだけ現れる。
         self.assertEqual(app_js.count("update-status?check=1"), 1)
 

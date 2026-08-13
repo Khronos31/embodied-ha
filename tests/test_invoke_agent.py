@@ -1987,3 +1987,46 @@ class InvokeAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeSelfUpdateSuppressionTests(unittest.TestCase):
+    # InvokeAgentTests を継承すると既存50件まで再実行されるので、必要な起動ヘルパだけ持つ。
+    run_wrapper = InvokeAgentTests.run_wrapper
+
+    def test_claude_runs_with_self_updates_disabled(self):
+        """管理下の DIY バイナリが自分で入れ替わらないこと。
+
+        `claude_setup.runtime_env()` は DISABLE_UPDATES=1 を宣言し、呼び出し側が 0 を
+        渡しても 1 に上書きするテストまであるが、この実行経路からは呼ばれておらず
+        環境をそのまま継承していた（2026-08-13 に判明）。宣言だけあって効いていない
+        状態を、実際の起動側で固定する。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "env.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                sys.stdin.read()
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"disable_updates": os.environ.get("DISABLE_UPDATES")}}),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{"type": "result", "result": "{{}}"}}))
+                """,
+            )
+            result = self.run_wrapper(
+                ["--model", "lite", "prompt"],
+                {"EHA_AGENT_HARNESS": "claude", "EHA_CLAUDE_BIN": fake.as_posix()},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["disable_updates"], "1"
+            )

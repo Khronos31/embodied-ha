@@ -3250,3 +3250,32 @@ pre.terminal-log::-webkit-scrollbar-thumb:hover {
     color: var(--claude-text-sub, #6b6359);
     font-weight: 600;
 }
+
+/* 無効化（disabled）ボタンの視覚的フィードバック修正 */
+.btn:disabled,
+.btn[disabled],
+.btn-primary:disabled,
+.btn-primary[disabled],
+.btn-secondary:disabled,
+.btn-secondary[disabled] {
+    opacity: 0.45 !important;
+    cursor: not-allowed !important;
+    pointer-events: none !important;
+    box-shadow: none !important;
+    filter: grayscale(80%) !important;
+}
+
+/* 絵文字のフォント豆腐化対策フォールバック */
+.emoji-icon {
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", "Android Emoji", emoji, sans-serif;
+    display: inline-block;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+/* 警告アラートのレイアウト調整（絵文字アイコン並列化用） */
+.version-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}

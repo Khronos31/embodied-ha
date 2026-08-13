@@ -738,7 +738,12 @@ run_claude() {
   if [[ -n "$mcp_config_arg" ]]; then
     cmd+=("--mcp-config" "$mcp_config_arg")
   fi
-  stdout="$(claude_message | (cd "$cwd" && "${cmd[@]}"))"
+  # DISABLE_UPDATES=1: 管理下の DIY バイナリが自分で入れ替わらないようにする。
+  # claude_setup.runtime_env() が同じ保証を宣言し(呼び出し側が 0 を渡しても 1 に
+  # 上書きする)テストもあるが、この実行経路からは呼ばれておらず環境をそのまま
+  # 継承していた——宣言だけあって効いていない状態だった。ここで実際に適用する。
+  # これが無いと、ピン記録は「入れたはずの版」を指したまま実物だけが進みうる。
+  stdout="$(claude_message | (cd "$cwd" && DISABLE_UPDATES=1 "${cmd[@]}"))"
   if [[ -n "$transcript_file" ]]; then
     if ! printf '%s\n' "$stdout" >"$transcript_file"; then
       rm -f -- "$transcript_file"
