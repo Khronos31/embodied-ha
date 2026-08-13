@@ -21,6 +21,14 @@ try:
 except Exception:
     agy_update_freeze = None
 try:
+    import harness_binary_update  # type: ignore
+except Exception:
+    harness_binary_update = None
+try:
+    import harness_pin  # type: ignore
+except Exception:
+    harness_pin = None
+try:
     import codex_setup  # type: ignore
 except Exception:
     codex_setup = None
@@ -511,6 +519,15 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/antigravity/input", "/api/setup/antigravity/login-code",
     "/api/setup/antigravity/uninstall", "/api/setup/antigravity/clear-auth",
     "/api/setup/antigravity/logout",
+    # update/rollback はバイナリを差し替える。update-status も check=1 のときだけ
+    # 外部へ問い合わせる(agy では凍結の一時解除を伴う)ため、読み取りに見えて
+    # ingress 境界の内側に置く。3ハーネス分の実体は下の _HARNESS_*_ROUTES。
+    "/api/setup/antigravity/update", "/api/setup/antigravity/rollback",
+    "/api/setup/antigravity/update-status",
+    "/api/setup/claude/update", "/api/setup/claude/rollback",
+    "/api/setup/claude/update-status",
+    "/api/setup/codex/update", "/api/setup/codex/rollback",
+    "/api/setup/codex/update-status",
     "/api/setup/codex/install", "/api/setup/codex/login",
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
@@ -521,6 +538,18 @@ _SETUP_MUTATION_PATHS = frozenset({
 # mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
 # reads while POST stays ingress-guarded (sol Med).
 _SETUP_GET_READS = frozenset({"/api/setup/agent-prefs", "/api/setup/terms"})
+# URL のハーネス名は既存の綴りを踏襲する: Antigravity は `antigravity`、他は CLI 名。
+# `/api/setup/antigravity/update` は公開済みなので改名しない。
+_HARNESS_URL_NAMES = {"antigravity": "agy", "claude": "claude", "codex": "codex"}
+_HARNESS_UPDATE_ROUTES = {
+    f"/api/setup/{url}/update": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
+_HARNESS_ROLLBACK_ROUTES = {
+    f"/api/setup/{url}/rollback": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
+_HARNESS_UPDATE_STATUS_ROUTES = {
+    f"/api/setup/{url}/update-status": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
 _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
 _SETUP_TERMS_ERROR = "利用規約を確認し、インストールと認証の代行に同意してください"
 _SETUP_TERMS_GATED_PATHS = frozenset({
@@ -581,6 +610,71 @@ def _release_codex_mutation() -> None:
 def _codex_busy_error() -> str:
     operation = _codex_active_operation()
     return f"Codex {operation or 'setup'} is running"
+
+
+def _record_installed_agy_version() -> None:
+    """Write down which Antigravity build the vendor installer just left behind.
+
+    The installer reports no version, and the CLI is frozen against background
+    updates immediately afterwards — so without this the instance is pinned to a
+    build no record names (F-80). Best effort: a failure here must not turn a
+    successful install into a failed one, but it is logged rather than swallowed.
+    """
+    if harness_binary_update is None or harness_pin is None:
+        return
+    try:
+        version = harness_binary_update.installed_version()
+        if version:
+            harness_pin.record_install("agy", version, source="install")
+        else:
+            print("[agy-pin] インストール直後の版を読み取れませんでした", file=sys.stderr)
+    except Exception as e:
+        print(f"[agy-pin] 導入版の記録に失敗: {e}", file=sys.stderr)
+
+
+def _acquire_harness_mutation(harness: str, operation: str):
+    """Take the mutation lock that harness's install/uninstall already uses.
+
+    Returns ``(acquired, release, busy_message)``. Each harness guards its setup
+    operations differently — Antigravity holds two locks so a login session
+    cannot overlap, Codex records the running operation by name, Claude uses a
+    single lock — and an update has exactly the same exclusion needs as an
+    install, so it borrows the same guard rather than adding a fourth scheme.
+    """
+    if harness == "agy":
+        if _acquire_antigravity_destructive_locks():
+            return True, _release_antigravity_destructive_locks, ""
+        return False, lambda: None, "Antigravity setup is already running"
+    if harness == "codex":
+        if _acquire_codex_mutation(operation):
+            return True, _release_codex_mutation, ""
+        return False, lambda: None, _codex_busy_error()
+    if harness == "claude":
+        if _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            return True, _CLAUDE_MUTATION_LOCK.release, ""
+        return False, lambda: None, "Claude setup is already running"
+    return False, lambda: None, f"unknown harness: {harness}"
+
+
+def _record_setup_install_version(harness: str, result) -> None:
+    """Persist the version a claude/codex install reported.
+
+    Both installers already resolve their channel ("stable"/"latest") to a
+    concrete version and return it; until now that value was shown once in the
+    install log and then lost. Recording it costs nothing and means every
+    harness can answer "which build am I running" the same way.
+    """
+    if harness_pin is None or not isinstance(result, dict):
+        return
+    version = result.get("version")
+    if not isinstance(version, str) or not version.strip():
+        return
+    try:
+        harness_pin.record_install(
+            harness, version, binary_sha512=result.get("checksum"), source="install"
+        )
+    except Exception as e:
+        print(f"[{harness}-pin] 導入版の記録に失敗: {e}", file=sys.stderr)
 
 
 def _acquire_antigravity_destructive_locks() -> bool:
@@ -1448,6 +1542,7 @@ class Handler(BaseHTTPRequestHandler):
                     rc = proc.wait()
                     if rc == 0:
                         _commit_selected_harness("agy")
+                        _record_installed_agy_version()
                     q.put(("done", rc))
             except Exception as e:
                 if not stop_event.is_set():
@@ -1495,6 +1590,138 @@ class Handler(BaseHTTPRequestHandler):
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"])
 
+    def _harness_update_stream(self, harness, operation, action):
+        """Run a harness binary transaction under that harness's locks, over SSE.
+
+        `update` と `rollback` は同じ形をしている——排他を取り、進捗行を流し、
+        結果かエラーで閉じる。install と違って外部プロセスを飼わないので、
+        こちらは中断用の proc 管理を持たない。
+
+        ロックはハーネスごとに違うものを取る。更新中に uninstall や再ログインが
+        走ると、差し替え直後の検証が「別の操作のせいで」失敗しうるため、
+        既存の install/uninstall と同じ排他へ相乗りする。
+        """
+        if harness_binary_update is None:
+            self._send_sse_error("harness update helpers unavailable")
+            return
+        acquired, release, busy_message = _acquire_harness_mutation(harness, operation)
+        if not acquired:
+            self._send_sse_error(busy_message)
+            return
+
+        q: queue.Queue = queue.Queue(maxsize=200)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def run_transaction():
+            try:
+                result = action(lambda text: q.put(("line", text)))
+                q.put(("done", result))
+            except Exception as e:
+                q.put(("error", str(e)))
+            finally:
+                try:
+                    release()
+                except Exception:
+                    pass
+
+        threading.Thread(target=run_transaction, daemon=True).start()
+
+        try:
+            while True:
+                try:
+                    etype, data = q.get(timeout=2)
+                    if etype == "line":
+                        msg = f"event: line\ndata: {json.dumps({'text': data}, ensure_ascii=False)}\n\n"
+                    elif etype == "done":
+                        msg = f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    else:
+                        msg = f"event: error\ndata: {json.dumps({'error': data}, ensure_ascii=False)}\n\n"
+                    self.wfile.write(msg.encode())
+                    self.wfile.flush()
+                    if etype in ("done", "error"):
+                        break
+                except queue.Empty:
+                    self.wfile.write(b":" + b" ping" + b"\n\n")
+                    self.wfile.flush()
+        except Exception:
+            # クライアントが切れても取引は最後まで走らせる——途中で止めると
+            # ピン記録と実バイナリが食い違ったまま残る。
+            print(
+                f"[{harness}-update] SSE client disconnected during {operation}", file=sys.stderr
+            )
+
+    def _send_sse_error(self, message):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        msg = f"event: error\ndata: {json.dumps({'error': message}, ensure_ascii=False)}\n\n"
+        try:
+            self.wfile.write(msg.encode())
+            self.wfile.flush()
+        except Exception:
+            pass
+
+    def _serve_setup_harness_update(self, harness):
+        """導入済みのハーネスCLIをベンダー最新版へ原子的に差し替える。"""
+        self._harness_update_stream(
+            harness,
+            "update",
+            lambda progress: harness_binary_update.update(harness, progress=progress),
+        )
+
+    def _serve_setup_harness_rollback(self, harness):
+        """保管してある旧バージョンへ戻す。
+
+        版は query の `version=` で受ける。SSE は EventSource=GET なので、
+        install と同じくボディを取らない形に揃える。無指定なら直近の保管版。
+        """
+        params = parse_qs(urlparse(self.path).query)
+        version = (params.get("version") or [None])[0]
+        self._harness_update_stream(
+            harness,
+            "rollback",
+            lambda progress: harness_binary_update.rollback(
+                harness, version=version, progress=progress
+            ),
+        )
+
+    def _serve_setup_harness_update_status(self, harness):
+        """導入版・保管版・ベンダー最新版を返す(読み取りのみ)。
+
+        ベンダー確認は agy では凍結の一時解除を伴い、いずれのハーネスでも外部へ
+        出るため、`check=1` が明示されたときだけ行う。既定は手元の記録だけを返し、
+        画面を開くだけで通信しないようにする。
+        """
+        if harness_binary_update is None or harness_pin is None:
+            self.send_json({"error": "harness update helpers unavailable"}, status=503)
+            return
+        params = parse_qs(urlparse(self.path).query)
+        wants_check = (params.get("check") or ["0"])[0] == "1"
+        try:
+            if wants_check:
+                self.send_json(harness_binary_update.check_for_update(harness))
+                return
+            pin = harness_pin.read_pin(harness)
+            self.send_json(
+                {
+                    "harness": harness,
+                    "installed_version": harness_binary_update.installed_version(harness),
+                    "pinned_version": pin.get("version") if pin else None,
+                    "available_version": None,
+                    "update_available": False,
+                    "retained": harness_pin.retained_builds(harness),
+                }
+            )
+        except Exception as e:
+            self.send_json({"error": str(e)}, status=502)
+
     def _serve_setup_codex_install(self):
         """Codex CLI を GitHub Releases から導入し、進捗を SSE 配信する。"""
         if not _acquire_codex_mutation("install"):
@@ -1526,6 +1753,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise RuntimeError("Codex helpers unavailable")
                     result = codex_setup.install(progress=lambda text: q.put(("line", text)))
                     _commit_selected_harness("codex")
+                    _record_setup_install_version("codex", result)
                     q.put(("done", result))
                 except Exception as e:
                     q.put(("error", str(e)))
@@ -1585,6 +1813,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     result = claude_setup.install(progress=lambda text: q.put(("line", text)))
                     _commit_selected_harness("claude")
+                    _record_setup_install_version("claude", result)
                     q.put(("done", result))
                 except Exception as e:
                     # 実エラーは SSE の error イベントで送るが、フロントが汎用文言へ潰すため
@@ -2086,6 +2315,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"default_tier": agent_prefs.load().get("default_tier", {})})
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
+        elif path in _HARNESS_UPDATE_STATUS_ROUTES:
+            self._serve_setup_harness_update_status(_HARNESS_UPDATE_STATUS_ROUTES[path])
+        elif path in _HARNESS_UPDATE_ROUTES:
+            self._serve_setup_harness_update(_HARNESS_UPDATE_ROUTES[path])
+        elif path in _HARNESS_ROLLBACK_ROUTES:
+            self._serve_setup_harness_rollback(_HARNESS_ROLLBACK_ROUTES[path])
         elif path == "/api/setup/antigravity/login":
             self._serve_setup_antigravity_login()
         elif path in ("/api/setup/login", "/api/setup/claude/login"):

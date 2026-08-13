@@ -217,3 +217,88 @@ class FilesMcpReadFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FilesMcpViewImageTests(unittest.TestCase):
+    """view_image: 画像は画像として返し、機密境界は read_file と同一に保つ。"""
+
+    PNG = bytes.fromhex("89504e470d0a1a0a") + b"rest-of-png"
+    JPEG = b"\xff\xd8\xff\xe0" + b"rest-of-jpeg"
+    GIF = b"GIF89a" + b"rest-of-gif"
+    WEBP = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"rest"
+
+    def setUp(self):
+        self.mod = load_files_module()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+
+    def _call(self, path):
+        out = self.mod.view_image({"path": path})
+        if isinstance(out, tuple):
+            return out
+        return out, False
+
+    def _write(self, name, data):
+        path = self.dir / name
+        path.write_bytes(data)
+        return str(path)
+
+    def test_returns_each_supported_format_as_an_image_block(self):
+        import base64
+
+        for name, data, mime in (
+            ("a.png", self.PNG, "image/png"),
+            ("a.jpg", self.JPEG, "image/jpeg"),
+            ("a.gif", self.GIF, "image/gif"),
+            ("a.webp", self.WEBP, "image/webp"),
+        ):
+            with self.subTest(name=name):
+                content, is_error = self._call(self._write(name, data))
+                self.assertFalse(is_error)
+                self.assertEqual(content[0]["type"], "image")
+                self.assertEqual(content[0]["mimeType"], mime)
+                self.assertEqual(base64.b64decode(content[0]["data"]), data)
+
+    def test_format_is_decided_by_content_not_extension(self):
+        # 拡張子を信じると、名前を変えただけの非画像を画像として返してしまう。
+        content, is_error = self._call(self._write("liar.png", b"just text, not an image"))
+        self.assertTrue(is_error)
+        self.assertIn("画像として認識できません", content[0]["text"])
+
+    def test_a_png_named_as_text_is_still_served(self):
+        content, is_error = self._call(self._write("actually.txt", self.PNG))
+        self.assertFalse(is_error)
+        self.assertEqual(content[0]["mimeType"], "image/png")
+
+    def test_oversized_image_is_refused_not_truncated(self):
+        # 切り詰めた画像は壊れたバイト列にしかならないので、拒否する方が正しい。
+        self.mod.MAX_IMAGE_BYTES = 32
+        content, is_error = self._call(self._write("big.png", self.PNG + b"x" * 128))
+        self.assertTrue(is_error)
+        self.assertIn("大きすぎます", content[0]["text"])
+
+    def test_secret_paths_are_refused_like_read_file(self):
+        for name in ("secrets.yaml", "key.pem"):
+            with self.subTest(name=name):
+                content, is_error = self._call(self._write(name, self.PNG))
+                self.assertTrue(is_error)
+                self.assertTrue(content[0]["text"].startswith("view_image: "))
+
+    def test_relative_path_and_missing_file_are_refused(self):
+        content, is_error = self._call("relative/a.png")
+        self.assertTrue(is_error)
+        self.assertIn("絶対パス", content[0]["text"])
+        content, is_error = self._call(str(self.dir / "nope.png"))
+        self.assertTrue(is_error)
+        self.assertIn("見つかりません", content[0]["text"])
+
+    def test_directory_and_symlink_are_refused(self):
+        content, is_error = self._call(str(self.dir))
+        self.assertTrue(is_error)
+        target = self._write("real.png", self.PNG)
+        link = self.dir / "link.png"
+        link.symlink_to(target)
+        content, is_error = self._call(str(link))
+        self.assertTrue(is_error)
+        self.assertIn("symlink", content[0]["text"])
