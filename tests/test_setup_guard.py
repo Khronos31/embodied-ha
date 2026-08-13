@@ -202,11 +202,28 @@ class AntigravityInstallEnvironmentTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.harness_flag_dir)
         self.harness_flag_env = mock.patch.dict(
             os.environ,
-            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            {
+                "EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness"),
+                # 導入版の記録先。既定は /data/harness_pin.json なので、隔離しないと
+                # テストが実機の記録へ書きうる。
+                "EHA_HARNESS_PIN_FILE": os.path.join(self.harness_flag_dir, "harness_pin.json"),
+            },
             clear=False,
         )
         self.harness_flag_env.start()
         self.addCleanup(self.harness_flag_env.stop)
+
+        # install 経路は本物の agy_update_freeze を呼ぶ。テスト環境では agy が未導入で
+        # 再凍結の条件を満たさないため、**このテストを走らせるだけで実機 /etc/hosts の
+        # 凍結が黙って外れる**（2026-08-13 に実測。3回踏んだ）。
+        #
+        # このテストの期待値は「install スクリプトの子プロセス環境に秘密が入らないこと」
+        # だけで、凍結の有無はそこに一切関与しない（env は antigravity_setup.subprocess_env()
+        # が組み立てる）。変異試験でも確認済み: 子プロセス環境に SUPERVISOR_TOKEN を
+        # 混ぜる変異は、この差し替えの前でも後でも同じように検出される。
+        freeze = mock.patch.object(server, "agy_update_freeze", mock.MagicMock())
+        freeze.start()
+        self.addCleanup(freeze.stop)
 
     def test_install_script_child_env_excludes_secrets(self):
         class FakeProcess:
