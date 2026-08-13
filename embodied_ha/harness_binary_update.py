@@ -55,12 +55,16 @@ crashed".
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import platform
 import re
 import shutil
+import socket
+import ssl
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -68,6 +72,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import agy_update_freeze
@@ -236,6 +241,155 @@ def release_platform() -> str:
     raise UpdateError(f"unsupported Antigravity update architecture: {machine}")
 
 
+def _nameservers() -> list[str]:
+    servers: list[str] = []
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "nameserver":
+                    servers.append(parts[1])
+    except OSError:
+        pass
+    return servers
+
+
+def _resolve_bypassing_hosts(hostname: str, timeout: float = 5) -> str:
+    """Resolve ``hostname`` by asking DNS directly, ignoring ``/etc/hosts``.
+
+    The update freeze works by pointing this very hostname at 127.0.0.1 in
+    ``/etc/hosts``, which the libc resolver consults before DNS. That stops agy's
+    background updater — and equally stops *us* from reading the release
+    manifest, which is why checking used to require lifting the freeze and
+    opening a window where the background updater could slip through.
+
+    Asking the nameserver directly skips the hosts file, so the freeze can stay
+    up while we look. This matters more than it sounds: the only frozen host is
+    the manifest endpoint (the archive itself lives on storage.googleapis.com),
+    so with this the whole update path never lowers the guard. It is also what
+    makes a future periodic update check safe to add — otherwise every scheduled
+    check would open the window again.
+
+    A hand-written query is used rather than a DNS library to avoid adding a
+    dependency for one A record. Anything unexpected raises, and the caller
+    falls back to the ordinary path.
+    """
+    servers = _nameservers()
+    if not servers:
+        raise UpdateError("no nameserver to resolve the release host")
+    query_id = 0x4548  # "EH" — fixed: the socket is connected and single-use.
+    query = struct.pack(">HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
+    for label in hostname.split("."):
+        encoded = label.encode("idna" if not label.isascii() else "ascii")
+        if not 0 < len(encoded) < 64:
+            raise UpdateError(f"bad label in release host: {label!r}")
+        query += bytes([len(encoded)]) + encoded
+    query += b"\x00" + struct.pack(">HH", 1, 1)  # QTYPE=A, QCLASS=IN
+
+    last_error: Exception | None = None
+    for server in servers:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(timeout)
+                sock.sendto(query, (server, 53))
+                payload = sock.recv(4096)
+            return _first_a_record(payload, query_id)
+        except Exception as exc:  # noqa: BLE001 - try the next nameserver
+            last_error = exc
+    raise UpdateError(f"could not resolve the release host: {last_error}")
+
+
+def _first_a_record(payload: bytes, query_id: int) -> str:
+    """Pull the first A record out of a DNS response, following CNAMEs."""
+    if len(payload) < 12:
+        raise UpdateError("truncated DNS response")
+    response_id, flags, _qd, answer_count = struct.unpack(">HHHH", payload[:8])
+    if response_id != query_id:
+        raise UpdateError("DNS response id did not match the query")
+    if flags & 0x0200:
+        raise UpdateError("DNS response was truncated")
+    if flags & 0x000F:
+        raise UpdateError(f"DNS server returned rcode {flags & 0x000F}")
+    offset = 12
+    while payload[offset]:  # skip the echoed question name
+        offset += payload[offset] + 1
+    offset += 5  # terminator + QTYPE + QCLASS
+    for _ in range(answer_count):
+        if payload[offset] & 0xC0 == 0xC0:
+            offset += 2
+        else:
+            while payload[offset]:
+                offset += payload[offset] + 1
+            offset += 1
+        record_type, _cls, _ttl, length = struct.unpack(">HHIH", payload[offset : offset + 10])
+        offset += 10
+        if record_type == 1 and length == 4:
+            return socket.inet_ntoa(payload[offset : offset + 4])
+        offset += length
+    raise UpdateError("DNS response carried no A record")
+
+
+def _read_via_pinned_ip(url: str, timeout: float, max_bytes: int) -> bytes:
+    """GET ``url`` from a directly-resolved IP, still validating TLS by name.
+
+    Connecting to the address while keeping SNI and certificate verification on
+    the hostname means bypassing ``/etc/hosts`` costs nothing in transport
+    security: a wrong answer from DNS fails the handshake rather than serving us
+    someone else's manifest.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise UpdateError(f"refusing to pin a non-https URL: {url}")
+    address = _resolve_bypassing_hosts(parsed.hostname)
+    context = ssl.create_default_context()
+    connection = http.client.HTTPSConnection(
+        parsed.hostname, parsed.port or 443, timeout=timeout, context=context
+    )
+    # Keep `host` (SNI, Host header, cert check) and change only where we dial.
+    connection._dns_pinned_address = address  # noqa: SLF001 - read by _connect_pinned
+
+    def _connect_pinned() -> None:
+        sock = socket.create_connection((address, connection.port), timeout)
+        connection.sock = context.wrap_socket(sock, server_hostname=parsed.hostname)
+
+    connection.connect = _connect_pinned  # type: ignore[method-assign]
+    try:
+        connection.request("GET", parsed.path or "/", headers={"Accept": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise UpdateError(f"release manifest returned HTTP {response.status}")
+        return response.read(max_bytes + 1)
+    finally:
+        connection.close()
+
+
+def _read_manifest_bytes(timeout: int) -> bytes:
+    """Read the manifest, preferring the path that leaves the freeze untouched.
+
+    The fallback exists because the pinned path has more ways to fail than a
+    plain fetch (no nameserver, a DNS answer we cannot parse, a middlebox). When
+    it does, we pay the old cost — lower the freeze for one request — rather than
+    refusing to check at all.
+    """
+    url = f"{MANIFEST_BASE_URL}/{release_platform()}.json"
+    try:
+        return _read_via_pinned_ip(url, timeout, MAX_MANIFEST_BYTES)
+    except Exception as exc:  # noqa: BLE001 - any failure falls back
+        print(
+            f"[agy-update] direct-IP manifest fetch failed ({exc}); "
+            "falling back to a fetch that briefly lowers the update freeze",
+            file=sys.stderr,
+        )
+    agy_update_freeze.remove_hosts_redirect()
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            return response.read(MAX_MANIFEST_BYTES + 1)
+    except OSError as exc:
+        raise UpdateError(f"could not fetch the Antigravity release manifest: {exc}") from exc
+    finally:
+        _restore_freeze()
+
+
 def fetch_manifest(timeout: int = 60) -> dict[str, str]:
     """Fetch the vendor manifest describing the current release.
 
@@ -244,12 +398,7 @@ def fetch_manifest(timeout: int = 60) -> dict[str, str]:
     publishing now" — the same semantics as an HA add-on update. Going back is
     served by retained binaries, not by asking the vendor for an old build.
     """
-    url = f"{MANIFEST_BASE_URL}/{release_platform()}.json"
-    try:
-        with urlopen(url, timeout=timeout) as response:
-            payload = response.read(MAX_MANIFEST_BYTES + 1)
-    except OSError as exc:
-        raise UpdateError(f"could not fetch the Antigravity release manifest: {exc}") from exc
+    payload = _read_manifest_bytes(timeout)
     if len(payload) > MAX_MANIFEST_BYTES:
         raise UpdateError("Antigravity release manifest exceeds 64 KiB")
     try:
@@ -306,14 +455,10 @@ def check_for_update(harness: str = HARNESS, timeout: int = 60) -> dict[str, Any
     """
     current = installed_version(harness)
     pin = harness_pin.read_pin(harness)
-    if harness == "agy":
-        agy_update_freeze.remove_hosts_redirect()
-        try:
-            available = latest_version(harness, timeout=timeout)
-        finally:
-            _restore_freeze()
-    else:
-        available = latest_version(harness, timeout=timeout)
+    # 凍結は解かない。manifest は hosts を迂回して実IPから取るため（_read_manifest_bytes）、
+    # 確認のたびに窓を開ける必要がなくなった。迂回に失敗した場合だけ、その1回の取得の
+    # 中で従来どおり一時解除される。
+    available = latest_version(harness, timeout=timeout)
     return {
         "harness": harness,
         "installed_version": current,
@@ -668,9 +813,9 @@ def _update_agy(progress: Progress = None, timeout: int = 300) -> dict[str, Any]
     auth_before = _auth_snapshot()
 
     try:
-        _emit(progress, "更新の凍結を一時解除します")
-        agy_update_freeze.remove_hosts_redirect()
-
+        # 凍結は張ったまま進める。manifest は hosts を迂回して取り、アーカイブ本体は
+        # storage.googleapis.com（リダイレクト対象外）から取るため、更新中に
+        # bg-updater が本物のホストへ抜ける窓は開かない。
         manifest = fetch_manifest(timeout=60)
         if manifest["version"] == current:
             _emit(progress, f"すでに最新です（{current}）")

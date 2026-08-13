@@ -1,8 +1,11 @@
+import contextlib
 import hashlib
 import io
 import json
 import os
 import shutil
+import socket
+import struct
 import sys
 import tarfile
 import tempfile
@@ -125,6 +128,14 @@ class AntigravityUpdateTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+        # 実機の /etc/hosts を絶対に触らせない。フォールバック経路は本物の
+        # remove/add_hosts_redirect を呼ぶため、これが無いとテスト実行が
+        # ホストの凍結状態を書き換える（2026-08-13 に実際に消えた）。
+        # 個々のテストは self.frozen() でこのモックの属性を上書きして観測する。
+        freeze = mock.patch.object(updater, "agy_update_freeze", mock.MagicMock())
+        freeze.start()
+        self.addCleanup(freeze.stop)
+
         self.new_payload = b"new-binary-contents"
         self.archive = _archive_with(self.new_payload)
         self.manifest = {
@@ -135,13 +146,27 @@ class AntigravityUpdateTests(unittest.TestCase):
 
     # -- helpers ---------------------------------------------------------
 
+    @contextlib.contextmanager
     def urlopen_serving_archive(self):
+        """Serve both transports offline.
+
+        manifest は hosts を迂回して実IPから取る経路が本線になったので、そちらも
+        差し替える。塞がないとテストが本物のベンダーへ出ていく（実際に出て、本物の
+        manifest を掴んで SHA-512 不一致で落ちた）。
+        """
+
         def fake_urlopen(url, timeout=None):
             if "manifests" in url:
                 return _FakeResponse(json.dumps(self.manifest).encode("utf-8"))
             return _FakeResponse(self.archive)
 
-        return mock.patch.object(updater, "urlopen", side_effect=fake_urlopen)
+        def fake_pinned(url, timeout, max_bytes):
+            return json.dumps(self.manifest).encode("utf-8")
+
+        with mock.patch.object(updater, "urlopen", side_effect=fake_urlopen), mock.patch.object(
+            updater, "_read_via_pinned_ip", side_effect=fake_pinned
+        ):
+            yield
 
     def frozen(self):
         return (
@@ -168,15 +193,42 @@ class AntigravityUpdateTests(unittest.TestCase):
         with self.urlopen_serving_archive(), self.assertRaises(updater.UpdateError):
             updater.fetch_manifest()
 
-    def test_check_restores_the_freeze_it_lifted(self):
+    def test_check_never_lowers_the_freeze(self):
+        """確認のたびに凍結を解かないこと。
+
+        当初は「解いて取り、必ず戻す」だった。manifest を hosts 迂回で取れると
+        実測できたので（2026-08-13）、**窓を狭めるのではなく開けない**方へ変えた。
+        凍結対象は manifest のホスト1つだけで、アーカイブ本体は別ホストにあるため、
+        これで更新経路から解除窓そのものが消える。定期確認を将来足すなら必須の性質。
+        """
         active, add, remove = self.frozen()
-        with self.urlopen_serving_archive(), active, add as add_mock, remove as remove_mock, \
+        with self.urlopen_serving_archive(), active, add, remove as remove_mock, \
                 self.versions(["1.1.9"]):
             report = updater.check_for_update()
         self.assertTrue(report["update_available"])
         self.assertEqual(report["available_version"], "1.1.12")
+        remove_mock.assert_not_called()
+
+    def test_manifest_falls_back_to_lifting_the_freeze_when_the_bypass_fails(self):
+        """迂回できない環境（nameserverが読めない等）でも確認は成立すること。"""
+        active, add, remove = self.frozen()
+
+        def fake_urlopen(url, timeout=None):
+            return _FakeResponse(json.dumps(self.manifest).encode("utf-8"))
+
+        with active, add as add_mock, remove as remove_mock, \
+                mock.patch.object(updater, "urlopen", side_effect=fake_urlopen), \
+                mock.patch.object(
+                    updater, "_read_via_pinned_ip", side_effect=updater.UpdateError("no nameserver")
+                ):
+            manifest = updater.fetch_manifest()
+        self.assertEqual(manifest["version"], "1.1.12")
         remove_mock.assert_called_once()
         add_mock.assert_called_once()
+
+    def test_pinned_fetch_refuses_a_non_https_url(self):
+        with self.assertRaises(updater.UpdateError):
+            updater._read_via_pinned_ip("http://example.invalid/x.json", 5, 1024)
 
     # -- update ----------------------------------------------------------
 
@@ -547,3 +599,59 @@ class UnknownHarnessTests(unittest.TestCase):
     def test_rollback_rejects_an_unknown_harness(self):
         with self.assertRaises(updater.UpdateError):
             updater.rollback("gemini")
+
+
+class DnsBypassTests(unittest.TestCase):
+    """手書きのDNS応答パーサ。依存を増やさない代わりに、壊れ方を自分で持つ部分。"""
+
+    QUERY_ID = 0x4548
+
+    def _response(self, *, flags=0x8180, answers=(), query_id=None):
+        header = struct.pack(
+            ">HHHHHH", self.QUERY_ID if query_id is None else query_id, flags, 1, len(answers), 0, 0
+        )
+        question = b"\x03www\x07example\x03com\x00" + struct.pack(">HH", 1, 1)
+        body = b""
+        for record_type, payload in answers:
+            body += b"\xc0\x0c" + struct.pack(">HHIH", record_type, 1, 60, len(payload)) + payload
+        return header + question + body
+
+    def test_extracts_the_a_record(self):
+        packet = self._response(answers=[(1, socket.inet_aton("203.0.113.7"))])
+        self.assertEqual(updater._first_a_record(packet, self.QUERY_ID), "203.0.113.7")
+
+    def test_follows_past_a_cname_to_the_a_record(self):
+        packet = self._response(
+            answers=[(5, b"\x03cdn\x07example\x03com\x00"), (1, socket.inet_aton("198.51.100.9"))]
+        )
+        self.assertEqual(updater._first_a_record(packet, self.QUERY_ID), "198.51.100.9")
+
+    def test_mismatched_transaction_id_is_refused(self):
+        packet = self._response(answers=[(1, socket.inet_aton("203.0.113.7"))], query_id=0x1234)
+        with self.assertRaises(updater.UpdateError):
+            updater._first_a_record(packet, self.QUERY_ID)
+
+    def test_truncated_response_is_refused(self):
+        # TC ビットが立っていたら、切れた答えを信用せず失敗させる。
+        packet = self._response(flags=0x8380, answers=[(1, socket.inet_aton("203.0.113.7"))])
+        with self.assertRaises(updater.UpdateError):
+            updater._first_a_record(packet, self.QUERY_ID)
+
+    def test_server_failure_rcode_is_refused(self):
+        packet = self._response(flags=0x8182)  # SERVFAIL
+        with self.assertRaises(updater.UpdateError):
+            updater._first_a_record(packet, self.QUERY_ID)
+
+    def test_answer_without_an_a_record_is_refused(self):
+        packet = self._response(answers=[(28, b"\x00" * 16)])  # AAAA のみ
+        with self.assertRaises(updater.UpdateError):
+            updater._first_a_record(packet, self.QUERY_ID)
+
+    def test_short_packet_is_refused(self):
+        with self.assertRaises(updater.UpdateError):
+            updater._first_a_record(b"\x00\x01", self.QUERY_ID)
+
+    def test_resolution_without_a_nameserver_is_refused(self):
+        with mock.patch.object(updater, "_nameservers", return_value=[]), \
+                self.assertRaises(updater.UpdateError):
+            updater._resolve_bypassing_hosts("example.invalid")
