@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -345,8 +346,9 @@ class AntigravityUpdateTests(unittest.TestCase):
     def test_rollback_to_a_deleted_retained_build_reports_it_plainly(self):
         """消えた保管版で素の FileNotFoundError を出さないこと。"""
         harness_pin.add_retained("agy", "1.1.6", str(self.bin_dir / "agy-1.1.6"), binary_sha512="ab")
+        # 第1引数は harness になったので版はキーワードで渡す（3ハーネス共通化に伴う変更）。
         with self.versions(["1.1.9"]), self.assertRaises(updater.UpdateError) as raised:
-            updater.rollback("1.1.6")
+            updater.rollback(version="1.1.6")
         self.assertIn("missing", str(raised.exception))
         self.assertEqual(self.binary.read_bytes(), b"old-binary")
 
@@ -380,3 +382,168 @@ class AntigravityUpdateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeSetupModule:
+    """A claude/codex-shaped installer backed by real directories.
+
+    Mirrors the contract this module relies on: an install root containing
+    ``bin/<name>``, an installer that replaces that root atomically, and a
+    resolver for the current release.
+    """
+
+    def __init__(self, name, root, latest="2.0.0"):
+        self.name = name
+        self.root = root
+        self.latest = latest
+        self.install_calls = []
+        self.installed_payload = None
+
+    # -- accessors the updater uses ---------------------------------------
+    def _resolved_install_root(self):
+        return str(self.root)
+
+    def binary_path(self):
+        return str(Path(self.root) / "bin" / self.name)
+
+    def is_installed(self):
+        return os.path.isfile(self.binary_path())
+
+    def resolve_version(self, timeout=60):
+        return self.latest
+
+    def resolve_release(self, timeout=60):
+        return {"version": self.latest}
+
+    # -- the installer -----------------------------------------------------
+    def install(self, version="latest", timeout=60, progress=None):
+        self.install_calls.append(version)
+        if progress:
+            progress(f"Downloading {self.name} {version}")
+        staged = Path(str(self.root) + ".staged")
+        if staged.exists():
+            shutil.rmtree(staged)
+        (staged / "bin").mkdir(parents=True)
+        (staged / "bin" / self.name).write_text(
+            self.installed_payload or f"{self.name}-{version}", encoding="utf-8"
+        )
+        (staged / "bin" / self.name).chmod(0o755)
+        if os.path.lexists(self.root):
+            shutil.rmtree(self.root)
+        os.replace(staged, self.root)
+        return {"version": version}
+
+
+class RootHarnessUpdateTests(unittest.TestCase):
+    """claude/codex: the unit swapped is the whole install root."""
+
+    HARNESS = "claude"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.install_root = root / f"{self.HARNESS}-cli"
+        (self.install_root / "bin").mkdir(parents=True)
+        self.binary = self.install_root / "bin" / self.HARNESS
+        self.binary.write_text("old-build", encoding="utf-8")
+        self.binary.chmod(0o755)
+
+        env = mock.patch.dict(
+            os.environ,
+            {
+                "EHA_HARNESS_PIN_FILE": str(root / "harness_pin.json"),
+                "EHA_HARNESS_UPDATE_JOURNAL": str(root / "journal.json"),
+            },
+            clear=False,
+        )
+        env.start()
+        self.addCleanup(env.stop)
+
+        self.module = _FakeSetupModule(self.HARNESS, self.install_root, latest="2.0.0")
+        patch = mock.patch.object(updater, f"{self.HARNESS}_setup", self.module)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def versions(self, sequence):
+        return mock.patch.object(updater, "installed_version", side_effect=list(sequence))
+
+    def test_update_drives_the_existing_installer_and_records_the_pin(self):
+        with self.versions(["1.0.0", "2.0.0"]):
+            result = updater.update(self.HARNESS)
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(result["version"], "2.0.0")
+        # 既存インストーラをそのまま適用段として使うこと（DL処理を再実装しない）。
+        self.assertEqual(self.module.install_calls, ["2.0.0"])
+        self.assertEqual(self.binary.read_text(encoding="utf-8"), f"{self.HARNESS}-2.0.0")
+        self.assertEqual(harness_pin.read_pin(self.HARNESS)["version"], "2.0.0")
+        self.assertIsNone(updater.read_journal())
+
+    def test_update_retains_the_previous_install_root(self):
+        with self.versions(["1.0.0", "2.0.0"]):
+            updater.update(self.HARNESS)
+        retained = harness_pin.retained_builds(self.HARNESS)
+        self.assertEqual([item["version"] for item in retained], ["1.0.0"])
+        kept = Path(retained[0]["path"]) / "bin" / self.HARNESS
+        self.assertTrue(kept.is_file())
+        self.assertEqual(kept.read_text(encoding="utf-8"), "old-build")
+
+    def test_wrong_version_after_install_rolls_the_root_back(self):
+        with self.versions(["1.0.0", "9.9.9"]), self.assertRaises(updater.UpdateError):
+            updater.update(self.HARNESS)
+        self.assertEqual(self.binary.read_text(encoding="utf-8"), "old-build")
+
+    def test_installer_failure_rolls_the_root_back(self):
+        self.module.install = mock.Mock(side_effect=RuntimeError("network down"))
+        with self.versions(["1.0.0"]), self.assertRaises(RuntimeError):
+            updater.update(self.HARNESS)
+        self.assertEqual(self.binary.read_text(encoding="utf-8"), "old-build")
+        self.assertIsNone(updater.read_journal())
+
+    def test_rollback_restores_the_retained_root(self):
+        with self.versions(["1.0.0", "2.0.0"]):
+            updater.update(self.HARNESS)
+        with self.versions(["2.0.0", "1.0.0"]):
+            result = updater.rollback(self.HARNESS)
+        self.assertEqual(result["version"], "1.0.0")
+        self.assertEqual(self.binary.read_text(encoding="utf-8"), "old-build")
+        self.assertEqual(harness_pin.read_pin(self.HARNESS)["source"], "rollback")
+
+    def test_already_current_does_not_touch_the_installer(self):
+        self.module.latest = "1.0.0"
+        with self.versions(["1.0.0"]):
+            result = updater.update(self.HARNESS)
+        self.assertEqual(result["status"], "unchanged")
+        self.assertEqual(self.module.install_calls, [])
+
+    def test_check_reports_the_resolver_version(self):
+        with self.versions(["1.0.0"]):
+            report = updater.check_for_update(self.HARNESS)
+        self.assertEqual(report["harness"], self.HARNESS)
+        self.assertEqual(report["available_version"], "2.0.0")
+        self.assertTrue(report["update_available"])
+
+    def test_retention_is_capped_so_backups_do_not_grow_without_bound(self):
+        for old, new in (("1.0.0", "2.0.0"), ("2.0.0", "3.0.0")):
+            self.module.latest = new
+            with self.versions([old, new]):
+                updater.update(self.HARNESS)
+        retained = harness_pin.retained_builds(self.HARNESS)
+        self.assertEqual(len(retained), updater.RETAINED_GENERATIONS)
+        self.assertEqual(retained[-1]["version"], "2.0.0")
+        # 記録から外した世代は実体も消えていること（/data と HA バックアップが膨らむため）。
+        self.assertFalse(Path(str(self.install_root) + "-1.0.0").exists())
+
+
+class CodexRootHarnessUpdateTests(RootHarnessUpdateTests):
+    HARNESS = "codex"
+
+
+class UnknownHarnessTests(unittest.TestCase):
+    def test_update_rejects_an_unknown_harness(self):
+        with self.assertRaises(updater.UpdateError):
+            updater.update("gemini")
+
+    def test_rollback_rejects_an_unknown_harness(self):
+        with self.assertRaises(updater.UpdateError):
+            updater.rollback("gemini")

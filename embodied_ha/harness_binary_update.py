@@ -1,9 +1,30 @@
-"""Operator-driven, atomic updates of the Antigravity CLI binary.
+"""Operator-driven, atomic updates of the harness CLIs.
 
 Design contract 0.7 puts harness binaries outside the add-on image: the operator
 installs them from the vendor at runtime, and the add-on's job is to make that
 "explicitly update, and roll back when it breaks" rather than to manage versions
-on the operator's behalf. This module is the update half of that contract.
+on the operator's behalf. This module is the update half of that contract, for
+all three harnesses.
+
+Two shapes, one transaction
+---------------------------
+The three CLIs are not installed alike, so the *unit* being swapped differs:
+
+- **agy** is a single binary file placed by a vendor shell script.
+- **claude / codex** are install *roots* (a directory with ``bin/<name>``)
+  placed by ``claude_setup.install()`` / ``codex_setup.install()``.
+
+The transaction around them is the same: record the current build, keep it
+aside, swap atomically, verify, and put the old one back if verification fails.
+Only the "how do I obtain and place the new build" step is per-harness, and for
+claude/codex that step is *their existing installer*, which already downloads,
+verifies a SHA-256, stages into a temp directory and ``os.replace``s the root.
+Re-implementing that here would duplicate verified code for no gain, so this
+module wraps it rather than replacing it.
+
+What was missing for claude/codex was never the swap — it was that the previous
+build is deleted on success, so there is nothing to roll back to, and that
+nobody wrote down which version got installed.
 
 Why not reuse the vendor installer for updates
 ----------------------------------------------
@@ -53,7 +74,26 @@ import agy_update_freeze
 import antigravity_setup
 import harness_pin
 
+# claude/codex helpers are optional in the same defensive sense as the web
+# server treats them: a missing module must degrade to "this harness cannot be
+# updated here", never to an import error that takes the whole module down.
+try:
+    import claude_setup
+except Exception:  # pragma: no cover - exercised only on a broken install
+    claude_setup = None
+try:
+    import codex_setup
+except Exception:  # pragma: no cover - exercised only on a broken install
+    codex_setup = None
+
 HARNESS = "agy"
+HARNESSES = ("claude", "codex", "agy")
+
+# How many superseded builds to keep per harness. One is what rollback needs;
+# more would accumulate in /data, which is included in Home Assistant backups —
+# the same way an unbounded cache turned one instance's /data into 14.7 GB.
+# Superseded builds beyond this are removed from disk and from the pin record.
+RETAINED_GENERATIONS = 1
 
 MANIFEST_BASE_URL = (
     "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests"
@@ -89,34 +129,99 @@ def _emit(progress: Progress, text: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Per-harness accessors
+#
+# Everything below this block is written against these four questions, so the
+# transaction itself never branches on the harness name.
+# --------------------------------------------------------------------------
+
+
+def _setup_module(harness: str):
+    module = {"claude": claude_setup, "codex": codex_setup}.get(harness)
+    if module is None:
+        raise UpdateError(f"{harness} setup helpers are unavailable")
+    return module
+
+
+def _binary_path(harness: str) -> str:
+    """The executable to run for ``--version``."""
+    if harness == "agy":
+        return antigravity_setup.binary_path()
+    return _setup_module(harness).binary_path()
+
+
+def _unit_path(harness: str) -> str:
+    """The filesystem object that gets swapped and retained.
+
+    For agy that is the binary itself; for claude/codex it is the whole install
+    root, because that is what their installer replaces atomically.
+    """
+    if harness == "agy":
+        return antigravity_setup.binary_path()
+    return _setup_module(harness)._resolved_install_root()
+
+
+def _is_installed(harness: str) -> bool:
+    if harness == "agy":
+        return antigravity_setup.is_installed()
+    module = {"claude": claude_setup, "codex": codex_setup}.get(harness)
+    return bool(module and module.is_installed())
+
+
+def _subprocess_env(harness: str) -> dict[str, str]:
+    if harness == "agy":
+        return antigravity_setup.subprocess_env()
+    module = _setup_module(harness)
+    env = getattr(module, "subprocess_env", None)
+    return env() if callable(env) else dict(os.environ)
+
+
+# --------------------------------------------------------------------------
 # Observation
 # --------------------------------------------------------------------------
 
 
-def installed_version(timeout: float = 15) -> str | None:
-    """Return the running binary's version, or ``None`` when it cannot be read.
+def installed_version(harness: str = HARNESS, timeout: float = 15) -> str | None:
+    """Return the running build's version, or ``None`` when it cannot be read.
 
     ``None`` is not an error here: an operator may have a binary the CLI cannot
     describe, and refusing to show the update screen for that would strand them.
+    All three CLIs print a version containing a plain ``x.y.z`` (measured:
+    ``1.1.12``, ``2.1.228 (Claude Code)``, ``codex-cli 0.145.0``).
     """
-    binary = antigravity_setup.binary_path()
-    if not antigravity_setup.is_installed():
+    if not _is_installed(harness):
         return None
     try:
         proc = subprocess.run(
-            [binary, "--version"],
+            [_binary_path(harness), "--version"],
             capture_output=True,
             text=True,
-            env=antigravity_setup.subprocess_env(),
+            env=_subprocess_env(harness),
             timeout=timeout,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UpdateError):
         return None
     if proc.returncode != 0:
         return None
     match = _VERSION_RE.search(f"{proc.stdout}\n{proc.stderr}")
     return match.group(1) if match else None
+
+
+def latest_version(harness: str = HARNESS, timeout: int = 60) -> str:
+    """Resolve the version the vendor is currently publishing.
+
+    Each CLI already has a resolver; this only picks the right one. Note the
+    asymmetry: agy's manifest is latest-only, while claude/codex resolve a
+    channel name. Either way "update" means "move to what is published now",
+    matching how Home Assistant updates add-ons.
+    """
+    if harness == "agy":
+        return fetch_manifest(timeout=timeout)["version"]
+    module = _setup_module(harness)
+    if harness == "claude":
+        return module.resolve_version(timeout=timeout)
+    return module.resolve_release(timeout=timeout)["version"]
 
 
 def release_platform() -> str:
@@ -189,26 +294,33 @@ def _restore_freeze() -> None:
         print(f"[agy-update] could not restore the update freeze: {exc}", file=sys.stderr)
 
 
-def check_for_update(timeout: int = 60) -> dict[str, Any]:
+def check_for_update(harness: str = HARNESS, timeout: int = 60) -> dict[str, Any]:
     """Report the installed build against the vendor's current release.
 
-    Reaching the vendor requires lifting the update freeze, which is why this is
-    an explicit call and not something the daemon does on a timer: the freeze
-    exists so model behaviour cannot drift without the operator asking.
+    For agy, reaching the vendor requires lifting the update freeze, which is why
+    this is an explicit call and not something the daemon does on a timer: the
+    freeze exists so model behaviour cannot drift without the operator asking.
+    claude/codex have no such redirect (claude is pinned by ``DISABLE_UPDATES=1``
+    in its own environment, codex only checks on start-up), so for them this is
+    an ordinary release lookup.
     """
-    current = installed_version()
-    pin = harness_pin.read_pin(HARNESS)
-    agy_update_freeze.remove_hosts_redirect()
-    try:
-        manifest = fetch_manifest(timeout=timeout)
-    finally:
-        _restore_freeze()
+    current = installed_version(harness)
+    pin = harness_pin.read_pin(harness)
+    if harness == "agy":
+        agy_update_freeze.remove_hosts_redirect()
+        try:
+            available = latest_version(harness, timeout=timeout)
+        finally:
+            _restore_freeze()
+    else:
+        available = latest_version(harness, timeout=timeout)
     return {
+        "harness": harness,
         "installed_version": current,
         "pinned_version": pin.get("version") if pin else None,
-        "available_version": manifest["version"],
-        "update_available": bool(current) and current != manifest["version"],
-        "retained": harness_pin.retained_builds(HARNESS),
+        "available_version": available,
+        "update_available": bool(current) and current != available,
+        "retained": harness_pin.retained_builds(harness),
     }
 
 
@@ -370,6 +482,43 @@ def _retain_current_binary(version: str, progress: Progress) -> str:
     return retained
 
 
+def _retain_current_root(harness: str, version: str, progress: Progress) -> str:
+    """Copy a claude/codex install root aside under a version-qualified name.
+
+    Their installer replaces the root and then deletes its own backup, so the
+    copy has to be taken here, before the installer runs. Staged next to the
+    root so the later rollback is a same-filesystem rename.
+    """
+    root = _unit_path(harness)
+    retained = f"{root}-{version}"
+    _emit(progress, f"旧バージョンを保管: {retained}")
+    parent = os.path.dirname(root) or "."
+    staging = tempfile.mkdtemp(prefix=f".{harness}-retain-", dir=parent)
+    try:
+        copied = os.path.join(staging, "root")
+        shutil.copytree(root, copied, symlinks=True)
+        if os.path.lexists(retained):
+            shutil.rmtree(retained, ignore_errors=True)
+        os.replace(copied, retained)
+    except OSError as exc:
+        raise UpdateError(f"could not retain the current {harness} install: {exc}") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return retained
+
+
+def _unit_digest(harness: str, unit_path: str) -> str:
+    """Digest identifying a retained unit.
+
+    Directories are identified by the digest of their CLI binary rather than of
+    the whole tree: it is the file whose swap matters, and hashing a tree would
+    make the check depend on incidental files the installer may add.
+    """
+    if harness == "agy":
+        return _sha512_of(unit_path)
+    return _sha512_of(os.path.join(unit_path, "bin", harness))
+
+
 def _verify_installed(expected_version: str, expected_sha512: str) -> None:
     """Run the same acceptance chain the F-157 migration established.
 
@@ -406,13 +555,106 @@ def supports_structured_output(timeout: float = 15) -> bool:
     return proc.returncode == 0 and "--output-format" in output and "--json-schema" in output
 
 
-def update(progress: Progress = None, timeout: int = 300) -> dict[str, Any]:
-    """Move the Antigravity CLI to the vendor's current release, atomically.
+def update(
+    harness: str = HARNESS, progress: Progress = None, timeout: int = 300
+) -> dict[str, Any]:
+    """Move ``harness`` to the vendor's current release, atomically.
 
-    Returns a summary on success. On failure the previous binary is put back and
+    Returns a summary on success. On failure the previous build is put back and
     ``UpdateError`` is raised; the only state that survives a failure is the
     retained copy, which is harmless and reusable.
     """
+    if harness not in HARNESSES:
+        raise UpdateError(f"unknown harness: {harness!r}")
+    result = _update_agy(progress, timeout) if harness == "agy" else _update_root(
+        harness, progress, timeout
+    )
+    if result.get("status") == "updated":
+        _prune_retained(harness, progress)
+    return result
+
+
+def _update_root(harness: str, progress: Progress, timeout: int) -> dict[str, Any]:
+    """Update claude/codex by driving their own installer.
+
+    Their ``install()`` already resolves the channel, downloads, verifies a
+    SHA-256, stages into a temp directory and replaces the install root with
+    ``os.replace`` — the atomicity this module exists to guarantee is already
+    there. What it does not do is keep the superseded root, so the retention
+    happens here, before the installer is allowed to run.
+    """
+    module = _setup_module(harness)
+    if not _is_installed(harness):
+        raise UpdateError(f"{harness} is not installed; use install rather than update")
+    current = installed_version(harness)
+    if not current:
+        raise UpdateError(f"could not determine the installed {harness} version")
+
+    available = latest_version(harness, timeout=60)
+    if available == current:
+        _emit(progress, f"すでに最新です（{current}）")
+        return {"status": "unchanged", "version": current, "available_version": available}
+    _emit(progress, f"{current} → {available} へ更新します")
+
+    retained_path = _retain_current_root(harness, current, progress)
+    harness_pin.add_retained(
+        harness, current, retained_path, binary_sha512=_unit_digest(harness, retained_path)
+    )
+    _write_journal(
+        {
+            "harness": harness,
+            "from_version": current,
+            "to_version": available,
+            "retained_path": retained_path,
+            "phase": "prepared",
+        }
+    )
+
+    try:
+        result = module.install(available, timeout=timeout, progress=lambda t: _emit(progress, t))
+        installed = result.get("version") if isinstance(result, dict) else None
+        # The installer's own report is not taken on trust: what matters is what
+        # the binary on disk now says about itself.
+        actual = installed_version(harness)
+        if not _is_installed(harness):
+            raise UpdateError(f"no executable {harness} binary after the update")
+        if actual != available:
+            raise UpdateError(f"installed {harness} reports {actual!r}, expected {available!r}")
+        _emit(progress, "検証に成功しました")
+        harness_pin.record_install(
+            harness,
+            installed or actual,
+            binary_sha512=_unit_digest(harness, _unit_path(harness)),
+            source="update",
+        )
+        _clear_journal()
+        return {
+            "status": "updated",
+            "previous_version": current,
+            "version": actual,
+            "retained_path": retained_path,
+        }
+    except BaseException as original:
+        _emit(progress, "更新に失敗したため元のバージョンへ戻します")
+        try:
+            _restore_from(retained_path, harness)
+        except Exception as rollback_error:
+            _write_journal(
+                {
+                    "harness": harness,
+                    "phase": "rollback_failed",
+                    "retained_path": retained_path,
+                    "error": str(rollback_error),
+                }
+            )
+            raise UpdateError(
+                f"{harness} update failed and rollback also failed: {rollback_error}"
+            ) from original
+        _clear_journal()
+        raise
+
+
+def _update_agy(progress: Progress = None, timeout: int = 300) -> dict[str, Any]:
     if not antigravity_setup.is_installed():
         raise UpdateError("Antigravity is not installed; use install rather than update")
 
@@ -521,53 +763,80 @@ def update(progress: Progress = None, timeout: int = 300) -> dict[str, Any]:
         _restore_freeze()
 
 
-def _restore_from(retained_path: str) -> None:
-    if not os.path.isfile(retained_path):
-        raise UpdateError(f"retained Antigravity binary is missing: {retained_path}")
-    incoming = os.path.join(antigravity_setup.bin_dir(), ".agy-restore")
-    shutil.copy2(retained_path, incoming)
-    os.chmod(incoming, 0o755)
-    os.replace(incoming, antigravity_setup.binary_path())
+def _restore_from(retained_path: str, harness: str = HARNESS) -> None:
+    """Put a retained unit back at the live path, atomically.
+
+    Staged next to the target first so the final step is a same-filesystem
+    rename: the live path is never left without a usable build, which is the
+    same invariant the forward direction keeps.
+    """
+    if harness == "agy":
+        if not os.path.isfile(retained_path):
+            raise UpdateError(f"retained Antigravity binary is missing: {retained_path}")
+        incoming = os.path.join(antigravity_setup.bin_dir(), ".agy-restore")
+        shutil.copy2(retained_path, incoming)
+        os.chmod(incoming, 0o755)
+        os.replace(incoming, antigravity_setup.binary_path())
+        return
+
+    if not os.path.isdir(retained_path):
+        raise UpdateError(f"retained {harness} install is missing: {retained_path}")
+    root = _unit_path(harness)
+    parent = os.path.dirname(root) or "."
+    staging = tempfile.mkdtemp(prefix=f".{harness}-restore-", dir=parent)
+    try:
+        incoming = os.path.join(staging, "root")
+        shutil.copytree(retained_path, incoming, symlinks=True)
+        superseded = os.path.join(staging, "superseded")
+        if os.path.lexists(root):
+            os.replace(root, superseded)
+        os.replace(incoming, root)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
-def rollback(version: str | None = None, progress: Progress = None) -> dict[str, Any]:
+def rollback(
+    harness: str = HARNESS, version: str | None = None, progress: Progress = None
+) -> dict[str, Any]:
     """Put a retained build back in place.
 
     With no ``version`` the most recently retained build is used, which is the
     one the last update replaced.
     """
-    retained = harness_pin.retained_builds(HARNESS)
+    if harness not in HARNESSES:
+        raise UpdateError(f"unknown harness: {harness!r}")
+    retained = harness_pin.retained_builds(harness)
     if not retained:
-        raise UpdateError("no retained Antigravity build to roll back to")
+        raise UpdateError(f"no retained {harness} build to roll back to")
     if version:
         matches = [item for item in retained if item.get("version") == version]
         if not matches:
-            raise UpdateError(f"no retained Antigravity build for version {version!r}")
+            raise UpdateError(f"no retained {harness} build for version {version!r}")
         target = matches[-1]
     else:
         target = retained[-1]
 
     path = target.get("path")
     if not path:
-        raise UpdateError("retained Antigravity build has no recorded path")
+        raise UpdateError(f"retained {harness} build has no recorded path")
     # 存在確認を先に行う。順序を逆にすると、消えた保管版に対して素の
     # FileNotFoundError が利用者へそのまま出る（Playwright 検証で実際に出た）。
-    if not os.path.isfile(path):
-        raise UpdateError(f"retained Antigravity binary is missing: {path}")
+    if not os.path.exists(path):
+        raise UpdateError(f"retained {harness} build is missing: {path}")
     expected = target.get("binary_sha512")
-    if expected and _sha512_of(path) != expected:
-        raise UpdateError("retained Antigravity binary does not match its recorded SHA-512")
+    if expected and _unit_digest(harness, path) != expected:
+        raise UpdateError(f"retained {harness} build does not match its recorded SHA-512")
 
-    previous = installed_version()
+    previous = installed_version(harness)
     _emit(progress, f"{previous} → {target.get('version')} へ戻します")
-    _restore_from(path)
-    actual = installed_version()
+    _restore_from(path, harness)
+    actual = installed_version(harness)
     if actual != target.get("version"):
         raise UpdateError(
-            f"rolled back binary reports {actual!r}, expected {target.get('version')!r}"
+            f"rolled back {harness} reports {actual!r}, expected {target.get('version')!r}"
         )
     harness_pin.record_install(
-        HARNESS,
+        harness,
         str(target.get("version")),
         url=target.get("url"),
         binary_sha512=expected,
@@ -576,6 +845,39 @@ def rollback(version: str | None = None, progress: Progress = None) -> dict[str,
     _clear_journal()
     _emit(progress, "ロールバックしました")
     return {"status": "rolled_back", "previous_version": previous, "version": target.get("version")}
+
+
+def _prune_retained(harness: str, progress: Progress = None) -> list[str]:
+    """Keep only the newest ``RETAINED_GENERATIONS`` superseded builds.
+
+    Retained builds live under ``/data``, which Home Assistant includes in its
+    backups. Left unbounded, a few updates of a ~200 MB CLI would quietly inflate
+    every backup — the same failure shape as an unbounded conversation cache, and
+    one this feature would otherwise introduce while claiming to be housekeeping.
+
+    Removal is best effort and never fails the update that triggered it: losing
+    the ability to roll back two versions is not worth failing a good update.
+    """
+    retained = harness_pin.retained_builds(harness)
+    excess = retained[: max(0, len(retained) - RETAINED_GENERATIONS)]
+    removed: list[str] = []
+    for item in excess:
+        path = item.get("path")
+        try:
+            if path and os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            elif path and os.path.lexists(path):
+                os.unlink(path)
+            harness_pin.drop_retained(harness, str(item.get("version")))
+            removed.append(str(item.get("version")))
+        except Exception as exc:  # noqa: BLE001 - housekeeping never fails the update
+            print(
+                f"[{harness}-update] could not remove retained {item.get('version')}: {exc}",
+                file=sys.stderr,
+            )
+    if removed:
+        _emit(progress, f"古い保管版を削除しました: {', '.join(removed)}")
+    return removed
 
 
 def reconcile() -> dict[str, Any]:
@@ -589,14 +891,24 @@ def reconcile() -> dict[str, Any]:
     entry = read_journal()
     if entry is None:
         return {"status": "clean"}
-    actual = installed_version()
+    # The journal names its own harness, so start-up does not have to guess
+    # which one was mid-update.
+    harness = entry.get("harness") if isinstance(entry, dict) else None
+    if harness not in HARNESSES:
+        harness = HARNESS
+    actual = installed_version(harness)
     if actual is None:
-        return {"status": "unresolved", "reason": "version_unreadable", "journal": entry}
-    pin = harness_pin.read_pin(HARNESS)
+        return {
+            "status": "unresolved",
+            "reason": "version_unreadable",
+            "harness": harness,
+            "journal": entry,
+        }
+    pin = harness_pin.read_pin(harness)
     if not pin or pin.get("version") != actual:
-        harness_pin.record_install(HARNESS, actual, source="reconcile")
+        harness_pin.record_install(harness, actual, source="reconcile")
     _clear_journal()
-    return {"status": "reconciled", "version": actual, "journal": entry}
+    return {"status": "reconciled", "harness": harness, "version": actual, "journal": entry}
 
 
 def main(argv: list[str]) -> int:

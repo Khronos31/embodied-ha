@@ -520,9 +520,14 @@ _SETUP_MUTATION_PATHS = frozenset({
     "/api/setup/antigravity/uninstall", "/api/setup/antigravity/clear-auth",
     "/api/setup/antigravity/logout",
     # update/rollback はバイナリを差し替える。update-status も check=1 のときだけ
-    # 凍結を一時解除して外へ出るため、読み取りに見えて ingress 境界の内側に置く。
+    # 外部へ問い合わせる(agy では凍結の一時解除を伴う)ため、読み取りに見えて
+    # ingress 境界の内側に置く。3ハーネス分の実体は下の _HARNESS_*_ROUTES。
     "/api/setup/antigravity/update", "/api/setup/antigravity/rollback",
     "/api/setup/antigravity/update-status",
+    "/api/setup/claude/update", "/api/setup/claude/rollback",
+    "/api/setup/claude/update-status",
+    "/api/setup/codex/update", "/api/setup/codex/rollback",
+    "/api/setup/codex/update-status",
     "/api/setup/codex/install", "/api/setup/codex/login",
     "/api/setup/codex/uninstall", "/api/setup/codex/clear-auth",
     "/api/setup/codex/logout",
@@ -533,6 +538,18 @@ _SETUP_MUTATION_PATHS = frozenset({
 # mutating verb, POST). Keeps GET /api/setup/agent-prefs reachable like other status
 # reads while POST stays ingress-guarded (sol Med).
 _SETUP_GET_READS = frozenset({"/api/setup/agent-prefs", "/api/setup/terms"})
+# URL のハーネス名は既存の綴りを踏襲する: Antigravity は `antigravity`、他は CLI 名。
+# `/api/setup/antigravity/update` は公開済みなので改名しない。
+_HARNESS_URL_NAMES = {"antigravity": "agy", "claude": "claude", "codex": "codex"}
+_HARNESS_UPDATE_ROUTES = {
+    f"/api/setup/{url}/update": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
+_HARNESS_ROLLBACK_ROUTES = {
+    f"/api/setup/{url}/rollback": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
+_HARNESS_UPDATE_STATUS_ROUTES = {
+    f"/api/setup/{url}/update-status": harness for url, harness in _HARNESS_URL_NAMES.items()
+}
 _SETUP_GUARD_ERROR = "setup endpoints are only available via the Web UI (ingress)"
 _SETUP_TERMS_ERROR = "利用規約を確認し、インストールと認証の代行に同意してください"
 _SETUP_TERMS_GATED_PATHS = frozenset({
@@ -613,6 +630,30 @@ def _record_installed_agy_version() -> None:
             print("[agy-pin] インストール直後の版を読み取れませんでした", file=sys.stderr)
     except Exception as e:
         print(f"[agy-pin] 導入版の記録に失敗: {e}", file=sys.stderr)
+
+
+def _acquire_harness_mutation(harness: str, operation: str):
+    """Take the mutation lock that harness's install/uninstall already uses.
+
+    Returns ``(acquired, release, busy_message)``. Each harness guards its setup
+    operations differently — Antigravity holds two locks so a login session
+    cannot overlap, Codex records the running operation by name, Claude uses a
+    single lock — and an update has exactly the same exclusion needs as an
+    install, so it borrows the same guard rather than adding a fourth scheme.
+    """
+    if harness == "agy":
+        if _acquire_antigravity_destructive_locks():
+            return True, _release_antigravity_destructive_locks, ""
+        return False, lambda: None, "Antigravity setup is already running"
+    if harness == "codex":
+        if _acquire_codex_mutation(operation):
+            return True, _release_codex_mutation, ""
+        return False, lambda: None, _codex_busy_error()
+    if harness == "claude":
+        if _CLAUDE_MUTATION_LOCK.acquire(blocking=False):
+            return True, _CLAUDE_MUTATION_LOCK.release, ""
+        return False, lambda: None, "Claude setup is already running"
+    return False, lambda: None, f"unknown harness: {harness}"
 
 
 def _record_setup_install_version(harness: str, result) -> None:
@@ -1549,20 +1590,23 @@ class Handler(BaseHTTPRequestHandler):
             stop_event.set()
             _stop_antigravity_process(proc_box["proc"])
 
-    def _antigravity_update_stream(self, operation, action):
-        """Run an Antigravity binary transaction under the destructive locks, over SSE.
+    def _harness_update_stream(self, harness, operation, action):
+        """Run a harness binary transaction under that harness's locks, over SSE.
 
         `update` と `rollback` は同じ形をしている——排他を取り、進捗行を流し、
         結果かエラーで閉じる。install と違って外部プロセスを飼わないので、
         こちらは中断用の proc 管理を持たない。
+
+        ロックはハーネスごとに違うものを取る。更新中に uninstall や再ログインが
+        走ると、差し替え直後の検証が「別の操作のせいで」失敗しうるため、
+        既存の install/uninstall と同じ排他へ相乗りする。
         """
         if harness_binary_update is None:
-            self._send_sse_error("Antigravity update helpers unavailable")
+            self._send_sse_error("harness update helpers unavailable")
             return
-        # install/login と同じ2つのロックを取る。更新中に uninstall や再ログインが
-        # 走ると、差し替え直後の検証が「別の操作のせいで」失敗しうるため。
-        if not _acquire_antigravity_destructive_locks():
-            self._send_sse_error("Antigravity setup is already running")
+        acquired, release, busy_message = _acquire_harness_mutation(harness, operation)
+        if not acquired:
+            self._send_sse_error(busy_message)
             return
 
         q: queue.Queue = queue.Queue(maxsize=200)
@@ -1581,7 +1625,7 @@ class Handler(BaseHTTPRequestHandler):
                 q.put(("error", str(e)))
             finally:
                 try:
-                    _release_antigravity_destructive_locks()
+                    release()
                 except Exception:
                     pass
 
@@ -1607,7 +1651,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             # クライアントが切れても取引は最後まで走らせる——途中で止めると
             # ピン記録と実バイナリが食い違ったまま残る。
-            print(f"[agy-update] SSE client disconnected during {operation}", file=sys.stderr)
+            print(
+                f"[{harness}-update] SSE client disconnected during {operation}", file=sys.stderr
+            )
 
     def _send_sse_error(self, message):
         self.send_response(200)
@@ -1622,48 +1668,55 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _serve_setup_antigravity_update(self):
-        """導入済み Antigravity CLI をベンダー最新版へ原子的に差し替える。"""
-        self._antigravity_update_stream(
-            "update", lambda progress: harness_binary_update.update(progress=progress)
+    def _serve_setup_harness_update(self, harness):
+        """導入済みのハーネスCLIをベンダー最新版へ原子的に差し替える。"""
+        self._harness_update_stream(
+            harness,
+            "update",
+            lambda progress: harness_binary_update.update(harness, progress=progress),
         )
 
-    def _serve_setup_antigravity_rollback(self):
-        """保管してある旧バイナリへ戻す。
+    def _serve_setup_harness_rollback(self, harness):
+        """保管してある旧バージョンへ戻す。
 
         版は query の `version=` で受ける。SSE は EventSource=GET なので、
         install と同じくボディを取らない形に揃える。無指定なら直近の保管版。
         """
         params = parse_qs(urlparse(self.path).query)
         version = (params.get("version") or [None])[0]
-        self._antigravity_update_stream(
+        self._harness_update_stream(
+            harness,
             "rollback",
-            lambda progress: harness_binary_update.rollback(version=version, progress=progress),
+            lambda progress: harness_binary_update.rollback(
+                harness, version=version, progress=progress
+            ),
         )
 
-    def _serve_setup_antigravity_update_status(self):
+    def _serve_setup_harness_update_status(self, harness):
         """導入版・保管版・ベンダー最新版を返す(読み取りのみ)。
 
-        ベンダー確認は凍結の一時解除を伴うため、`check=1` が明示されたときだけ
-        行う。既定は手元の記録だけを返し、画面を開くだけで外へ出ないようにする。
+        ベンダー確認は agy では凍結の一時解除を伴い、いずれのハーネスでも外部へ
+        出るため、`check=1` が明示されたときだけ行う。既定は手元の記録だけを返し、
+        画面を開くだけで通信しないようにする。
         """
         if harness_binary_update is None or harness_pin is None:
-            self.send_json({"error": "Antigravity update helpers unavailable"}, status=503)
+            self.send_json({"error": "harness update helpers unavailable"}, status=503)
             return
         params = parse_qs(urlparse(self.path).query)
         wants_check = (params.get("check") or ["0"])[0] == "1"
         try:
             if wants_check:
-                self.send_json(harness_binary_update.check_for_update())
+                self.send_json(harness_binary_update.check_for_update(harness))
                 return
-            pin = harness_pin.read_pin("agy")
+            pin = harness_pin.read_pin(harness)
             self.send_json(
                 {
-                    "installed_version": harness_binary_update.installed_version(),
+                    "harness": harness,
+                    "installed_version": harness_binary_update.installed_version(harness),
                     "pinned_version": pin.get("version") if pin else None,
                     "available_version": None,
                     "update_available": False,
-                    "retained": harness_pin.retained_builds("agy"),
+                    "retained": harness_pin.retained_builds(harness),
                 }
             )
         except Exception as e:
@@ -2262,12 +2315,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"default_tier": agent_prefs.load().get("default_tier", {})})
         elif path == "/api/setup/antigravity/install":
             self._serve_setup_antigravity_install()
-        elif path == "/api/setup/antigravity/update-status":
-            self._serve_setup_antigravity_update_status()
-        elif path == "/api/setup/antigravity/update":
-            self._serve_setup_antigravity_update()
-        elif path == "/api/setup/antigravity/rollback":
-            self._serve_setup_antigravity_rollback()
+        elif path in _HARNESS_UPDATE_STATUS_ROUTES:
+            self._serve_setup_harness_update_status(_HARNESS_UPDATE_STATUS_ROUTES[path])
+        elif path in _HARNESS_UPDATE_ROUTES:
+            self._serve_setup_harness_update(_HARNESS_UPDATE_ROUTES[path])
+        elif path in _HARNESS_ROLLBACK_ROUTES:
+            self._serve_setup_harness_rollback(_HARNESS_ROLLBACK_ROUTES[path])
         elif path == "/api/setup/antigravity/login":
             self._serve_setup_antigravity_login()
         elif path in ("/api/setup/login", "/api/setup/claude/login"):
