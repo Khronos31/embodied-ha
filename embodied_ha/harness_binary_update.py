@@ -165,6 +165,30 @@ def fetch_manifest(timeout: int = 60) -> dict[str, str]:
     return {"version": version.strip(), "url": archive_url, "sha512": sha512.lower()}
 
 
+def _restore_freeze() -> None:
+    """Re-freeze whenever a binary is installed, regardless of the prior state.
+
+    Restoring only what we observed lifted would leave the freeze down when the
+    hosts file was edited by hand or a previous run died mid-window: the probe
+    would report "not active", so nothing would be restored. "Installed implies
+    frozen" is the invariant the install endpoint already keeps (server.py's
+    post-install finally block), so this mirrors it rather than inventing a
+    second rule. Failure is logged, not raised — a stuck freeze must not turn a
+    successful update into a failed one.
+
+    ⚠️ The window this closes is not the only one: while the redirect is down,
+    another agy turn's background updater can reach the real host and update the
+    CLI behind our back. That hole is inherited from the install path (accepted
+    in Phase 1, Fable/sol review 2026-07-20) and is now reachable on every
+    update, not only on the rare install.
+    """
+    try:
+        if antigravity_setup.is_installed():
+            agy_update_freeze.add_hosts_redirect()
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not mask the result
+        print(f"[agy-update] could not restore the update freeze: {exc}", file=sys.stderr)
+
+
 def check_for_update(timeout: int = 60) -> dict[str, Any]:
     """Report the installed build against the vendor's current release.
 
@@ -174,14 +198,11 @@ def check_for_update(timeout: int = 60) -> dict[str, Any]:
     """
     current = installed_version()
     pin = harness_pin.read_pin(HARNESS)
-    freeze_was_active = agy_update_freeze.is_redirect_active()
-    if freeze_was_active:
-        agy_update_freeze.remove_hosts_redirect()
+    agy_update_freeze.remove_hosts_redirect()
     try:
         manifest = fetch_manifest(timeout=timeout)
     finally:
-        if freeze_was_active:
-            agy_update_freeze.add_hosts_redirect()
+        _restore_freeze()
     return {
         "installed_version": current,
         "pinned_version": pin.get("version") if pin else None,
@@ -399,16 +420,14 @@ def update(progress: Progress = None, timeout: int = 300) -> dict[str, Any]:
     if not current:
         raise UpdateError("could not determine the installed Antigravity version")
 
-    freeze_was_active = agy_update_freeze.is_redirect_active()
     staging = tempfile.mkdtemp(prefix="eha-agy-update-")
     retained_path: str | None = None
     swapped = False
     auth_before = _auth_snapshot()
 
     try:
-        if freeze_was_active:
-            _emit(progress, "更新の凍結を一時解除します")
-            agy_update_freeze.remove_hosts_redirect()
+        _emit(progress, "更新の凍結を一時解除します")
+        agy_update_freeze.remove_hosts_redirect()
 
         manifest = fetch_manifest(timeout=60)
         if manifest["version"] == current:
@@ -499,8 +518,7 @@ def update(progress: Progress = None, timeout: int = 300) -> dict[str, Any]:
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-        if freeze_was_active:
-            agy_update_freeze.add_hosts_redirect()
+        _restore_freeze()
 
 
 def _restore_from(retained_path: str) -> None:

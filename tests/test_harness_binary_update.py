@@ -234,6 +234,27 @@ class AntigravityUpdateTests(unittest.TestCase):
         self.assertNotIn("unlink", [kind for kind, _ in observed])
         self.assertTrue(all(existed for _, existed in observed))
 
+    def test_failure_between_journal_and_swap_leaves_no_journal(self):
+        """A journal that outlives its transaction would trigger a bogus reconcile."""
+        real_replace = os.replace
+        target = str(self.binary)
+
+        def refuse_the_swap(src, dst, *args, **kwargs):
+            if str(dst) == target:
+                raise OSError("disk went away")
+            return real_replace(src, dst, *args, **kwargs)
+
+        active, add, remove = self.frozen()
+        with self.urlopen_serving_archive(), active, add, remove, self.versions(["1.1.9"]), \
+                mock.patch.object(updater.os, "replace", side_effect=refuse_the_swap), \
+                self.assertRaises(OSError):
+            updater.update()
+        # Retention happens immediately before the journal write, so its presence
+        # proves the transaction really reached the point this test is about.
+        self.assertEqual([item["version"] for item in harness_pin.retained_builds("agy")], ["1.1.9"])
+        self.assertIsNone(updater.read_journal())
+        self.assertEqual(self.binary.read_bytes(), b"old-binary")
+
     def test_corrupt_download_is_refused_before_any_swap(self):
         self.manifest["sha512"] = "0" * 128
         active, add, remove = self.frozen()
