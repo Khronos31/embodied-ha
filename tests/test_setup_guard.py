@@ -39,6 +39,11 @@ class SetupGuardTests(unittest.TestCase):
         ("POST", "/api/setup/antigravity/uninstall"),
         ("POST", "/api/setup/antigravity/clear-auth"),
         ("POST", "/api/setup/antigravity/logout"),
+        # Binary swaps, plus the status read whose check=1 form lifts the
+        # update freeze to reach the vendor.
+        ("GET", "/api/setup/antigravity/update"),
+        ("GET", "/api/setup/antigravity/rollback"),
+        ("GET", "/api/setup/antigravity/update-status"),
         ("POST", "/api/setup/codex/install"),
         ("POST", "/api/setup/codex/login"),
         ("POST", "/api/setup/codex/uninstall"),

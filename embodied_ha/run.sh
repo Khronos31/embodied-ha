@@ -150,6 +150,12 @@ python3 "$SCRIPT_DIR/migrate_remove_unused_antigravity.py" 2>&1 | sed 's/^/[run]
 python3 "$SCRIPT_DIR/migrate_antigravity_structured_output.py" 2>&1 | sed 's/^/[run] /' \
     || echo "[run] F-157 Antigravity CLI upgrade failed; continuing with the previous CLI"
 
+# --- 中断した操作者主導の更新を帳簿と一致させる（F-80）---
+# 差し替えは os.replace なので、中断してもバイナリは必ずどちらかの完全な版になる。
+# ここで直すのは「ピン記録と実バイナリの食い違い」だけで、更新のやり直しはしない。
+python3 "$SCRIPT_DIR/harness_binary_update.py" reconcile 2>&1 | sed 's/^/[run] /' \
+    || echo "[run] harness update reconcile failed; continuing"
+
 # --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
 # agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
 # （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
