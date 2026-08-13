@@ -1519,6 +1519,47 @@ function renderHarnessVersionUI(data, harnessKey, checkFailed = false) {
     }
 
     // 3. 保管中バージョン一覧の描画
+    renderRetainedVersionsTable(data.retained || []);
+}
+
+/**
+ * 保管中バージョンテーブルの描画
+ */
+function renderRetainedVersionsTable(retainedList) {
+    const emptyEl = document.getElementById('harness-retained-list-empty');
+    const tableEl = document.getElementById('harness-retained-table');
+    const tbodyEl = document.getElementById('harness-retained-tbody');
+
+    if (!retainedList || retainedList.length === 0) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        if (tableEl) tableEl.style.display = 'none';
+        return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (tableEl) tableEl.style.display = 'table';
+
+    tbodyEl.innerHTML = '';
+    retainedList.forEach((item) => {
+        const tr = document.createElement('tr');
+        
+        const dateStr = item.retained_at 
+            ? new Date(item.retained_at).toLocaleString() 
+            : '不明';
+
+        tr.innerHTML = `
+            <td style="font-family: monospace; font-weight: 600;">${escapeHtml(item.version || '')}</td>
+            <td style="color: var(--claude-text-sub); font-size: 0.85rem;">${escapeHtml(dateStr)}</td>
+            <td>
+                <button type="button" class="btn btn-secondary btn-sm" 
+                    onclick="runHarnessRollback('${escapeHtml(item.version)}')"
+                    ${g_harnessUpdateInProgress ? 'disabled' : ''}>
+                    このバージョンに戻す
+                </button>
+            </td>
+        `;
+        tbodyEl.appendChild(tr);
+    });
 }
 
 // ---- 確認ボタン ----
