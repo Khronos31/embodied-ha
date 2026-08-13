@@ -8,6 +8,37 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.22] - 2026-08-14
+
+### Fixed / 修正
+
+- Antigravity を選んだ個体の観察ループが、1日あたり数回ぶん記録されずに捨てられていた問題を
+  直しました。原因は、出力形式の指定をコマンドライン引数ではなくプロンプト本文に埋め込んでいた
+  ことです。Antigravity は選択肢の一覧に「未設定」を含む形を受け付けないため、その1箇所だけを
+  同じ意味の別表記へ置き換えて、引数で渡すようにしました。他のハーネスへ渡す内容は変わりません。
+  Fixed observation turns being discarded several times a day on Antigravity instances. The output
+  format was described in the prompt text instead of being passed as a command-line argument, because
+  one field's list of choices included "unset" — a shape Antigravity rejects. That single field is now
+  rewritten to an equivalent form and the schema is passed as an argument. Nothing changes for the
+  other harnesses.
+
+### Added / 追加
+
+- エージェントCLIのバージョンを記録し、Web UI から更新・ロールバックできるようにしました
+  （設定 → 実験中機能）。更新すると旧バージョンを保管し、問題が出たら戻せます。差し替えは
+  原子的で、実行中の会話は古い方で最後まで走ります。検証に失敗した場合は自動で元へ戻ります。
+  Added a record of which CLI build each harness is running, with update and rollback from the Web UI
+  (Settings → Experimental). Updating keeps the previous build so you can go back. The swap is atomic:
+  a turn already running finishes on the old build, and a failed verification restores it automatically.
+- ファイル読み取り用の `files` MCP に、画像を画像として返すツールを追加しました。
+  Added a tool to the `files` MCP that returns images as images.
+
+### Notes / 備考
+
+- 保管する旧バージョンは直近1世代です。`/data` は Home Assistant のバックアップに含まれるため、
+  際限なく積み上げません。
+  One previous build is retained. `/data` is included in Home Assistant backups, so retention is bounded.
+
 ## [2.1.21] - 2026-08-12
 
 ### Added / 追加
