@@ -12,15 +12,12 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed / 修正
 
-- Antigravity を選んだ個体の観察ループが、1日あたり数回ぶん記録されずに捨てられていた問題を
-  直しました。原因は、出力形式の指定をコマンドライン引数ではなくプロンプト本文に埋め込んでいた
-  ことです。Antigravity は選択肢の一覧に「未設定」を含む形を受け付けないため、その1箇所だけを
-  同じ意味の別表記へ置き換えて、引数で渡すようにしました。他のハーネスへ渡す内容は変わりません。
-  Fixed observation turns being discarded several times a day on Antigravity instances. The output
-  format was described in the prompt text instead of being passed as a command-line argument, because
-  one field's list of choices included "unset" — a shape Antigravity rejects. That single field is now
-  rewritten to an equivalent form and the schema is passed as an argument. Nothing changes for the
-  other harnesses.
+- 観察モードの結果が、記録されずに捨てられることがあった問題を直しました。エージェントが
+  応答を整形して返したとき、応答の読み取り側が「一覧の最後の項目」を応答全体と取り違えて
+  いました。一覧を持つのは観察モードだけなので、この症状も観察モードにだけ出ていました。
+  Fixed observation results being discarded. When the agent returned its answer pretty-printed, the
+  reader mistook the last item of a list for the whole answer. Observation is the only mode whose
+  answer contains lists, so it was the only mode affected.
 
 ### Added / 追加
 

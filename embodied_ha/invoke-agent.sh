@@ -283,8 +283,23 @@ for line in raw.splitlines():
         # for the requested JSON when the response is empty.
         recognized_envelope = True
         result = event.get("response", "")
-    elif isinstance(event, str):
+    elif isinstance(event, str) and event.lstrip()[:1] in ("{", "["):
         # agy may JSON-encode its schema-shaped final response as a string.
+        # ⚠️ 中身が JSON のときだけ拾う。素の文字列まで拾うと、**整形された JSON の
+        # 配列要素の行**が単独で有効な JSON 文字列であるために、直前に読んだオブジェクト
+        # 全体を上書きしてしまう。
+        #
+        #   {                                ← この行でオブジェクトを得るが
+        #     "topic": "...",
+        #     "scene_people": [
+        #       "yuno"                       ← この行が文字列として拾われ、上書きされる
+        #     ]
+        #   }
+        #
+        # 配列を持つのは observe のスキーマだけなので、observe だけが 8 日間で 44 回、
+        # 「配列の最後の要素」を最終応答として記録され、パース失敗として捨てられていた
+        # （2026-08-14 に再現。emotion 値・真偽値・数値が断片に一度も現れないこと、
+        # 改行を含む断片が 0 件であることが、この機構と一致する）。
         result = event
 if not result and not recognized_envelope:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -868,27 +883,24 @@ run_agy() {
   local bin="${EHA_ANTIGRAVITY_BIN:-${AGY_BIN:-agy}}"
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
   local structured_args=()
-  # Antigravity 1.1.8 added native structured output.
+  # Antigravity 1.1.8 added native structured output. Use it for the F-51
+  # daybook path whose exact schema is live-verified.
   #
-  # ⚠️ ここには長らく「loop schemas は nullable type union を使っており 1.1.9 が
-  # それを拒否するので daybook 以外は prompt 埋め込みのまま」と書いてあったが、
-  # **誤診だった**。1.1.9 / 1.1.12 の実測（2026-08-13）では union は通り、
-  # 拒否されるのは `enum` の要素に `null` が入っている場合だけ。該当は
-  # `_EMOTION`（observe/explore/reflect/web/social の5モード）1箇所。
-  # その誤診のあいだ、ソラの observe は 1 日 4〜6 回 JSON にならず捨てられていた。
+  # ⚠️ **loop の各モードへは広げられない。** MCP サーバーを繋いだ状態では
+  # `--output-format json` が `structured_output` を返さないことを実測した
+  # （2026-08-14。MCP 無し=返る / MCP 有りでツール成功=返らない / 同・ツール失敗=返らない）。
+  # loop は MCP を繋ぐ（`loop.py` の `--mcp-servers`）ので、native 化すると
+  # 応答が空になり invoke 失敗になる。daybook が成立しているのは MCP を繋がないため。
   #
-  # agy_schema.py が enum 内 null を anyOf へ書き換える（受け入れる値は変えない）。
-  # 変換は **agy へ渡す直前だけ**。正本スキーマは触らないので claude(native) と
-  # codex(prompt 埋め込み) の経路は変わらない。
-  if [[ -n "$json_schema" ]] && [[ "$agent_site" == "daybook" || "$agent_site" == "observe" ]]; then
+  # 旧コメントは「loop schemas の nullable type union を 1.1.9 が拒否する」と説明していたが、
+  # これは誤り（1.1.9 / 1.1.12 とも union は通る。拒否されるのは enum 内 null だけ）。
+  # 結論（loop は prompt 埋め込みのまま）は正しく、理由が違っていた。
+  if [[ "$agent_site" == "daybook" && -n "$json_schema" ]]; then
     local agy_help
     agy_help="$("$bin" --help 2>&1 || true)"
     if grep -q -- '--output-format' <<< "$agy_help" \
         && grep -q -- '--json-schema' <<< "$agy_help"; then
-      local agy_json_schema
-      agy_json_schema="$(printf '%s' "$json_schema" \
-        | python3 "$(dirname "${BASH_SOURCE[0]}")/agy_schema.py")"
-      structured_args=(--output-format json --json-schema "$agy_json_schema")
+      structured_args=(--output-format json --json-schema "$json_schema")
     fi
   fi
   ensure_agy_native_safety_policy "$agy_home"
