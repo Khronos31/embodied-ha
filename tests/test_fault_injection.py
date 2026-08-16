@@ -35,7 +35,7 @@ class TurnTakingStateFaultInjectionTests(unittest.TestCase):
     def test_exception_from_sociality_state_propagates(self):
         with patch.object(chat_context.ss, "get_turn_taking_state", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
-                chat_context.build_turn_taking_state("/some/log_dir", "ゆの")
+                chat_context.build_turn_taking_state("/some/log_dir", "ユーザー")
 
 
 class RecentAuditoryInputFaultInjectionTests(unittest.TestCase):

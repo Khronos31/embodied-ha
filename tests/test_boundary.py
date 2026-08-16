@@ -175,13 +175,13 @@ class BoundaryTests(unittest.TestCase):
 
     def _write_presence_prefs(self, tmpdir: str, include_sensor_label: bool = True) -> Path:
         prefs = Path(tmpdir) / "preferences.json"
-        data = {"presence": {"entity": "input_boolean.junya_home"}}
+        data = {"presence": {"entity": "input_boolean.resident_home"}}
         if include_sensor_label:
             data["sensors"] = {
                 "groups": [
                     {
                         "items": [
-                            {"label": "潤哉", "entity": "input_boolean.junya_home"},
+                            {"label": "住人", "entity": "input_boolean.resident_home"},
                         ],
                     },
                 ],
@@ -205,7 +205,7 @@ class BoundaryTests(unittest.TestCase):
                 "--sensors-text",
                 sensors_text,
                 "--person",
-                "ゆの",
+                "ユーザー",
                 "--body-state-json",
                 "{}",
                 "--sociality-log-dir",
@@ -230,10 +230,10 @@ class BoundaryTests(unittest.TestCase):
     def test_presence_entity_label_allows_action_when_sensor_label_is_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = self._write_presence_prefs(tmpdir)
-            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+            with patch.dict(os.environ, {"RESIDENT": "ユーザー", "SENSORS_DATA": ""}):
                 result = self._action_decision_from_prefs(
                     prefs,
-                    "## 在宅状態\n潤哉: on\nまどか: off",
+                    "## 在宅状態\n住人: on\n同居人: off",
                     tmpdir,
                 )
             self.assertTrue(result["allowed"])
@@ -242,10 +242,10 @@ class BoundaryTests(unittest.TestCase):
     def test_presence_entity_label_blocks_action_when_sensor_label_is_away(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = self._write_presence_prefs(tmpdir)
-            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+            with patch.dict(os.environ, {"RESIDENT": "ユーザー", "SENSORS_DATA": ""}):
                 result = self._action_decision_from_prefs(
                     prefs,
-                    "## 在宅状態\n潤哉: off\nまどか: off",
+                    "## 在宅状態\n住人: off\n同居人: off",
                     tmpdir,
                 )
             self.assertFalse(result["allowed"])
@@ -254,7 +254,7 @@ class BoundaryTests(unittest.TestCase):
     def test_presence_entity_pointer_without_live_state_is_not_home(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = self._write_presence_prefs(tmpdir, include_sensor_label=False)
-            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+            with patch.dict(os.environ, {"RESIDENT": "ユーザー", "SENSORS_DATA": ""}):
                 result = self._action_decision_from_prefs(prefs, "", tmpdir)
             self.assertFalse(result["allowed"])
             self.assertEqual(result["reason"], "不在のため家電操作を抑制")
@@ -376,7 +376,7 @@ class BoundaryTests(unittest.TestCase):
                         "--prefs-file",
                         str(prefs),
                         "--person",
-                        "ゆの",
+                        "ユーザー",
                         "--body-state-json",
                         '{"energy": 0.5}',
                         "--sociality-log-dir",
@@ -389,7 +389,7 @@ class BoundaryTests(unittest.TestCase):
     def test_action_denial_evidence_uses_presence_value_not_body_state_marker(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             prefs = self._write_presence_prefs(tmpdir)
-            with patch.dict(os.environ, {"RESIDENT": "ゆの", "SENSORS_DATA": ""}):
+            with patch.dict(os.environ, {"RESIDENT": "ユーザー", "SENSORS_DATA": ""}):
                 with contextlib.redirect_stdout(io.StringIO()):
                     rc = boundary.main(
                         [
@@ -405,9 +405,9 @@ class BoundaryTests(unittest.TestCase):
                             "--prefs-file",
                             str(prefs),
                             "--sensors-text",
-                            "## 在宅状態\n潤哉: off\nまどか: off",
+                            "## 在宅状態\n住人: off\n同居人: off",
                             "--person",
-                            "ゆの",
+                            "ユーザー",
                             "--body-state-json",
                             '{"energy": 0.5}',
                             "--sociality-log-dir",
@@ -418,7 +418,7 @@ class BoundaryTests(unittest.TestCase):
             rows = (Path(tmpdir) / "counterfactuals.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(rows), 1)
             row = json.loads(rows[0])
-            self.assertIn("presence=潤哉:off", row["evidence"])
+            self.assertIn("presence=住人:off", row["evidence"])
             self.assertNotIn("body_state=present", row["evidence"])
 
 

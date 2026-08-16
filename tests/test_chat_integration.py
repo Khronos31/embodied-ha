@@ -45,7 +45,7 @@ def _make_isolated_env(tmp, **overrides):
     env = {
         "CHAT_MESSAGE": "こんにちは",
         "CHAT_SOURCE": "chat",
-        "RESIDENT": "ゆの",
+        "RESIDENT": "ユーザー",
         "EHA_LOG_DIR": str(log_dir),
         "EHA_PREFS_FILE": str(prefs_file),
         "EHA_CHARACTER_FILE": str(character_file),

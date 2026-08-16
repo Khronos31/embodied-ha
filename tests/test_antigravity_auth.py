@@ -23,7 +23,7 @@ class AntigravityAuthTests(unittest.TestCase):
         with mock.patch.object(server.os, "write") as write:
             server._antigravity_login_handle_line("1. Google OAuth", state, 11, q)
             # raw モード TUI では Enter は CR(\r)。LF(\n)だと選択が登録されず agy がハングする
-            # (2026-07-23 実機確認・ゆの指摘)。option 1 はハイライト済なので CR で確定。
+            # (2026-07-23 実機確認・ユーザー指摘)。option 1 はハイライト済なので CR で確定。
             write.assert_called_once_with(11, b"\r")
             self.assertTrue(state["sent_method"])
 

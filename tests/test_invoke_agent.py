@@ -2100,5 +2100,5 @@ class ExtractResultJsonTests(unittest.TestCase):
         self.assertEqual(json.loads(out), self.OBSERVE)
 
     def test_prose_answer_still_passes_through(self):
-        prose = "ゆのさん、お疲れさま！\n報告するね。"
+        prose = "ユーザーさん、お疲れさま！\n報告するね。"
         self.assertIn("お疲れさま", self._extract(prose))
