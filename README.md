@@ -237,6 +237,18 @@ Each loop launches its own Claude CLI session every time, and continuity is main
 
 ---
 
+## Privacy and third-party services
+
+Embodied HA runs the selected third-party agent CLI unattended and on an ongoing basis. Depending on your
+configuration and tool use, a turn may contain sensor values, household speech transcripts, camera images,
+memories, and device state. The CLIs are downloaded directly from their providers and are not bundled in this
+repository.
+
+Before setup, read the Japanese source-of-truth pages on [privacy and data flows](docs/privacy.md) and
+[local/provider retention](docs/data_and_retention.md).
+
+---
+
 ## Data persistence
 
 All logs and settings are saved under `/config/embodied-ha/` and survive add-on updates and restarts.

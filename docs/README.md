@@ -11,6 +11,8 @@
 | [preferences_schema.md](preferences_schema.md) | `preferences.json` の現行スキーマと `chat.py` の自動更新オペレーション |
 | [cyber_body_model.md](cyber_body_model.md) | `body-mcp.py` の位置・投射モデル、`projection_targets`、`external://` の解決 |
 | [how-to/README.md](how-to/README.md) | Core・first-party companion・第三者Recipeの境界と、周辺連携How-Toの公開状況 |
+| [privacy.md](privacy.md) | 第三者CLI、家庭内データの送信条件、カメラ・音声、同居人への配慮 |
+| [data_and_retention.md](data_and_retention.md) | ローカル保存、外部提供元の学習利用・保持、層ごとの削除 |
 
 ## 補助ファイル
 
