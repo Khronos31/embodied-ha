@@ -100,9 +100,9 @@ def render_discovery(prefix: str) -> list[tuple[str, dict]]:
     ]
 
 
-# 既定(EHA_MQTT_PREFIX未設定=本番あかね)で run.sh が生成する MQTT discovery の生バイト列の
+# 既定(EHA_MQTT_PREFIX未設定=本番テストキャラ)で run.sh が生成する MQTT discovery の生バイト列の
 # golden(SHA-256)。トピック/unique_id だけでなく name/icon/entity_category/max/payload_press・
-# JSON整形・エスケープまで含む完全一致ゲート。この値が変わる=本番あかねのエンティティ定義が
+# JSON整形・エスケープまで含む完全一致ゲート。この値が変わる=本番テストキャラのエンティティ定義が
 # 変わる可能性=デプロイで表示破壊。リファクタで変えてはならない(sol review 2026-07-20指摘の
 # 集合比較の弱さを補強)。
 DISCOVERY_GOLDEN_SHA256 = "d59214f61204af3168cdc18dbd9704188280745cb6b7a646c7e8c7d6b716456f"

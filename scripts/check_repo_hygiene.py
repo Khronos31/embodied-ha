@@ -11,7 +11,9 @@
 2. **秘密らしき文字列** — 各社APIキー、HAの長期アクセストークン、実体のある秘密鍵。
    テスト用の明らかなダミー（本体が短いPEM等）は落とさない。
 3. **実名** — 一覧ファイルがあるときだけ。置き場は `tests/persona_names.local`、
-   または環境変数 `EHA_PERSONA_NAMES_FILE`（worktreeごとに置き直さずに済む）。**名前の一覧は公開
+   または環境変数 `EHA_PERSONA_NAMES_FILE`（worktreeごとに置き直さずに済む）。
+   一覧の中で `!` から始まる行は除外パスのglob（LICENSEやREADMEのように、
+   リポジトリの持ち主を名乗るのが当然のファイル向け）。**名前の一覧は公開
    リポジトリに置けない**ので、この段はローカル実行でのみ有効になる（CIでは
    スキップされる）。これは既存の設計を踏襲したもので、`.gitignore` が
    `tests/persona_names.local` と `tests/test_no_hardcoded_persona_names.py` を
@@ -27,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 
 FORBIDDEN_DIRS = ("personal_data/", "song_library/", ".storage/", "embodied_ha/log/")
@@ -120,17 +123,22 @@ def persona_violations(repo: str, paths: list[str]) -> tuple[list[str], bool]:
     except OSError:
         return [], False
 
-    names = [
-        line.strip()
-        for line in raw.splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+    # `!glob` の行は除外パス。公開リポジトリの持ち主を名乗るのが当然のファイル
+    # （LICENSE・README）や、その語が出ないことを検査しているテストのため。
+    names, exempt = [], []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        (exempt if line.startswith("!") else names).append(line.lstrip("!"))
     if not names:
         return [], False
 
     problems = []
     for path in paths:
         if path == PERSONA_NAMES_FILE:
+            continue
+        if any(fnmatch(path, pattern) for pattern in exempt):
             continue
         text = _read_text(repo, path)
         if text is None:

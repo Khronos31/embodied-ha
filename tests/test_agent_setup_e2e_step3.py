@@ -6,7 +6,7 @@
 daemon.harness_ready() → notify_setup_waiting() → boot_runtime_when_ready() を駆動して、
 「セットアップ待ち → install → runtime 起動」「logout → セットアップ待ち復帰」までを一連で検証する。
 外部・重量境界(HA API の urlopen、start_runtime_threads、自己再起動)だけを mock する。すべて
-TemporaryDirectory に隔離し、本番の /data・あかねの記憶には一切触れない。
+TemporaryDirectory に隔離し、本番の /data・テストキャラの記憶には一切触れない。
 
 実 boot 順の正本は daemon.py 末尾(多重起動ガード以降): `if harness_ready(): start_runtime_threads()
 else: notify_setup_waiting(); Thread(boot_runtime_when_ready)`。既存 claude 認証がある移行ケースでは
