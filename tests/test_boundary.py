@@ -50,7 +50,10 @@ class BoundaryTests(unittest.TestCase):
                     self.assertFalse(ss._turn_taking_blocks(turn, hour=12, focus_match=False))
 
     def test_transient_awaiting_reply_accepts_naive_local_timestamp(self):
-        tz = dt.timezone(dt.timedelta(hours=9))
+        # naiveなタイムスタンプは「実行環境のローカル時刻」として読まれる
+        # （state_utils.parse_ts の契約）。offsetを直書きするとJSTでしか通らないので、
+        # 実装が使うのと同じローカルtzで基準時刻を組む。
+        tz = dt.datetime.now().astimezone().tzinfo
         now = dt.datetime(2026, 7, 25, 12, 0, tzinfo=tz)
         turn = {
             "state": "awaiting_reply",

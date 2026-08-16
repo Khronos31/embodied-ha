@@ -14,12 +14,6 @@ jobs:
     # ここで打ち切って気づけるようにする。
     timeout-minutes: 20
 
-    env:
-      # アドオンはHAのタイムゾーン設定で動く。ランナー既定のUTCのままだと、
-      # naiveなタイムスタンプをローカル時刻として解釈する経路のテストが落ちる。
-      # ⚠️ 裏返すと、その経路のテストは現状JSTでしか通らない（要判断・ゆのへ報告済み）。
-      TZ: Asia/Tokyo
-
     steps:
       - uses: actions/checkout@v4
 
