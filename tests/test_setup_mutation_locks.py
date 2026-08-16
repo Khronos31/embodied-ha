@@ -34,6 +34,17 @@ class SetupMutationLockTests(unittest.TestCase):
             clear=False,
         )
         self.setup_guard_env.start()
+
+        # uninstall エンドポイントは本物の agy_update_freeze.remove_hosts_redirect() を
+        # 呼ぶ（本番では正しい挙動）。antigravity_setup は差し替えてあるのに凍結モジュールは
+        # 素通しなので、**このテストを走らせるだけで実機 /etc/hosts の凍結が外れる**
+        # （2026-08-13 実測）。このテストが見ているのはロックの排他と 409/200 の応答だけで、
+        # 凍結の有無は関与しない。変異試験でも確認済み: busy メッセージを変える変異は、
+        # この差し替えの前でも後でも同じように検出される。
+        freeze = mock.patch.object(server, "agy_update_freeze", mock.MagicMock())
+        freeze.start()
+        self.addCleanup(freeze.stop)
+
         server.setup_terms.accept(server.setup_terms.CONSENT_VERSION)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -551,6 +552,12 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn("agy structured output failed: schema rejected", result.stderr)
 
     def test_agy_non_daybook_schema_keeps_prompt_fallback(self):
+        """loop の各モードは prompt 埋め込みのまま（native へ広げない）。
+
+        2026-08-14 実測: MCP サーバーを繋いだ状態では agy の `--output-format json` が
+        `structured_output` を返さない。loop は MCP を繋ぐので、native 化すると応答が
+        空になり invoke 失敗になる。daybook が成立しているのは MCP を繋がないため。
+        """
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             record = tmpdir / "agy.json"
@@ -1987,3 +1994,111 @@ class InvokeAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeSelfUpdateSuppressionTests(unittest.TestCase):
+    # InvokeAgentTests を継承すると既存50件まで再実行されるので、必要な起動ヘルパだけ持つ。
+    run_wrapper = InvokeAgentTests.run_wrapper
+
+    def test_claude_runs_with_self_updates_disabled(self):
+        """管理下の DIY バイナリが自分で入れ替わらないこと。
+
+        `claude_setup.runtime_env()` は DISABLE_UPDATES=1 を宣言し、呼び出し側が 0 を
+        渡しても 1 に上書きするテストまであるが、この実行経路からは呼ばれておらず
+        環境をそのまま継承していた（2026-08-13 に判明）。宣言だけあって効いていない
+        状態を、実際の起動側で固定する。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            record = tmpdir / "env.json"
+            fake = tmpdir / "claude"
+            write_executable(
+                fake,
+                f"""
+                #!/usr/bin/env python3
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                sys.stdin.read()
+                Path({record.as_posix()!r}).write_text(
+                    json.dumps({{"disable_updates": os.environ.get("DISABLE_UPDATES")}}),
+                    encoding="utf-8",
+                )
+                print(json.dumps({{"type": "result", "result": "{{}}"}}))
+                """,
+            )
+            result = self.run_wrapper(
+                ["--model", "lite", "prompt"],
+                {"EHA_AGENT_HARNESS": "claude", "EHA_CLAUDE_BIN": fake.as_posix()},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(record.read_text(encoding="utf-8"))["disable_updates"], "1"
+            )
+
+
+class ExtractResultJsonTests(unittest.TestCase):
+    """`extract_result_json` が「整形された JSON の配列要素」を最終応答と取り違えないこと。
+
+    2026-08-14 に特定した実害: agy が JSON を整形して出すと、`scene_people` などの
+    配列要素の行（例 `  "yuno"`）が単独で有効な JSON 文字列であるため、直前に読んだ
+    オブジェクト全体を上書きしていた。配列を持つのは observe のスキーマだけなので、
+    **observe だけ**が 8 日間で 44 回パース失敗として捨てられた（他モードは 0 件）。
+
+    実データとの整合: 断片に emotion 値・真偽値・数値・改行入りが 1 件も無い。
+    いずれも「配列要素として現れ得ない」ものであり、この機構と一致する。
+    """
+
+    SCRIPT = ROOT / "embodied_ha" / "invoke-agent.sh"
+
+    @classmethod
+    def setUpClass(cls):
+        import re as _re
+
+        source = cls.SCRIPT.read_text(encoding="utf-8")
+        match = _re.search(r"extract_result_json\(\) \{\n  python3 -c '\n(.*?)\n'\n\}", source, _re.DOTALL)
+        assert match, "extract_result_json を取り出せない"
+        cls.extractor = match.group(1)
+
+    def _extract(self, payload):
+        return subprocess.run(
+            [sys.executable, "-c", self.extractor],
+            input=payload, capture_output=True, text=True, check=False,
+        ).stdout
+
+    OBSERVE = {
+        "topic": "スタディの室温上昇", "speak": None, "private": "暑いな",
+        "emotion": "concerned", "feature_presented": None, "proposal": None, "action": None,
+        "scene_objects": ["エアコン"], "scene_people": ["yuno"],
+        "scene_changes": ["pixel_9a_charging"],
+    }
+
+    def test_pretty_printed_object_with_arrays_survives(self):
+        out = self._extract(json.dumps(self.OBSERVE, ensure_ascii=False, indent=2))
+        self.assertEqual(json.loads(out), self.OBSERVE)
+
+    def test_compact_object_survives(self):
+        out = self._extract(json.dumps(self.OBSERVE, ensure_ascii=False))
+        self.assertEqual(json.loads(out), self.OBSERVE)
+
+    def test_double_encoded_object_is_still_accepted(self):
+        # この分岐が元々存在する理由。壊していないことを固定する。
+        inner = json.dumps(self.OBSERVE, ensure_ascii=False)
+        out = self._extract(json.dumps(inner, ensure_ascii=False))
+        self.assertEqual(json.loads(out), self.OBSERVE)
+
+    def test_claude_stream_json_result_is_unaffected(self):
+        out = self._extract(json.dumps({"type": "result", "structured_output": {"ok": True}}))
+        self.assertEqual(json.loads(out), {"ok": True})
+
+    def test_agy_envelope_is_unaffected(self):
+        out = self._extract(json.dumps(
+            {"conversation_id": "x", "status": "SUCCESS", "response": "",
+             "structured_output": self.OBSERVE}))
+        self.assertEqual(json.loads(out), self.OBSERVE)
+
+    def test_prose_answer_still_passes_through(self):
+        prose = "ゆのさん、お疲れさま！\n報告するね。"
+        self.assertIn("お疲れさま", self._extract(prose))

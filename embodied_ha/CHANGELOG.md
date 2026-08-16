@@ -8,6 +8,34 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.22] - 2026-08-14
+
+### Fixed / 修正
+
+- 観察モードの結果が、記録されずに捨てられることがあった問題を直しました。エージェントが
+  応答を整形して返したとき、応答の読み取り側が「一覧の最後の項目」を応答全体と取り違えて
+  いました。一覧を持つのは観察モードだけなので、この症状も観察モードにだけ出ていました。
+  Fixed observation results being discarded. When the agent returned its answer pretty-printed, the
+  reader mistook the last item of a list for the whole answer. Observation is the only mode whose
+  answer contains lists, so it was the only mode affected.
+
+### Added / 追加
+
+- エージェントCLIのバージョンを記録し、Web UI から更新・ロールバックできるようにしました
+  （設定 → 実験中機能）。更新すると旧バージョンを保管し、問題が出たら戻せます。差し替えは
+  原子的で、実行中の会話は古い方で最後まで走ります。検証に失敗した場合は自動で元へ戻ります。
+  Added a record of which CLI build each harness is running, with update and rollback from the Web UI
+  (Settings → Experimental). Updating keeps the previous build so you can go back. The swap is atomic:
+  a turn already running finishes on the old build, and a failed verification restores it automatically.
+- ファイル読み取り用の `files` MCP に、画像を画像として返すツールを追加しました。
+  Added a tool to the `files` MCP that returns images as images.
+
+### Notes / 備考
+
+- 保管する旧バージョンは直近1世代です。`/data` は Home Assistant のバックアップに含まれるため、
+  際限なく積み上げません。
+  One previous build is retained. `/data` is included in Home Assistant backups, so retention is bounded.
+
 ## [2.1.21] - 2026-08-12
 
 ### Added / 追加

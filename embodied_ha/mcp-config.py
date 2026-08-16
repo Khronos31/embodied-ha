@@ -168,7 +168,11 @@ SERVER_SPECS = {
     # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を
     # シェルなしで最小権限提供する(2026-07-22)。claude は policy deny 付き native Read を使うので通常は不要だが
     # ハーネス非依存で持たせておく。
-    "files": ServerSpec(lambda: _server("files-mcp.py", base_env=MINIMAL_ENV), ("read_file",)),  # ファイル読み取り(read-anything+secure-read・最小env)
+    # ファイル読み取り(read-anything+secure-read・最小env)。テキストと画像を別ツールにしてある
+    # (返り値の型が違い、画像は切り詰められないため)。
+    "files": ServerSpec(
+        lambda: _server("files-mcp.py", base_env=MINIMAL_ENV), ("read_file", "view_image")
+    ),
     # http_post は preferences.json の http_post_enabled(Web UI「高度な設定」タブのトグル)が
     # true のときだけ、http-mcp.py側のゲート用env(EHA_HTTP_ALLOW_POST)を注入する。
     # Claude Codeの--allowedToolsは実行時にMCPツール単位で拒否できるが、tools/listの可視性は

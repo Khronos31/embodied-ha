@@ -283,8 +283,23 @@ for line in raw.splitlines():
         # for the requested JSON when the response is empty.
         recognized_envelope = True
         result = event.get("response", "")
-    elif isinstance(event, str):
+    elif isinstance(event, str) and event.lstrip()[:1] in ("{", "["):
         # agy may JSON-encode its schema-shaped final response as a string.
+        # ⚠️ 中身が JSON のときだけ拾う。素の文字列まで拾うと、**整形された JSON の
+        # 配列要素の行**が単独で有効な JSON 文字列であるために、直前に読んだオブジェクト
+        # 全体を上書きしてしまう。
+        #
+        #   {                                ← この行でオブジェクトを得るが
+        #     "topic": "...",
+        #     "scene_people": [
+        #       "yuno"                       ← この行が文字列として拾われ、上書きされる
+        #     ]
+        #   }
+        #
+        # 配列を持つのは observe のスキーマだけなので、observe だけが 8 日間で 44 回、
+        # 「配列の最後の要素」を最終応答として記録され、パース失敗として捨てられていた
+        # （2026-08-14 に再現。emotion 値・真偽値・数値が断片に一度も現れないこと、
+        # 改行を含む断片が 0 件であることが、この機構と一致する）。
         result = event
 if not result and not recognized_envelope:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -738,7 +753,12 @@ run_claude() {
   if [[ -n "$mcp_config_arg" ]]; then
     cmd+=("--mcp-config" "$mcp_config_arg")
   fi
-  stdout="$(claude_message | (cd "$cwd" && "${cmd[@]}"))"
+  # DISABLE_UPDATES=1: 管理下の DIY バイナリが自分で入れ替わらないようにする。
+  # claude_setup.runtime_env() が同じ保証を宣言し(呼び出し側が 0 を渡しても 1 に
+  # 上書きする)テストもあるが、この実行経路からは呼ばれておらず環境をそのまま
+  # 継承していた——宣言だけあって効いていない状態だった。ここで実際に適用する。
+  # これが無いと、ピン記録は「入れたはずの版」を指したまま実物だけが進みうる。
+  stdout="$(claude_message | (cd "$cwd" && DISABLE_UPDATES=1 "${cmd[@]}"))"
   if [[ -n "$transcript_file" ]]; then
     if ! printf '%s\n' "$stdout" >"$transcript_file"; then
       rm -f -- "$transcript_file"
@@ -864,9 +884,17 @@ run_agy() {
   local agy_home="${EHA_ANTIGRAVITY_HOME:-${HOME:-/data/}}"
   local structured_args=()
   # Antigravity 1.1.8 added native structured output. Use it for the F-51
-  # daybook path whose exact schema is live-verified. Current loop schemas use
-  # nullable type unions that Antigravity 1.1.9 rejects before model execution,
-  # so other sites deliberately retain the prompt-schema fallback.
+  # daybook path whose exact schema is live-verified.
+  #
+  # ⚠️ **loop の各モードへは広げられない。** MCP サーバーを繋いだ状態では
+  # `--output-format json` が `structured_output` を返さないことを実測した
+  # （2026-08-14。MCP 無し=返る / MCP 有りでツール成功=返らない / 同・ツール失敗=返らない）。
+  # loop は MCP を繋ぐ（`loop.py` の `--mcp-servers`）ので、native 化すると
+  # 応答が空になり invoke 失敗になる。daybook が成立しているのは MCP を繋がないため。
+  #
+  # 旧コメントは「loop schemas の nullable type union を 1.1.9 が拒否する」と説明していたが、
+  # これは誤り（1.1.9 / 1.1.12 とも union は通る。拒否されるのは enum 内 null だけ）。
+  # 結論（loop は prompt 埋め込みのまま）は正しく、理由が違っていた。
   if [[ "$agent_site" == "daybook" && -n "$json_schema" ]]; then
     local agy_help
     agy_help="$("$bin" --help 2>&1 || true)"

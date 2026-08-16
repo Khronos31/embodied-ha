@@ -39,6 +39,17 @@ class SetupGuardTests(unittest.TestCase):
         ("POST", "/api/setup/antigravity/uninstall"),
         ("POST", "/api/setup/antigravity/clear-auth"),
         ("POST", "/api/setup/antigravity/logout"),
+        # Binary swaps, plus the status read whose check=1 form reaches the
+        # vendor (for agy that also lifts the update freeze).
+        ("GET", "/api/setup/antigravity/update"),
+        ("GET", "/api/setup/antigravity/rollback"),
+        ("GET", "/api/setup/antigravity/update-status"),
+        ("GET", "/api/setup/claude/update"),
+        ("GET", "/api/setup/claude/rollback"),
+        ("GET", "/api/setup/claude/update-status"),
+        ("GET", "/api/setup/codex/update"),
+        ("GET", "/api/setup/codex/rollback"),
+        ("GET", "/api/setup/codex/update-status"),
         ("POST", "/api/setup/codex/install"),
         ("POST", "/api/setup/codex/login"),
         ("POST", "/api/setup/codex/uninstall"),
@@ -99,6 +110,47 @@ class SetupGuardTests(unittest.TestCase):
                 f"frontend install method for {path} ({m.group(1)}) != backend verb ({method})",
             )
 
+    def test_frontend_binary_update_calls_use_the_backend_verb(self):
+        """更新/ロールバックの SSE 呼び出しが GET で宣言されていること。
+
+        install で一度起きた失敗（フロントが POST と宣言し、backend の GET dispatch に
+        届かず 404 へフォールスルーして汎用エラーだけが出る）を、あとから増えた
+        バイナリ差し替え経路でも防ぐ。app.js は経路ごとに harnessStreamSSE を直接
+        呼ぶ形なので、宣言テーブルではなく呼び出しそのものを読む。
+        """
+        import re
+
+        app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
+        # パスはハーネス名を差し込むテンプレートリテラルなので、末尾の操作名で照合する。
+        # backend は3ハーネスとも同じ verb で dispatch するため、期待値は1つに定まる。
+        expected = {method for method, path in self.MUTATION_ROUTES if path.endswith("/update")}
+        self.assertEqual(expected, {"GET"}, "backend の update verb が分岐している")
+        for operation in ("update", "rollback"):
+            calls = re.findall(
+                r"harnessStreamSSE\(\s*'(\w+)'\s*,\s*[`'][^`']*/" + operation + r"[`$]",
+                app_js,
+            )
+            self.assertTrue(calls, f"app.js に /{operation} を呼ぶ harnessStreamSSE が無い")
+            for method in calls:
+                self.assertEqual(
+                    method, "GET", f"frontend method for /{operation} ({method}) != backend verb GET"
+                )
+
+    def test_frontend_checks_the_vendor_when_the_screen_opens(self):
+        """バージョン画面を開いたら最新版を確認しにいくこと。
+
+        当初は逆の契約だった——`?check=1` が agy では更新の凍結を一時解除するため、
+        押されるまで問い合わせない設計にしていた。ゆの指摘で覆した（2026-08-13）:
+        「バージョン管理の画面を開いておいて『まだ確認していません』と出るのは、
+        こちらの都合を利用者に説明しているだけ」。**決定が変わったのでテストの意図ごと
+        差し替えている**（実装に合わせて期待値を緩めたのではない）。
+
+        問い合わせ口は1箇所に保つ。増えると、どこから外へ出るのかを追えなくなる。
+        """
+        app_js = (ROOT / "embodied_ha" / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("checkVendor = true", app_js)
+        self.assertEqual(app_js.count("update-status?check=1"), 1)
+
     def test_only_ingress_source_is_allowed_unless_overridden_or_disabled(self):
         handler = object.__new__(server.Handler)
         handler.send_json = mock.Mock()
@@ -150,11 +202,28 @@ class AntigravityInstallEnvironmentTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.harness_flag_dir)
         self.harness_flag_env = mock.patch.dict(
             os.environ,
-            {"EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness")},
+            {
+                "EHA_HARNESS_FLAG_FILE": os.path.join(self.harness_flag_dir, "selected_harness"),
+                # 導入版の記録先。既定は /data/harness_pin.json なので、隔離しないと
+                # テストが実機の記録へ書きうる。
+                "EHA_HARNESS_PIN_FILE": os.path.join(self.harness_flag_dir, "harness_pin.json"),
+            },
             clear=False,
         )
         self.harness_flag_env.start()
         self.addCleanup(self.harness_flag_env.stop)
+
+        # install 経路は本物の agy_update_freeze を呼ぶ。テスト環境では agy が未導入で
+        # 再凍結の条件を満たさないため、**このテストを走らせるだけで実機 /etc/hosts の
+        # 凍結が黙って外れる**（2026-08-13 に実測。3回踏んだ）。
+        #
+        # このテストの期待値は「install スクリプトの子プロセス環境に秘密が入らないこと」
+        # だけで、凍結の有無はそこに一切関与しない（env は antigravity_setup.subprocess_env()
+        # が組み立てる）。変異試験でも確認済み: 子プロセス環境に SUPERVISOR_TOKEN を
+        # 混ぜる変異は、この差し替えの前でも後でも同じように検出される。
+        freeze = mock.patch.object(server, "agy_update_freeze", mock.MagicMock())
+        freeze.start()
+        self.addCleanup(freeze.stop)
 
     def test_install_script_child_env_excludes_secrets(self):
         class FakeProcess:

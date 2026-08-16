@@ -30,6 +30,11 @@ FILES_MCP_HARNESSES = frozenset({"codex", "agy"})
 # files MCP の読み取りツール。MCP 名前空間なので claude の native とは別物。
 FILES_MCP_READ_TOOL = "mcp__files__read_file"
 
+# 画像はテキストと別ツールにしてある（返り値の型が違う／上限の性質が違う）。
+# agy は native `view_file` を塞いだ時点で /config・/data 配下の画像を読む手段を
+# 失っていたので、読み取り能力を配るときは画像もセットで配る。
+FILES_MCP_IMAGE_TOOL = "mcp__files__view_image"
+
 # claude の組み込み Read を引き出すための intent 名。agy では files MCP に写像する。
 READ_BUILTIN = "Read"
 
@@ -52,6 +57,8 @@ def grant_file_read(allowed_tools: str, mcp_servers, harness: str) -> tuple[str,
     if harness in FILES_MCP_HARNESSES:
         if not _has_item(allowed, FILES_MCP_READ_TOOL):
             allowed = f"{allowed},{FILES_MCP_READ_TOOL}"
+        if not _has_item(allowed, FILES_MCP_IMAGE_TOOL):
+            allowed = f"{allowed},{FILES_MCP_IMAGE_TOOL}"
         if "files" not in servers:
             # 既定の Codex モデルは大量の tool schema を選別するため、末尾へ足すと
             # read_file だけがモデルから見えなくなる。native Read の代替となる基本能力なので

@@ -434,9 +434,26 @@ class ServerHarnessPersistenceTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         flag = os.path.join(self._tmp.name, "selected_harness")
-        patcher = mock.patch.dict(os.environ, {"EHA_HARNESS_FLAG_FILE": flag}, clear=False)
+        patcher = mock.patch.dict(
+            os.environ,
+            {
+                "EHA_HARNESS_FLAG_FILE": flag,
+                # 導入版の記録先。既定は /data/harness_pin.json なので隔離する。
+                "EHA_HARNESS_PIN_FILE": os.path.join(self._tmp.name, "harness_pin.json"),
+            },
+            clear=False,
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # install 経路は本物の agy_update_freeze を呼ぶ。antigravity_setup は差し替えて
+        # あるのに凍結モジュールは素通しで、しかも is_installed=False のケースでは
+        # 再凍結の条件を満たさないため、**このテストを走らせるだけで実機 /etc/hosts の
+        # 凍結が外れる**（2026-08-13 実測）。このテストが見ているのは選択フラグの確定/
+        # 非確定だけで、凍結の有無は関与しない。変異試験でも確認済み。
+        freeze = mock.patch.object(server, "agy_update_freeze", mock.MagicMock())
+        freeze.start()
+        self.addCleanup(freeze.stop)
 
     def test_install_handler_commits_selection_and_second_harness_conflicts(self):
         # Step4増分1c(sol H1): 初回 install が選択を確定し、異なるハーネスの後続 install は
