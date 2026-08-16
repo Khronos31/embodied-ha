@@ -8,6 +8,34 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.23] - 2026-08-16
+
+### Fixed / 修正
+
+- 日誌が正常に作られているのに「日誌が2日更新されていません」という警告が毎晩出ていた問題を
+  直しました。日誌は前日ぶんを夜間にまとめる作りで、目印は常に「昨日」を指します。そのため
+  日付が変わった直後は、その夜のまとめが終わるまで一時的に2日ぶん空いて見えていました。
+  この時間帯は警告を出さないようにしました。本当に日誌が止まっているときは今までどおり
+  警告します。
+  Fixed a nightly false alarm that claimed the daybook had not been updated for two days. The
+  daybook summarises the previous day, so its marker always points at yesterday; just after
+  midnight the gap legitimately reads as two days until that night's rollup finishes. The check now
+  stays quiet during that window and still warns when the daybook is genuinely stuck.
+
+- その日の日誌が中身なしで先に作られていると、夜のまとめがそれを「作成済み」とみなして、
+  実際の記録を要約しないまま捨てていた問題を直しました。中身が空の日誌は「無い」ものとして
+  扱い、実際の記録から作り直します。
+  Fixed a case where an empty daybook created earlier in the day made the nightly rollup treat that
+  day as already summarised, discarding the real entries. Empty daybooks are now treated as absent
+  and rebuilt from the actual records.
+
+### Changed / 変更
+
+- 記憶ツールから日誌を作ったときの記録元が `mcp` になりました（従来は夜間のまとめと同じ
+  `loop` で、どちらが作ったのか区別できませんでした）。
+  Daybooks created through the memory tool are now recorded with source `mcp` instead of `loop`, so
+  they can be told apart from the nightly rollup.
+
 ## [2.1.22] - 2026-08-14
 
 ### Fixed / 修正
