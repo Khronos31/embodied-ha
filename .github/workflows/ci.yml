@@ -14,8 +14,27 @@ jobs:
     # ここで打ち切って気づけるようにする。
     timeout-minutes: 20
 
+    env:
+      # アドオンはHAのタイムゾーン設定で動く。ランナー既定のUTCのままだと、
+      # naiveなタイムスタンプをローカル時刻として解釈する経路のテストが落ちる。
+      # ⚠️ 裏返すと、その経路のテストは現状JSTでしか通らない（要判断・ゆのへ報告済み）。
+      TZ: Asia/Tokyo
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install runtime tools that the add-on image has
+        # embodied_ha/Dockerfile が apt で入れているもののうち、テストが実際に使うのは ffmpeg。
+        # 無いと音声ファイルの staging が例外になり、本番では起きない失敗が出る。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Create the add-on data directory
+        # アドオンには必ず /data がある。テストの一部が実パス解決を本物のヘルパーへ任せており、
+        # /data を作りに行く。⚠️ 開発機で走らせるとその機械の /data を触るということでもある
+        # （テスト側の隔離不足として別途起票）。
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /data
 
       - uses: actions/setup-python@v5
         with:
