@@ -1,7 +1,19 @@
 # embodied-ha の ruff 設定。
 # pyflakes(F) によるバグ検出（未定義名・未使用import/変数など）を主目的にする。
 # このプロジェクトが意図的に使っている簡潔な書き方は無効化し、ノイズを抑える。
+
+# ⚠️ 選択するルールを明示する。既定の集合はruffのバージョンで変わり、実際に
+# 0.8.6では15件、0.16.0では848件と別物になった（BLE001/S110/I001等が既定に入る）。
+# 「pyflakes中心」という上の意図をバージョンに依存させないため、ここで固定する。
+lint.select = ["E4", "E7", "E9", "F"]
+
 lint.ignore = [
     "E401",  # 1行に複数import（import json, sys, os）— 全.py/heredocで一貫して使う作法
     "E701",  # コロン後の1行文（if not line: continue）— 全体で常用
+]
+
+[lint.per-file-ignores]
+"tests/*" = [
+    "E402",  # テストは対象モジュールを読むために sys.path.insert してから import する必要がある
+    "E731",  # テストダブルをlambdaで置くのは読みやすさの範囲内
 ]
