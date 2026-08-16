@@ -615,9 +615,11 @@ def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, An
         open_questions=draft["open_questions"],
         raw_entry_count=len(entries),
         source="loop",
-        # 対象日に空スタブが残っている場合（_daybook_is_hollowで「日誌なし」と判定済み）
-        # に、build_daybookの既存ファイル再利用で正規の要約が捨てられないよう上書きする。
-        overwrite=True,
+        # 対象日に空スタブが残っている場合だけ置き換える。無条件のoverwriteにしないのは、
+        # 要約生成の間（数分）にチャット側などの別経路が同じ日の正規の日誌を書きうるため
+        # （_chat_lockと_loop_lockは別ロック）。判定はbuild_daybook側がファイルロックの
+        # 内側で行うので、ここで見た内容が古くなっていても壊さない。
+        overwrite_if=_daybook_is_hollow,
     )
     brief = ms.daybook_brief(daybook)
     if _append_memory_brief(memory_file, brief):

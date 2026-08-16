@@ -14,7 +14,7 @@ import json
 import os
 import re
 import sqlite3
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from state_utils import clamp as _clamp
 from state_utils import clean as _clean
@@ -610,11 +610,17 @@ def build_daybook(
     source: str = "loop",
     raw_entry_count: int | None = None,
     overwrite: bool = False,
+    overwrite_if: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     """Create or reuse a daybook for one date.
 
     The function is idempotent by default: if a daybook already exists for the
     requested date, the stored record is returned as-is.
+
+    ``overwrite_if`` takes the stored record and decides whether it may be
+    replaced.  It is evaluated while holding the file lock, so a caller that
+    spent minutes generating a summary cannot clobber a record written in the
+    meantime by another path.
     """
 
     date = _clean(date)
@@ -649,9 +655,14 @@ def build_daybook(
 
     existing_path = daybook_path(log_dir, date)
     with file_lock(existing_path):
-        if os.path.exists(existing_path) and not overwrite:
+        if os.path.exists(existing_path):
             data = _load_json(existing_path, default_daybook(date))
-            return normalize_daybook(data, fallback_date=date)
+            existing = normalize_daybook(data, fallback_date=date)
+            # overwrite_if はロックの内側で評価する。呼び出し側が事前に見た内容は、
+            # 要約生成（数分かかる）の間に別経路で書き換わりうるため、置き換えてよいかは
+            # 実際に書く直前の中身で判定しないと、他が書いた正規の日誌を壊す。
+            if not overwrite and not (overwrite_if is not None and overwrite_if(existing)):
+                return existing
         _write_json(existing_path, daybook)
     return daybook
 

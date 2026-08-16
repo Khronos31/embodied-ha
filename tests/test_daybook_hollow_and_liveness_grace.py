@@ -142,6 +142,33 @@ class HollowDaybookRollupTests(unittest.TestCase):
         self.assertEqual(written["summary"], "既にある正規の日誌。")
         self.assertEqual(self.marker.read_text(encoding="utf-8"), "2026-07-30")
 
+    def test_concurrent_real_daybook_is_not_clobbered(self):
+        """要約生成中に別経路が正規の日誌を書いたら、それを壊さない。
+
+        `_chat_lock`と`_loop_lock`は別ロックなので、rollupが`_summarize_with_agent`
+        （数分）を回している間にチャット側のエージェントが同じ日の日誌を書きうる。
+        置き換え判定はファイルロックの内側で行われるため、古い観測に基づいて
+        上書きしてはいけない（red-team反論2・2026-08-16）。
+        """
+        stub_path = self.log_dir / "memory" / "daybooks" / "2026-07-30.json"
+        stub_path.write_text(json.dumps(hollow_stub("2026-07-30"), ensure_ascii=False), encoding="utf-8")
+
+        def summarize_then_someone_else_writes(day, entries):
+            # 要約中に別経路が中身のある日誌を書いた状況を再現する。
+            rival = hollow_stub(day)
+            rival["summary"] = "別経路が書いた正規の日誌。"
+            stub_path.write_text(json.dumps(rival, ensure_ascii=False), encoding="utf-8")
+            return valid_draft()
+
+        with (
+            mock.patch.dict(os.environ, self._env(), clear=False),
+            mock.patch.object(daybook, "_summarize_with_agent", side_effect=summarize_then_someone_else_writes),
+        ):
+            daybook.main()
+
+        written = json.loads(stub_path.read_text(encoding="utf-8"))
+        self.assertEqual(written["summary"], "別経路が書いた正規の日誌。")
+
     def test_hollow_detector_boundaries(self):
         self.assertTrue(daybook._daybook_is_hollow(hollow_stub("2026-07-30")))
         for key, value in (
@@ -183,6 +210,16 @@ class LivenessGraceWindowTests(unittest.TestCase):
     def test_gap_two_before_grace_hour_does_not_warn(self):
         grace = self.daemon.DAYBOOK_LIVENESS_GRACE_HOUR
         self.assertIsNone(self.warning(dt.datetime(2026, 8, 15, grace - 1, 59)))
+
+    def test_grace_hour_covers_observed_rollup_times_without_a_long_blind_spot(self):
+        """猶予窓は実測のrollup完了時刻を覆いつつ、盲点を必要以上に広げない。
+
+        3個体の実測は00:01〜00:48、最悪の外れ値が02:03（2026-08-16調査）。
+        長すぎる猶予は本物の停止に気づくのを遅らせる（red-team反論5）。
+        """
+        grace = self.daemon.DAYBOOK_LIVENESS_GRACE_HOUR
+        self.assertGreaterEqual(grace, 3, "実測02:03の外れ値を覆えない")
+        self.assertLessEqual(grace, 6, "盲点が広すぎる")
 
     def test_gap_two_after_grace_hour_warns(self):
         grace = self.daemon.DAYBOOK_LIVENESS_GRACE_HOUR
