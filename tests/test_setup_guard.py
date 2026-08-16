@@ -207,6 +207,13 @@ class AntigravityInstallEnvironmentTests(unittest.TestCase):
                 # 導入版の記録先。既定は /data/harness_pin.json なので、隔離しないと
                 # テストが実機の記録へ書きうる。
                 "EHA_HARNESS_PIN_FILE": os.path.join(self.harness_flag_dir, "harness_pin.json"),
+                # agy の HOME と bin の既定は /data/ と /data/bin。install ハンドラは
+                # 走らせる前に両方を os.makedirs するので、隔離しないと**テストが実機の
+                # /data を作りに行く**（/data が無い環境では権限エラーで落ちる）。
+                # 子プロセス環境のキー集合は subprocess_env() が組み立てるため、
+                # 置き場所を移してもこのテストの期待値は変わらない。
+                "EHA_ANTIGRAVITY_HOME": os.path.join(self.harness_flag_dir, "agy-home"),
+                "EHA_ANTIGRAVITY_BIN_DIR": os.path.join(self.harness_flag_dir, "agy-home", "bin"),
             },
             clear=False,
         )

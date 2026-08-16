@@ -30,12 +30,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
 
-      - name: Create the add-on data directory
-        # アドオンには必ず /data がある。テストの一部が実パス解決を本物のヘルパーへ任せており、
-        # /data を作りに行く。⚠️ 開発機で走らせるとその機械の /data を触るということでもある
-        # （テスト側の隔離不足として別途起票）。
-        run: sudo install -d -o "$(id -u)" -g "$(id -g)" /data
-
       - uses: actions/setup-python@v5
         with:
           # 本番イメージ（embodied_ha/Dockerfile の python:3.11-slim-bookworm）と同じminorに固定する。
