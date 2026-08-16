@@ -39,7 +39,7 @@ def _make_isolated_env(tmp, **overrides):
     with open(prefs_file, "w", encoding="utf-8") as fh:
         json.dump({"cameras": [], "speakers": [], "presence": {}, "policies": [], "entities": []}, fh)
     character_file = Path(tmp) / "character.md"
-    character_file.write_text("私はあかね。", encoding="utf-8")
+    character_file.write_text("私はテストキャラ。", encoding="utf-8")
     body_location_file = Path(tmp) / "body_location.json"
     body_location_file.write_text(json.dumps({"current_entity": ""}), encoding="utf-8")
     env = {
@@ -197,7 +197,7 @@ class ChatRunIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env, log_dir, prefs_file = _make_isolated_env(tmp)
             character_file = Path(env["EHA_CHARACTER_FILE"])
-            character_file.write_text("私はテスト用のあかね。特徴的な一文。", encoding="utf-8")
+            character_file.write_text("私はテスト用のテストキャラ。特徴的な一文。", encoding="utf-8")
 
             captured_calls = []
 
@@ -217,7 +217,7 @@ class ChatRunIntegrationTests(unittest.TestCase):
 
             self.assertEqual(len(captured_calls), 1)
             prompt_text = captured_calls[0]["prompt"]
-            self.assertIn("私はテスト用のあかね。特徴的な一文。", prompt_text)
+            self.assertIn("私はテスト用のテストキャラ。特徴的な一文。", prompt_text)
 
 if __name__ == "__main__":
     unittest.main()

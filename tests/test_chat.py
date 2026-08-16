@@ -20,9 +20,9 @@ class ReadCharacterTests(unittest.TestCase):
     def test_reads_existing_file_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             character_file = Path(tmp) / "character.md"
-            character_file.write_text("私はあかね。特徴的な一文。", encoding="utf-8")
+            character_file.write_text("私はテストキャラ。特徴的な一文。", encoding="utf-8")
             result = chat._read_character(str(character_file))
-        self.assertEqual(result, "私はあかね。特徴的な一文。")
+        self.assertEqual(result, "私はテストキャラ。特徴的な一文。")
 
     def test_missing_file_returns_empty_string(self):
         result = chat._read_character("/no/such/character.md")

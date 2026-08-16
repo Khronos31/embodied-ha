@@ -2043,7 +2043,7 @@ class ExtractResultJsonTests(unittest.TestCase):
     """`extract_result_json` が「整形された JSON の配列要素」を最終応答と取り違えないこと。
 
     2026-08-14 に特定した実害: agy が JSON を整形して出すと、`scene_people` などの
-    配列要素の行（例 `  "yuno"`）が単独で有効な JSON 文字列であるため、直前に読んだ
+    配列要素の行（例 `  "resident"`）が単独で有効な JSON 文字列であるため、直前に読んだ
     オブジェクト全体を上書きしていた。配列を持つのは observe のスキーマだけなので、
     **observe だけ**が 8 日間で 44 回パース失敗として捨てられた（他モードは 0 件）。
 
@@ -2071,7 +2071,7 @@ class ExtractResultJsonTests(unittest.TestCase):
     OBSERVE = {
         "topic": "スタディの室温上昇", "speak": None, "private": "暑いな",
         "emotion": "concerned", "feature_presented": None, "proposal": None, "action": None,
-        "scene_objects": ["エアコン"], "scene_people": ["yuno"],
+        "scene_objects": ["エアコン"], "scene_people": ["resident"],
         "scene_changes": ["pixel_9a_charging"],
     }
 
