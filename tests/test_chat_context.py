@@ -157,28 +157,28 @@ class ChatHistoryTests(unittest.TestCase):
                 {"user": "旧形式", "claude": "旧形式も読めます"},
                 {"user": "こんにちは", "agent": "こんにちは！"},
             ])
-            result = chat_context.build_chat_history(str(log), "ゆの")
+            result = chat_context.build_chat_history(str(log), "ユーザー")
             self.assertEqual(
                 result,
-                "ゆのさん: 旧形式\nAgent: 旧形式も読めます\n"
-                "ゆのさん: こんにちは\nAgent: こんにちは！",
+                "ユーザーさん: 旧形式\nAgent: 旧形式も読めます\n"
+                "ユーザーさん: こんにちは\nAgent: こんにちは！",
             )
 
     def test_missing_file_returns_nashi(self):
-        self.assertEqual(chat_context.build_chat_history("/no/such/chat_log.jsonl", "ゆの"), "なし")
+        self.assertEqual(chat_context.build_chat_history("/no/such/chat_log.jsonl", "ユーザー"), "なし")
 
     def test_empty_file_returns_nashi(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "chat_log.jsonl"
             log.touch()
-            self.assertEqual(chat_context.build_chat_history(str(log), "ゆの"), "なし")
+            self.assertEqual(chat_context.build_chat_history(str(log), "ユーザー"), "なし")
 
     def test_only_last_10_lines_considered(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "chat_log.jsonl"
             entries = [{"user": f"msg{i}", "claude": f"reply{i}"} for i in range(15)]
             _write_lines(log, entries)
-            result = chat_context.build_chat_history(str(log), "ゆの")
+            result = chat_context.build_chat_history(str(log), "ユーザー")
             self.assertNotIn("msg0", result)
             self.assertIn("msg14", result)
 
@@ -186,7 +186,7 @@ class ChatHistoryTests(unittest.TestCase):
 class TurnTakingStateTests(unittest.TestCase):
     def test_returns_valid_json_with_expected_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result = chat_context.build_turn_taking_state(tmp, "ゆの")
+            result = chat_context.build_turn_taking_state(tmp, "ユーザー")
             parsed = json.loads(result)
             self.assertIn("turn_taking", parsed)
             self.assertIn("quiet_window", parsed)

@@ -31,7 +31,7 @@ class LoopFileReadWiringTests(unittest.TestCase):
     def _context(self, harness: str, mode: str = "reflect") -> dict:
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = {
-                "RESIDENT": "ゆの",
+                "RESIDENT": "ユーザー",
                 "EHA_LOG_DIR": tmpdir,
                 "EHA_DATA_DIR": tmpdir,
                 "EHA_TMP_DIR": tmpdir,

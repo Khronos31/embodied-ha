@@ -60,7 +60,7 @@ class MarkerAdvanceTests(unittest.TestCase):
             "LAST_DAYBOOK": last,
             "SCRIPT_DIR": str(ROOT / "embodied_ha"),
             "CHARACTER": "",
-            "RESIDENT": "ゆの",
+            "RESIDENT": "ユーザー",
         }
 
     def test_nothing_to_do_marks_yesterday_not_today(self):

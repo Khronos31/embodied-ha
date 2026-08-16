@@ -126,7 +126,7 @@ class IntrospectionFactsTest(unittest.TestCase):
         )
         self.assertFalse(
             facts.should_flag_ungrounded_speech_claim(
-                private="ゆのさんに言ったらどうなるか考えた。",
+                private="ユーザーさんに言ったらどうなるか考えた。",
                 facts={"speak_ok": 0},
                 proposal=None,
             )

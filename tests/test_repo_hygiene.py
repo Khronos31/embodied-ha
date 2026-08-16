@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +110,20 @@ class RepoHygieneTests(unittest.TestCase):
         self.assertTrue(checked)
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("tests/test_thing.py", problems[0])
+
+    def test_the_name_list_can_live_outside_the_worktree(self):
+        """worktreeごとに置き直さずに済むこと（新しい作業コピーだけ無防備、を防ぐ）。"""
+        self._track("tests/test_thing.py", 'label = "山田太郎"\n')
+        shared = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(shared)])
+        (shared / "names.local").write_text("山田太郎\n", encoding="utf-8")
+
+        with unittest.mock.patch.dict(
+            os.environ, {hygiene.PERSONA_NAMES_ENV: str(shared / "names.local")}
+        ):
+            problems, checked = hygiene.persona_violations(self.repo, self._paths())
+        self.assertTrue(checked)
+        self.assertEqual(len(problems), 1, problems)
 
     def test_a_clean_repository_passes(self):
         self._track("embodied_ha/daemon.py", "print('hello')\n")

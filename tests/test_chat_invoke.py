@@ -62,7 +62,7 @@ class BuildChatPromptContractTests(unittest.TestCase):
     def test_prompt_contains_identity_context_memory_tools_and_user_message(self):
         prompt = chat_invoke.build_chat_prompt(
             character="私はテスト人格。",
-            resident="ゆの",
+            resident="ユーザー",
             projected_camera_source="",
             recent_activity="照明が点いた",
             current_mood="calm",
@@ -74,7 +74,7 @@ class BuildChatPromptContractTests(unittest.TestCase):
             long_memory="猫が好き",
             open_loops="フィルター掃除",
             recent_chat_context="",
-            chat_hist="ゆの: こんにちは",
+            chat_hist="ユーザー: こんにちは",
             entity_table="",
             pending="なし",
             features_md="",
@@ -93,14 +93,14 @@ class BuildChatPromptContractTests(unittest.TestCase):
             "猫が好き",
             "remember ツールに text を渡して記録する",
             "record_causal_chain で結ぶ",
-            "ゆのさんからの発言:\n「今日どう？」",
+            "ユーザーさんからの発言:\n「今日どう？」",
         ):
             self.assertIn(expected, prompt)
 
     def test_optional_prompt_blocks_are_independently_wired(self):
         prompt = chat_invoke.build_chat_prompt(
             character="人格",
-            resident="ゆの",
+            resident="ユーザー",
             projected_camera_source="camera.study",
             recent_activity="活動",
             current_mood="calm",
@@ -129,7 +129,7 @@ class BuildChatPromptContractTests(unittest.TestCase):
             "# 現在の視界（電脳体: camera.study）",
             "# 操作できる家電（エンティティ対応表）",
             "| ライト | light.study |",
-            "# 行動ポリシー（ゆのさんが設定した行動ルール。必ず踏まえて行動する）",
+            "# 行動ポリシー（ユーザーさんが設定した行動ルール。必ず踏まえて行動する）",
             "- 深夜は静かに",
             "既に伝えた機能: watch",
             "## 視聴機能 [watch]",
@@ -520,7 +520,7 @@ class LogToolUseDiagnosticsTests(unittest.TestCase):
 
 
 class AllowedToolsHttpPostTests(unittest.TestCase):
-    # 仕様変更(2026-07-16、#14増分4の実CLI検証で発見・ゆの承認済み): 以前はhttp_postの
+    # 仕様変更(2026-07-16、#14増分4の実CLI検証で発見・ユーザー承認済み): 以前はhttp_postの
     # 有効/無効判定をmcp-config.py側のMCPサーバーゲートのみに委ね、_COMMON_TOOLSは
     # 無条件でhttp_postを含んでいた(下のtest_http_post_absent_from_common_toolsが示す通り)。
     # Claude CLI旧経路の--allowedToolsはtool名の実在確認をしないため、これは無害だった。

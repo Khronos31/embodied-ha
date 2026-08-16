@@ -29,9 +29,9 @@ class LoadConfigDefaultsTests(unittest.TestCase):
 
     def test_existing_nonempty_values_are_preserved(self):
         resolved = eha_config.load_config(
-            script_dir="/some/script_dir", environ={"RESIDENT": "ゆの", "CLAUDE_BIN": "/custom/claude"}
+            script_dir="/some/script_dir", environ={"RESIDENT": "ユーザー", "CLAUDE_BIN": "/custom/claude"}
         )
-        self.assertEqual(resolved["RESIDENT"], "ゆの")
+        self.assertEqual(resolved["RESIDENT"], "ユーザー")
         self.assertEqual(resolved["CLAUDE_BIN"], "/custom/claude")
 
     def test_empty_string_value_is_treated_as_unset_like_bash(self):

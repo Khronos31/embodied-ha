@@ -47,7 +47,7 @@ class LoopMigrationSafetyTests(unittest.TestCase):
         self.assertEqual(calls[0]["MODE"], "reflect")
 
     # test_runtime_contract_doc_covers_shadow_files_and_cutover_blocker は廃止(2026-07-18、
-    # ゆの承認)。対象のdocs/loop-runtime-contracts.mdはユーザー向け文書でない内部契約書
+    # ユーザー承認)。対象のdocs/loop-runtime-contracts.mdはユーザー向け文書でない内部契約書
     # としてリポジトリ外(メモリ側 embodied_ha_loop_runtime_contracts.md)へ移設し、
     # カットオーバー完了により「移行期間中のdoc↔コード同期ガード」という目的も消滅したため。
 

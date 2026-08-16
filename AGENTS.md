@@ -122,7 +122,11 @@ Co-Authored-By: Codex <noreply@openai.com>
 - **MCP protocol**: `mcp_lib.py` stdio JSON-RPC — do not break the wire format
 - **Atomic writes**: use `os.replace()` for all JSON/Markdown file writes (see existing code)
 - **No hardcoded personal data**: personal names, entity IDs, IPs belong in `preferences.json`
-  or `personal_data/` (excluded from public repo via .gitignore)
+  or `personal_data/` (excluded from public repo via .gitignore). This applies to **test
+  fixtures too** — use the generic names the rest of the tree uses (`ユーザー`,
+  `input_boolean.resident_home`). Check with `python3 scripts/check_repo_hygiene.py`; the
+  real-name stage only runs when `tests/persona_names.local` or `$EHA_PERSONA_NAMES_FILE`
+  exists, because the list of names cannot live in a public repo.
 - **`claude -p` tool restriction caveat**: `--allowedTools` enforces MCP tool-level execution
   restrictions when MCP servers are attached (verified with Claude Code 2.1.211), but it does
   not hide the connected server's tool list or schemas. Keep server-level connection controls

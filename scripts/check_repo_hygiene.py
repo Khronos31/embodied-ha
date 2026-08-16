@@ -10,7 +10,8 @@
 1. **置いてはいけないパス** — 個人設定の実物、鍵、ログ。`.example` は対象外。
 2. **秘密らしき文字列** — 各社APIキー、HAの長期アクセストークン、実体のある秘密鍵。
    テスト用の明らかなダミー（本体が短いPEM等）は落とさない。
-3. **実名** — `tests/persona_names.local` があるときだけ。**名前の一覧は公開
+3. **実名** — 一覧ファイルがあるときだけ。置き場は `tests/persona_names.local`、
+   または環境変数 `EHA_PERSONA_NAMES_FILE`（worktreeごとに置き直さずに済む）。**名前の一覧は公開
    リポジトリに置けない**ので、この段はローカル実行でのみ有効になる（CIでは
    スキップされる）。これは既存の設計を踏襲したもので、`.gitignore` が
    `tests/persona_names.local` と `tests/test_no_hardcoded_persona_names.py` を
@@ -22,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -56,6 +58,7 @@ PEM_PATTERN = re.compile(
 )
 
 PERSONA_NAMES_FILE = "tests/persona_names.local"
+PERSONA_NAMES_ENV = "EHA_PERSONA_NAMES_FILE"
 
 
 def tracked_files(repo: str) -> list[str]:
@@ -108,7 +111,10 @@ def content_violations(repo: str, paths: list[str]) -> list[str]:
 
 def persona_violations(repo: str, paths: list[str]) -> tuple[list[str], bool]:
     """(検出結果, 検査したか) を返す。名前の一覧が無ければ検査しない。"""
-    names_path = Path(repo) / PERSONA_NAMES_FILE
+    # 一覧の置き場は環境変数で外に出せる。worktreeごとに置き直さずに済むため、
+    # 「新しい作業コピーだけ検査が無効」という穴を塞げる。
+    override = os.environ.get(PERSONA_NAMES_ENV, "").strip()
+    names_path = Path(override) if override else Path(repo) / PERSONA_NAMES_FILE
     try:
         raw = names_path.read_text(encoding="utf-8")
     except OSError:
@@ -150,8 +156,9 @@ def main() -> int:
     print(f"[repo-hygiene] 追跡ファイル {len(paths)} 件を検査した。")
     if not persona_checked:
         print(
-            f"[repo-hygiene] 実名の検査はスキップした（{PERSONA_NAMES_FILE} が無い）。"
-            "名前の一覧は公開リポジトリに置けないため、この段はローカル実行専用。"
+            f"[repo-hygiene] 実名の検査はスキップした（{PERSONA_NAMES_FILE} も "
+            f"${PERSONA_NAMES_ENV} も無い）。名前の一覧は公開リポジトリに置けないため、"
+            "この段はローカル実行専用。"
         )
 
     for problem in problems:
