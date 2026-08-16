@@ -65,7 +65,7 @@ embodied_ha/
   web/                # Web UI (Ingress): settings (incl. loop_schedule, games tab), soliloquy room, chat
   config.yaml         # Supervisor manifest (version bump required for permission changes)
 
-tests/                # pytest suite (test_*.py, one per module roughly)
+tests/                # unittest suite (test_*.py, one per module roughly); CI runs it on Python 3.11
 personal_data/        # Personal config (excluded from public repo)
 ```
 

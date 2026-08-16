@@ -1,0 +1,13 @@
+# CI で必要になる依存だけを列挙する。アドオンの実行イメージは embodied_ha/Dockerfile が
+# 組み立てるので、ここは「テストを走らせるために要るもの」に限る。
+#
+# ランタイム依存（Dockerfile と同じピンを使う。ズレは ci.yml が検査する）:
+websockets==13.1
+#
+# 遅延importの依存（faster-whisper / gensim / sudachipy / voicevox_core）は、
+# 使う関数の中で import されるため CI には入れない。入れると本番より広い環境で
+# テストが通ってしまい、任意インストール前提の分岐を検査できなくなる。
+#
+# テスト実行だけに使うもの:
+pytest==8.3.4
+ruff==0.8.6

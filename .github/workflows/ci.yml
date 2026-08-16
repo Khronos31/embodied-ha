@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # 実機のHAもSupervisorも無いので、到達できない宛先で待ち続けるテストがあれば
+    # ここで打ち切って気づけるようにする。
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 本番イメージ（embodied_ha/Dockerfile の python:3.11-slim-bookworm）と同じminorに固定する。
+          # 3.12で通っても本番で通る保証にならない。
+          python-version: "3.11"
+
+      - name: Check runtime pins match the Dockerfile
+        run: |
+          docker_pin=$(grep -oE 'websockets==[0-9.]+' embodied_ha/Dockerfile)
+          ci_pin=$(grep -oE 'websockets==[0-9.]+' requirements-ci.txt)
+          if [ "$docker_pin" != "$ci_pin" ]; then
+            echo "Dockerfile: $docker_pin / requirements-ci.txt: $ci_pin"
+            echo "CIと本番イメージでランタイム依存のピンがずれている。両方を揃えること。"
+            exit 1
+          fi
+          echo "runtime pin: $docker_pin"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Run unittest suite
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Run pytest-style tests
+        # tests/ の大半は unittest だが、pytest でしか収集できない書き方の
+        # ファイルもある。unittest discover は import するだけで実行しないため別で走らせる。
+        run: python -m pytest tests/test_wake_routing.py
+
+      - name: Lint
+        run: ruff check .
