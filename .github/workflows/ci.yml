@@ -54,3 +54,27 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+  release-invariants:
+    # 「mainの公開状態はversionを伴うリリースでしか動かない」の検査。
+    # mainを動かすpushと、mainへ向いたPRだけが対象。作業ブランチでは版番号を
+    # 動かさずに embodied_ha/ を触るのが普通なので、そこでは走らせない。
+    if: github.ref == 'refs/heads/main' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 版番号の履歴を config.yaml から辿るので全履歴が要る（タグは使わない）。
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check release invariants
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_release_invariants.py --base "$BASE" --head "$HEAD"
