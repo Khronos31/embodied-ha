@@ -51,6 +51,18 @@ First-party companions are not installed automatically and are not required unle
 
 ---
 
+## Privacy and third-party services
+
+Embodied HA runs the selected third-party agent CLI unattended and on an ongoing basis. Depending on your
+configuration and tool use, a turn may contain sensor values, household speech transcripts, camera images,
+memories, and device state. The CLIs are downloaded directly from their providers and are not bundled in this
+repository.
+
+Before setup, read the Japanese source-of-truth pages on [privacy and data flows](docs/privacy.md) and
+[local/provider retention](docs/data_and_retention.md).
+
+---
+
 ## Installation
 
 1. Open HA **Settings → Add-ons → Add-on Store → ⋮ → Manage repositories**
@@ -234,18 +246,6 @@ Memory accumulates in several layers:
 <img src="architecture.png" width="560" alt="Embodied HA architecture diagram">
 
 Each loop launches its own Claude CLI session every time, and continuity is maintained through files such as `memory.md` and `observations.jsonl`.
-
----
-
-## Privacy and third-party services
-
-Embodied HA runs the selected third-party agent CLI unattended and on an ongoing basis. Depending on your
-configuration and tool use, a turn may contain sensor values, household speech transcripts, camera images,
-memories, and device state. The CLIs are downloaded directly from their providers and are not bundled in this
-repository.
-
-Before setup, read the Japanese source-of-truth pages on [privacy and data flows](docs/privacy.md) and
-[local/provider retention](docs/data_and_retention.md).
 
 ---
 
