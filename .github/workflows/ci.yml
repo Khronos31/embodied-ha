@@ -55,6 +55,10 @@ jobs:
       - name: Lint
         run: ruff check .
 
+      - name: Check public repo hygiene
+        # AGENTS.md の「personal_data/ は公開リポジトリから除外する」を宣言のままにしない。
+        run: python3 scripts/check_repo_hygiene.py
+
   release-invariants:
     # 「mainの公開状態はversionを伴うリリースでしか動かない」の検査。
     # mainを動かすpushと、mainへ向いたPRだけが対象。作業ブランチでは版番号を

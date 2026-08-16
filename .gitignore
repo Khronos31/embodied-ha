@@ -16,3 +16,6 @@ embodied_ha/assets/*.bak
 tests/persona_names.local
 tests/test_no_hardcoded_persona_names.py
 tests/persona_names.example
+
+# 個人設定の実物（公開リポジトリへ入れない。追跡するのは *.example だけ）
+personal_data/
