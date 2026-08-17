@@ -63,6 +63,9 @@ CHILD_WATCHDOG_RESTART_DELAY = 60
 SETUP_WAIT_REMINDER_INTERVAL = 6 * 60 * 60
 SETUP_WAIT_FAILURE_RETRY_INTERVAL = 15 * 60
 DAYBOOK_LIVENESS_CHECK_INTERVAL = 15 * 60
+# 夜間rollupの実完了時刻は3個体の実測で00:01〜00:48（最悪02:03）。猶予はその上に
+# 2時間ほど余裕を見た値にする。長くするほど本物の停止に気づくのが遅れる盲点になる。
+DAYBOOK_LIVENESS_GRACE_HOUR = 4
 ANOMALY_NIGHT_URGENCY_THRESHOLD = 30
 ANOMALY_NIGHT_URGENCY_FACTOR = 0.0
 QUIET_ANOMALY_PERIODS = {"late", "night", "deep_night"}
@@ -1037,7 +1040,12 @@ def _daybook_source_entry_status(log_dir: str, day: str) -> bool | None:
     return False
 
 
-def daybook_liveness_warning(log_dir: str, *, today: dt.date | None = None) -> str | None:
+def daybook_liveness_warning(
+    log_dir: str,
+    *,
+    today: dt.date | None = None,
+    now: dt.datetime | None = None,
+) -> str | None:
     """Return the startup warning, allowing marker-only completion for empty days."""
     marker = os.path.join(log_dir, ".last_daybook")
     if not os.path.exists(marker):
@@ -1047,9 +1055,20 @@ def daybook_liveness_warning(log_dir: str, *, today: dt.date | None = None) -> s
     if not last:
         return None
 
+    if now is None:
+        # today だけ渡された場合（既存テスト経路）は「その日の終わり」として評価する。
+        now = dt.datetime.combine(today, dt.time.max) if today is not None else dt.datetime.now()
+    if today is None:
+        today = now.date()
+
     marker_day = dt.date.fromisoformat(last)
-    gap = ((today or dt.date.today()) - marker_day).days
+    gap = (today - marker_day).days
     if gap >= 2:
+        # 健全時のマーカーは常に「昨日」を指すため、日付が変わった直後は夜間rollupが
+        # 走り終わるまで gap==2 が正常状態として現れる（loop tick依存で数分〜数時間）。
+        # gap==2 は当日のrollupが十分遅れたと言える時刻以降だけ異常として扱う。
+        if gap == 2 and now.hour < DAYBOOK_LIVENESS_GRACE_HOUR:
+            return None
         return f"[daemon] 警告: daybook が {gap} 日更新されていません（保守パイプライン停止の疑い）"
 
     daybook = os.path.join(log_dir, "memory", "daybooks", f"{last}.json")

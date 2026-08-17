@@ -580,6 +580,23 @@ def _save_episodes(log_dir: str, day: str, draft: dict[str, Any], entries: list[
     return saved_ids
 
 
+def _daybook_is_hollow(daybook: dict[str, Any]) -> bool:
+    """中身が空のdaybookスタブか（要約・エピソード・ハイライト等が全て空）。
+
+    エージェントがMCPの build_daybook を当日日付・内容なしで呼ぶと空スタブができる
+    （2026-08-14に実測。過去にも複数回発生し、その日の
+    実エントリが「既存daybookあり」扱いで要約されずに失われた）。空スタブは
+    「日誌なし」として扱い、夜間rollupが実エントリから正規の日誌で上書きする。
+    """
+    return not any((
+        _clean(daybook.get("summary")),
+        daybook.get("episode_ids"),
+        daybook.get("highlights"),
+        daybook.get("themes"),
+        daybook.get("open_questions"),
+    ))
+
+
 def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, Any], entries: list[dict[str, Any]]) -> None:
     episode_ids = _save_episodes(log_dir, day, draft, entries)
     counterfactual_line = cs.counterfactual_sentence(cs.best_recent_counterfactual(log_dir, hours=24))
@@ -598,6 +615,11 @@ def _write_daybook(log_dir: str, memory_file: str, day: str, draft: dict[str, An
         open_questions=draft["open_questions"],
         raw_entry_count=len(entries),
         source="loop",
+        # 対象日に空スタブが残っている場合だけ置き換える。無条件のoverwriteにしないのは、
+        # 要約生成の間（数分）にチャット側などの別経路が同じ日の正規の日誌を書きうるため
+        # （_chat_lockと_loop_lockは別ロック）。判定はbuild_daybook側がファイルロックの
+        # 内側で行うので、ここで見た内容が古くなっていても壊さない。
+        overwrite_if=_daybook_is_hollow,
     )
     brief = ms.daybook_brief(daybook)
     if _append_memory_brief(memory_file, brief):
@@ -711,8 +733,11 @@ def _run_locked() -> None:
         # today にすると翌日以降ずっと即スキップになる。
         new_marker = yesterday_d.isoformat()
     else:
-        if ms.daybook_exists(log_dir, target_day):
-            daybook = ms.load_daybook(log_dir, target_day)
+        existing_daybook = (
+            ms.load_daybook(log_dir, target_day) if ms.daybook_exists(log_dir, target_day) else None
+        )
+        if existing_daybook is not None and not _daybook_is_hollow(existing_daybook):
+            daybook = existing_daybook
             brief = ms.daybook_brief(daybook)
             if _append_memory_brief(memory_file, brief):
                 print(f"[DAYBOOK] 既存の structured daybook を反映: {target_day}")
