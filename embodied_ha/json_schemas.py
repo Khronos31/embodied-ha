@@ -10,9 +10,7 @@
   - daybook_rollup.py: daybook_schema()
 
 proposal/action（家電操作提案）は observe・explore のみ許可する。reflect・web・
-social は物理世界の観察を主目的としないモードのため許可しない
-（reflect/webを明示的に除外というred-team方針を踏まえ、observe/exploreの
-「物理世界を観察するモード」という共通性からexploreも同グループとした）。
+social は物理世界の観察を主目的としないモードのため許可しない。
 scene_objects/scene_people/scene_changes はカメラ観察を伴う observe 専用。
 """
 

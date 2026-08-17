@@ -210,7 +210,7 @@ def _safe_extract(archive: bytes, destination: str) -> None:
             tar.extractall(destination, filter="data")
         else:
             # 本番コンテナ(Debian bookworm)のpython3.11.2はPEP 706(extraction filter)
-            # 未バックポート(2026-07-18、Debianソース実物で確認——extractallに
+            # 未バックポート(Debianソース実物で確認——extractallに
             # filter引数が存在しない)。メンバー検証は上で自前実施済みのため、
             # フォールバックでも安全性は同等。
             tar.extractall(destination)
@@ -218,7 +218,7 @@ def _safe_extract(archive: bytes, destination: str) -> None:
 
 def _release_directory(extract_dir: str) -> str:
     # 実配布のcodex-packageはアーカイブ直下がリリースルート(bin/codex等)。
-    # 2026-07-18のrust-v0.144.5実物で確認。バージョンディレクトリ入れ子の
+    # rust-v0.144.5 の実物で確認済み。バージョンディレクトリ入れ子の
     # 配布に変わった場合に備え、単一サブディレクトリのフォールバックも残す。
     if os.path.isfile(os.path.join(extract_dir, "bin", "codex")):
         return extract_dir

@@ -56,8 +56,7 @@ def _build_long_memory(memory_file, script_dir, run=subprocess.run):
 
     chat.sh側はガード無し（`set -e`下で失敗時は会話プロセス全体がクラッシュ
     する）。ここも意図的に例外を握りつぶさない（フォルトインジェクション
-    テスト対象。Codexレビューで発見された、増分間で唯一この関数だけ
-    誤って握りつぶしていた不一致の修正）。
+    テスト対象。他の同種の関数と同じく、握りつぶさない側へ揃えている）。
     """
     if not (memory_file and os.path.isfile(memory_file) and os.path.getsize(memory_file) > 0):
         return "なし"
@@ -71,9 +70,8 @@ def _build_long_memory(memory_file, script_dir, run=subprocess.run):
 def _read_character(character_file):
     """character.mdの内容を読む（chat.sh:12の`cat "$EHA_CHARACTER_FILE" 2>/dev/null`と同一）。
 
-    Codexレビューで発見: eha_config.pyはEHA_CHARACTER_FILEのパスを解決する
-    だけで内容を読んでおらず、chat.py側にchat.sh:12に相当する読み取りが
-    欠落していた（全会話でキャラクター定義が空文字列になる回帰）。
+    eha_config.pyはEHA_CHARACTER_FILEのパスを解決するだけで内容を読まない。
+    ここで読まないと全会話でキャラクター定義が空文字列になる。
     """
     try:
         with open(character_file, encoding="utf-8") as fh:

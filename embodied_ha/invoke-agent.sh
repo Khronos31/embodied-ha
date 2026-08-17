@@ -291,15 +291,12 @@ for line in raw.splitlines():
         #
         #   {                                ← この行でオブジェクトを得るが
         #     "topic": "...",
-        #     "scene_people": [
-        #       "yuno"                       ← この行が文字列として拾われ、上書きされる
+        #     "tags": [
+        #       "example"                    ← この行が文字列として拾われ、上書きされる
         #     ]
         #   }
         #
-        # 配列を持つのは observe のスキーマだけなので、observe だけが 8 日間で 44 回、
-        # 「配列の最後の要素」を最終応答として記録され、パース失敗として捨てられていた
-        # （2026-08-14 に再現。emotion 値・真偽値・数値が断片に一度も現れないこと、
-        # 改行を含む断片が 0 件であることが、この機構と一致する）。
+        # 配列を持つのは observe のスキーマだけなので、この取り違えは observe にだけ出る。
         result = event
 if not result and not recognized_envelope:
     m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -339,7 +336,7 @@ validate_allowed_builtins
 # 音声確認に必要なため残す。MCP config/認証/環境変数を守る /config・/data・/proc 等は
 # 明示denyし、その他のnon-workspace readはheadlessで確認不能→自動拒否に戻す。
 # 2.0.14が追加した read_file(*) deny と、それ以前にEHAが自動配布した同名allowは
-# v1 marker以前の一回だけ安全な順序で除去する(F-141 live canary、2026-07-31)。
+# v1 marker以前の一回だけ安全な順序で除去する(F-141 live canary)。
 ensure_agy_native_safety_policy() {
   local agy_home="$1"
   local settings_dir="$agy_home/.gemini/antigravity-cli"
@@ -543,7 +540,7 @@ PY
 # agy 1.1.3のheadless(-p)モードは、MCPツール実行の確認をsettings.jsonの
 # permissions.allowではなく、config.jsonのuserSettings.globalPermissionGrants
 # (grant store)で判定する(settings.json側はエラーメッセージの案内に反して
-# 無視される。実機切り分け済み、2026-07-17)。ここで必要なグラントを
+# 無視される。実機切り分け済み)。ここで必要なグラントを
 # add-onlyマージで反映しないと、モデルがMCPツールを呼んだ時点でターン全体が
 # 空応答になる。グラントは呼び出し後も残す(EHA専用identityへの恒久配置。
 # 呼び出し単位のツール制限はmcp_configのincludeTools側が担う)。
@@ -567,7 +564,7 @@ wanted = [g for g in os.environ["EHA_GRANTS"].split("\n") if g]
 
 def fail(message):
     # 壊れた/型不正の既存config.jsonを黙って全置換すると、userSettingsの
-    # 他のキーを失う。fail-closedで止めて診断に乗せる(sol review、2026-07-17)。
+    # 他のキーを失う。fail-closedで止めて診断に乗せる。
     print(f"invoke-agent.sh: agy config.json grants merge failed: {message} ({path})", file=sys.stderr)
     sys.exit(1)
 
@@ -799,7 +796,7 @@ run_codex() {
   for image_path in "${content_image_paths[@]}"; do
     cmd+=("--image" "$image_path")
   done
-  # F11-B1(2026-07-23・Codex red-team [[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]]):
+  # F11-B1:
   # codex 既定は built-in 実行系(exec_command/apply_patch/write_stdin)と ChatGPT apps(codex_apps・
   # ユーザーの CODEX_HOME 認証由来)を露出する。住み込み個体には不要かつ危険なので明示 hardening する。
   #   --sandbox read-only    : default/global config のドリフトに依存せず書込みを塞ぐ(exec は残るが write 不可)
@@ -810,8 +807,8 @@ run_codex() {
   # flag 実在は codex 0.144.4 の --help / features list で確認済。
   # ★--ignore-user-config は「使わない」: EHA は MCP を CODEX_HOME 内の transient --profile で渡すため、
   #   --ignore-user-config を付けると profile ごと無視され MCP tool も developer_instruction も全滅する
-  #   (2026-07-23 SCS で --json の mcp_tool_call 有無で A/B 実証: 付けると read_file 呼び出し消失・
-  #   外すと EHA_F11 canary 読取成功)。addon の CODEX_HOME は DIY で個人 global 設定を持たないため
+  #   (付けると read_file 呼び出しが消え、外すと読取に成功する)。
+  #   addon の CODEX_HOME は DIY で個人 global 設定を持たないため
   #   継承リスクは元々低く、codex_apps 除去は --disable apps が担う。厳密な user-config 隔離が要る場合は
   #   MCP を --profile でなく inline -c で渡す別実装が要る(将来課題・レポート§8/B-1)。
   cmd+=("--sandbox" "read-only"
@@ -829,7 +826,7 @@ run_codex() {
   # WebSearch 意図があれば codex native の live web_search を有効化、無ければ無効化して
   # claude chat(WebSearch 非許可)とのパリティを取る。--allowed-builtins 未指定時は codex 既定に任せる。
   # validate_allowed_builtins が要素を trim して受理する("Read, WebSearch"等)ため、判定前に空白を除去して
-  # 正規化する(生CSV部分一致だと空白付き要素を取りこぼす・sol Med)。
+  # 正規化する(生CSV部分一致だと空白付き要素を取りこぼす)。
   if [[ "$no_tools" == "true" ]]; then
     cmd+=("--config" "web_search=disabled")
   elif [[ "$allowed_builtins_set" == "true" ]]; then
@@ -863,7 +860,7 @@ run_codex() {
     TEMP_FILES+=("$profile_path")
     cmd+=("--profile" "$profile_name")
   fi
-  # json_schema は --output-schema(OpenAI strict response_format)ではなく prompt へ埋め込む(F5・2026-07-23)。
+  # json_schema は --output-schema(OpenAI strict response_format)ではなく prompt へ埋め込む(F5)。
   # EHA のスキーマは任意キーの object(cameras_add 等の {"type":"object"})を含み、OpenAI strict モード
   # (全 object に additionalProperties:false 必須=任意キー不可)では表現できないため。agy と同じ
   # prompt-injection にし、最終メッセージは -o で回収する(claude は native --json-schema のまま)。
@@ -887,8 +884,8 @@ run_agy() {
   # daybook path whose exact schema is live-verified.
   #
   # ⚠️ **loop の各モードへは広げられない。** MCP サーバーを繋いだ状態では
-  # `--output-format json` が `structured_output` を返さないことを実測した
-  # （2026-08-14。MCP 無し=返る / MCP 有りでツール成功=返らない / 同・ツール失敗=返らない）。
+  # `--output-format json` が `structured_output` を返さない
+  # （MCP 無し=返る / MCP 有りはツールの成否によらず返らない）。
   # loop は MCP を繋ぐ（`loop.py` の `--mcp-servers`）ので、native 化すると
   # 応答が空になり invoke 失敗になる。daybook が成立しているのは MCP を繋がないため。
   #
@@ -947,7 +944,7 @@ run_agy() {
     # headless実行の実行承認グラントを、接続サーバー単位のワイルドカード
     # mcp(server/*)で導出する。完全一致(mcp(server/tool))にしない理由:
     # agy 1.1.3はincludeToolsの可視性制限を実効させておらず、モデルがグラント外の
-    # ツール名を1回でも呼ぶとprintモードがターン全体を打ち切る(実測、2026-07-17)。
+    # ツール名を1回でも呼ぶとprintモードがターン全体を打ち切る。
     # ワイルドカードなら未知ツール名はMCPサーバー側の「未知のツール」エラーとして
     # 返り、モデルは続行できる。ツール単位の安全境界はサーバー側ゲート
     # (http_postのtools/list掲載制御・hacontrolのquiet gate等)が担う。

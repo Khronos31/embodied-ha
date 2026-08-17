@@ -37,7 +37,7 @@ def config_dir() -> str:
 def _has_config_substance(path: str) -> bool:
     """Return whether a legacy Claude config directory holds anything worth keeping.
 
-    Grandfather any existing *non-empty* dir (sol Low): Claude Code stores not just
+    Grandfather any existing *non-empty* dir: Claude Code stores not just
     credentials/projects under CLAUDE_CONFIG_DIR but also settings.json, plugins,
     skills, hooks, etc. An API-key user with only settings must still keep the legacy
     location instead of silently switching to /data/claude-home. A truly empty dir has

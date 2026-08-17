@@ -308,7 +308,7 @@ def build_daybook(args: dict[str, Any]):
         open_questions=open_questions,
         importance_cutoff=importance_cutoff,
         # 既定を"mcp"にして夜間rollup（source="loop"）とエージェント起点の生成を
-        # 区別できるようにする（空スタブの来歴調査で区別不能だった・2026-08-14）。
+        # 区別できるようにする（空スタブの来歴調査で区別不能だった）。
         source=_clean(payload.get("source")) or "mcp",
         raw_entry_count=raw_entry_count,
         overwrite=_truthy(payload.get("overwrite")),

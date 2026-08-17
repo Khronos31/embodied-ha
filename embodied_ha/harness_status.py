@@ -24,7 +24,7 @@ import claude_setup  # noqa: E402  production-critical (mandatory, mirrors serve
 
 # codex/agy setup modules are optional in the web server (defensive import →
 # None). Mirror that here so importing harness_status never hard-fails when an
-# optional harness module is missing; readiness() then fails closed for it.
+# optional harness module is missing; readiness then fails closed for it.
 try:
     import codex_setup  # noqa: E402
 except Exception:
@@ -115,7 +115,7 @@ def snapshot() -> dict:
     harness that will actually execute — invoke-agent's ultimate default is
     Claude, so a missing/invalid flag resolves to ``"claude"`` — while ``ready``
     gates whether the runtime should start. The flag is read once and every
-    harness predicate is captured once (single-read consistency, sol Med2).
+    harness predicate is captured once (single-read consistency).
     """
     selection_state, selected = harness_state.read_selection()
     cap = _capture()
@@ -127,7 +127,7 @@ def snapshot() -> dict:
         # Legacy compatibility (read-only mirror of the daemon's Claude
         # migration): a pre-flag instance with authenticated Claude runs as
         # Claude, so the overview reports the running instance instead of
-        # forcing the picker (sol H8/Med8).
+        # forcing the picker.
         effective = "claude"
         ready = _ready_from_capture("claude", cap)
     else:  # invalid / unknown → fail closed, ask the user to pick a harness

@@ -4,9 +4,8 @@ agy は起動時に更新チェック用の別プロセス(bg-updater)を spawn 
 manifest を取りに行く。勝手にバージョンが上がると本番稼働中のエージェントの挙動が
 変わるため、更新ホストを 127.0.0.1 へ向けて到達不能(即 ECONNREFUSED)にし、凍結する。
 
-Phase 1 の設計根拠(2026-07-20、Fable 実機レビュー): 更新チェックは bg-updater 別プロセスに
-隔離されており、失敗してもフォアグラウンドのターンには影響しない(SCS 上の agy は
-update_status.json が長期間 "Update failed" のまま正常稼働している実証がある)。したがって
+更新チェックは bg-updater 別プロセスに隔離されており、失敗してもフォアグラウンドの
+ターンには影響しない(update_status.json が "Update failed" のままでも稼働は続く)。したがって
 ダミー HTTPS サーバ・自己署名 cert・SSL_CERT_FILE バンドルは不要で、hosts 1 行で足りる可能性が
 高い。実 agy での「ターンが壊れないか」の確認はデプロイゲート繰り越し。壊れると観測された
 場合のみダミーサーバ方式(Phase 2)へ格上げする(設計は [[embodied-ha-agent-setup-step3-phase0-spec]])。

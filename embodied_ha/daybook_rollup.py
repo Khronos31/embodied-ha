@@ -583,10 +583,9 @@ def _save_episodes(log_dir: str, day: str, draft: dict[str, Any], entries: list[
 def _daybook_is_hollow(daybook: dict[str, Any]) -> bool:
     """中身が空のdaybookスタブか（要約・エピソード・ハイライト等が全て空）。
 
-    エージェントがMCPの build_daybook を当日日付・内容なしで呼ぶと空スタブができる
-    （2026-08-14に実測。過去にも複数回発生し、その日の
-    実エントリが「既存daybookあり」扱いで要約されずに失われた）。空スタブは
-    「日誌なし」として扱い、夜間rollupが実エントリから正規の日誌で上書きする。
+    エージェントがMCPの build_daybook を当日日付・内容なしで呼ぶと空スタブができ、
+    そのままだと「既存daybookあり」扱いでその日の実エントリが要約されずに失われる。
+    空スタブは「日誌なし」として扱い、夜間rollupが実エントリから正規の日誌で上書きする。
     """
     return not any((
         _clean(daybook.get("summary")),
@@ -662,7 +661,7 @@ def _run_locked() -> None:
     if start_d > yesterday_d:
         # マーカーは「日誌を作った最後の日」。ここで today を書くと、まだ終わっていない
         # 今日の日誌ができたことになり、翌日は start_d = today+1 > yesterday でまた即スキップ——
-        # 一度ずれると永久に空振りする（2026-07-05 以降、実際にそうなっていた）。
+        # 一度ずれると永久に空振りする。
         # yesterday なら「昨日まで済んでいる」を正しく表し、この分岐は冪等になる。
         _write_marker(daybook_marker, yesterday_d.isoformat())
         raise SystemExit(0)

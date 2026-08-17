@@ -67,7 +67,7 @@ def compare_and_set(harness: str) -> tuple[str, str | None]:
     """Atomically claim the selection unless a *different* valid one already exists.
 
     Enforces the "1 instance = 1 harness, fixed on first selection" policy at the
-    persistence layer (sol H1). Returns ``(outcome, current)``:
+    persistence layer. Returns ``(outcome, current)``:
 
     - ``("set", harness)``    — committed (the flag was ``missing`` or ``invalid``).
     - ``("unchanged", harness)`` — the same harness was already selected (idempotent).

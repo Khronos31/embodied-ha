@@ -76,7 +76,7 @@ fi
 # 空白を含むため IFS=tab で読む。process substitution で while ループを現在シェルに置き export を残す。
 _EFFECTIVE_HARNESS="${_SELECTED_HARNESS:-claude}"
 while IFS=$'\t' read -r _pk _pv; do
-    # 既知の5キーだけを export(不正レコード注入を fail-soft で無視・sol High の二層目防御。
+    # 既知の5キーだけを export(不正レコード注入を fail-soft で無視 の二層目防御。
     # 一層目は agent_prefs 側の制御文字拒否)。
     case "$_pk" in
         EHA_CLAUDE_MODEL_DEFAULT|EHA_CLAUDE_EFFORT_DEFAULT|EHA_CODEX_MODEL_DEFAULT|EHA_CODEX_REASONING_EFFORT_DEFAULT|EHA_AGY_MODEL_DEFAULT)
@@ -158,8 +158,8 @@ python3 "$SCRIPT_DIR/harness_binary_update.py" reconcile 2>&1 | sed 's/^/[run] /
 
 # --- agy 自動更新の凍結（増分6・Phase 1: hosts リダイレクトのみ）---
 # agy がインストール済みのときだけ、更新ホストを 127.0.0.1 へ向けて自動更新を凍結する
-# （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない=
-#  Fable 実機レビュー 2026-07-20）。未インストール時は念のため残存リダイレクトを掃除する
+# （bg-updater が到達不能になり更新が起きない。フォアグラウンドのターンには影響しない）。
+# 未インストール時は念のため残存リダイレクトを掃除する
 # （通常はコンテナ再作成で /etc/hosts が再生成されるため不要だが冪等・防御的に）。
 if python3 -c "import sys; sys.path.insert(0,'${SCRIPT_DIR}'); import antigravity_setup; sys.exit(0 if antigravity_setup.is_installed() else 1)" 2>/dev/null; then
     python3 "$SCRIPT_DIR/agy_update_freeze.py" add 2>&1 | sed 's/^/[run] /' \

@@ -262,7 +262,7 @@ _RACE_BASES = [
 # アドオン uninstall で消える(インストール済みフラグは preferences.json=/config 側に残す。
 # preferences.json はユーザー直接編集領域なのでフラグの置き場所は動かさない)。この不整合時、生の
 # ImportError「No module named gensim」/ FileNotFoundError は一般ユーザーに意味不明なので、
-# 再インストール導線を示す文言へ翻訳する(2026-07-23)。
+# 再インストール導線を示す文言へ翻訳する。
 _WORDVEC_UNAVAILABLE_MSG = (
     "モデルのロードに失敗しました。設定画面のゲームタブから"
     "WordVecレースを再インストールしてください。"
@@ -504,8 +504,8 @@ def _ask_cpu_word(message: str) -> tuple[str | None, str]:
         _CPU_RULES,
         message,
     ]
-    # 30秒×最大2回×(初回+語彙外リトライ)=1手あたり最大約120秒(旧claude版と同じ上限。
-    # 実測は4〜7秒/回)。60秒にするとchat側の全体タイムアウト300秒へ迫るため据え置き。
+    # 30秒×最大2回×(初回+語彙外リトライ)=1手あたり最大約120秒。60秒にすると
+    # chat側の全体タイムアウト300秒へ迫るため据え置き。
     out, err = _run_cpu_with_retry(cmd, timeout=30)
     if not out:
         return None, err

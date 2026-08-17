@@ -63,8 +63,7 @@ CHILD_WATCHDOG_RESTART_DELAY = 60
 SETUP_WAIT_REMINDER_INTERVAL = 6 * 60 * 60
 SETUP_WAIT_FAILURE_RETRY_INTERVAL = 15 * 60
 DAYBOOK_LIVENESS_CHECK_INTERVAL = 15 * 60
-# 夜間rollupの実完了時刻は3個体の実測で00:01〜00:48（最悪02:03）。猶予はその上に
-# 2時間ほど余裕を見た値にする。長くするほど本物の停止に気づくのが遅れる盲点になる。
+# 夜間rollupが終わるまでの猶予。長くするほど本物の停止に気づくのが遅れる盲点になる。
 DAYBOOK_LIVENESS_GRACE_HOUR = 4
 ANOMALY_NIGHT_URGENCY_THRESHOLD = 30
 ANOMALY_NIGHT_URGENCY_FACTOR = 0.0
@@ -158,7 +157,7 @@ def harness_ready() -> bool:
             else:
                 return False
     # Per-harness readiness is defined once in harness_status (shared with the
-    # web overview) so the two never drift (sol R5). Migration above stays a
+    # web overview) so the two never drift. Migration above stays a
     # daemon-only side effect.
     return harness_status.readiness(selected)
 
@@ -942,14 +941,14 @@ def start_runtime_threads() -> bool:
     """runtime が動いていれば True、未準備で起動を見送ったら False。
 
     戻り値でポーラが「上がったのか見送られたのか」を判断できるようにしてある
-    (以前は返り値が無く、見送りが呼び出し側から見えなかった=codexレビューP1①)。
+    (以前は返り値が無く、見送りが呼び出し側から見えなかった)。
     """
     if _runtime_started.is_set():
         return True
     with _runtime_lock:
         if _runtime_started.is_set():
             return True
-        # 選択ハーネスを実行時ハーネスへ配線(Step4増分1a)。ポーラの harness_ready() 判定と
+        # 選択ハーネスを実行時ハーネスへ配線(Step4増分1a)。ポーラの harness_ready 判定と
         # 起動の間にフラグ/認証が変わる競合(sol 1a-review High)を避けるため、ここで1回だけ
         # snapshot を取り、その snapshot が ready を認めた effective harness だけを export する
         # (judge した値と実行する値を同一 read に固定)。起動直前に未準備へ変わっていたら
@@ -993,9 +992,9 @@ def start_runtime_threads() -> bool:
 
 
 def boot_runtime_when_ready():
-    # start_runtime_threads() は、直前に取り直した snapshot が未準備なら起動を見送って返る。
-    # ポーラが harness_ready() を抜けた直後に1回だけ呼ぶ作りだと、その窓を踏んだときに
-    # loop/chat/MQTT が起動しないまま誰も再試行しない(codexレビューP1①)。
+    # start_runtime_threads は、直前に取り直した snapshot が未準備なら起動を見送って返る。
+    # ポーラが harness_ready を抜けた直後に1回だけ呼ぶ作りだと、その窓を踏んだときに
+    # loop/chat/MQTT が起動しないまま誰も再試行しない。
     # 実際に runtime が上がるまで回し続ける。
     announced = False
     while True:
@@ -1162,7 +1161,7 @@ def run_maintenance_checks(*, now_monotonic: float | None = None) -> None:
 
 # --- 多重起動ガード（flock）---
 # threading.Lock は全部プロセスローカルなので、daemon.py が複数走ると
-# 同じエンティティを各々ポーリングして二重観察・二重トリガーになる（2026-06-22に4重起動を踏んだ）。
+# 同じエンティティを各々ポーリングして二重観察・二重トリガーになる。
 # OSレベルの排他ロックで「同時に1プロセスだけ」を保証する。flockはSIGKILLでも自動解放される。
 os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
 _lock_fp = open(LOCK_FILE, "w")  # プロセス終了まで開いたまま保持（GC回避のためグローバル）
@@ -1175,8 +1174,8 @@ except OSError:
 # --- Web UI / runtime 起動 ---
 threading.Thread(target=web_server_watchdog, daemon=True).start()
 print("[daemon] web server watchdog enabled", flush=True)
-# ready でも start_runtime_threads() が直前の snapshot で見送ることがある。
-# その場合もポーラを立てないと誰も再試行しない(codexレビューP1①)。
+# ready でも start_runtime_threads が直前の snapshot で見送ることがある。
+# その場合もポーラを立てないと誰も再試行しない。
 _runtime_started_at_boot = harness_ready() and start_runtime_threads()
 if _runtime_started_at_boot:
     dismiss_setup_wait_notification()

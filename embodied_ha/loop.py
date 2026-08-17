@@ -303,7 +303,7 @@ def invoke_loop_claude(
             print(f"[loop][invoke-agent] 呼び出し失敗 returncode={result.returncode}", file=sys.stderr)
             # アドオンログは Supervisor のリングバッファで遡れなくなるので JSONL にも残す。
             # stderr は先頭も残す——run_claude が transcript を stderr へ流すため、
-            # 末尾だけ見ると原因の先頭が落ちる（2026-07-27 の認証失効で実際に落ちた）。
+            # 末尾だけ見ると原因の先頭が落ちる（認証失効時に実際に落ちる）。
             invoke_failure.record_failure(
                 (env.get("EHA_LOG_DIR") or "").strip(),
                 source="loop",
