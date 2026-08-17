@@ -523,8 +523,8 @@ def log_tool_use_diagnostics(stream_text, print_fn=None):
 
     旧経路ではclaude CLIのstdout(生stream-json)を読んでいたが、invoke-agent.sh経由では
     生transcriptを明示的な一時ファイルへ保存する契約のため、呼び出し元はその内容を渡す。家電操作・
-    memory更新等の成功したツール使用がSupervisorログに残らない監査回帰(PR#2最終レビュー
-    指摘)への対応として増分7で削除されたものを復元した。agyハーネスのstderrには
+    memory更新等の成功したツール使用がSupervisorログに残らなくなるため、ここで出す。
+    agyハーネスのstderrには
     stream-jsonが含まれないため、単に何も出力されない(無害)。
     """
     if print_fn is None:

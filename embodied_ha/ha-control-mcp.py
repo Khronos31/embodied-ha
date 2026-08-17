@@ -25,7 +25,7 @@ ACTOR = os.environ.get("EHA_ACTOR", "agent")
 
 # 家電操作で許可するドメイン。script は service にスクリプト名を直書きできる
 # （視聴予約 viewing_reservation_set 等のための設計）。家人本人が起点で第三者
-# 注入経路が無いため by-design で許可（2026-06-22レビュー）。
+# 注入経路が無いため by-design で許可。
 ALLOWED_DOMAINS = {"light", "climate", "switch", "media_player", "cover", "fan", "script"}
 
 

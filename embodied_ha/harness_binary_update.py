@@ -503,7 +503,7 @@ def read_journal() -> dict[str, Any] | None:
         return None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # An unreadable journal still means "an update was open"; report it as
-        # such rather than as "no update", so reconcile() inspects the binary.
+        # such rather than as "no update", so reconcile inspects the binary.
         return {"phase": "unreadable"}
     return entry if isinstance(entry, dict) else {"phase": "unreadable"}
 

@@ -50,8 +50,8 @@ def _only_env(*keys):
 
 # game-mcp は CPU 戦(WordVec)で invoke-agent.sh 経由に選択ハーネスを再起動する唯一の MCP
 # サーバー。MCP サーバーは COMMON_ENV(明示 env)からのみ起動され親環境を継承しないため、
-# nested invoke に要る「選択ハーネス + その CLI パス/ホーム/認証/cwd」を game 限定で明示注入する
-# (Step4増分1b・sol H3)。ANTHROPIC_API_KEY 等の認証情報は全 MCP へ広げず、first-party の
+# nested invoke に要る「選択ハーネス + その CLI パス/ホーム/認証/cwd」を game 限定で明示注入する。
+# ANTHROPIC_API_KEY 等の認証情報は全 MCP へ広げず、first-party の
 # game サーバーだけに限定する(存在するものだけ渡す)。
 _GAME_NESTED_ENV_KEYS = (
     "EHA_AGENT_HARNESS", "EHA_AGENT_CWD",
@@ -166,7 +166,7 @@ SERVER_SPECS = {
     "ha": ServerSpec(lambda: _server("ha-mcp.py"), ("ha_get",)),  # 読み取り専用
     "hacontrol": ServerSpec(lambda: _server("ha-control-mcp.py"), ("ha_call_service",)),  # 家電操作
     # codex/agy は本環境の bwrap 制約でシェル経由 Read が不可。Claude の組み込み Read 相当を
-    # シェルなしで最小権限提供する(2026-07-22)。claude は policy deny 付き native Read を使うので通常は不要だが
+    # シェルなしで最小権限提供する。claude は policy deny 付き native Read を使うので通常は不要だが
     # ハーネス非依存で持たせておく。
     # ファイル読み取り(read-anything+secure-read・最小env)。テキストと画像を別ツールにしてある
     # (返り値の型が違い、画像は切り詰められないため)。
@@ -372,10 +372,8 @@ def _write_codex_profile(path, servers, allowed_tools):
     # Codex 0.144.4 + gpt-5.6-terra は tool_mode=code_mode_only で、MCP tool を
     # (1)モデルへ直接提示される定義層 と (2)exec の JS から ALL_TOOLS/tools.<name> で
     # 解決する遅延 registry 層 の二層で扱う。Terra は(1)だけを見て MCP tool を「利用不能」と
-    # 誤判定しうる(70-tool 隔離実験で無指示 0/70 正答・本 instruction で 70/70=2026-07-23 Codex
-    # red-team・[[embodied_ha_codex_tool_exposure_and_confab_2026-07-23]] F11-A1)。これは tool の
-    # 接続契約なので user prompt ではなく developer instruction に置く(F6 の files 限定・read_file
-    # 中心を全 MCP へ一般化)。model_instructions_file は built-in base instructions を置換するため使わない。
+    # 誤判定しうる。これは tool の接続契約なので user prompt ではなく developer instruction
+    # に置く。model_instructions_file は built-in base instructions を置換するため使わない。
     # 以下を英語にした当初の理由は履歴から確認できない。70ツール隔離実験の0/70→70/70は
     # この英語文で得た結果で、日本語版は未検証。
     # TODO(F-111): developer_instructions を日本語化し、同等のツール解決効果を再検証する。
@@ -412,7 +410,7 @@ def _write_codex_profile(path, servers, allowed_tools):
         # 非対話では承認する人間が居ないので、承認ゲートは「安全に手動承認」ではなく
         # 「ツールを永久に使えなくする」だけを意味しセキュリティ利益を持たない。よって
         # 全 server を自動承認する。files 限定では memory/ha/body/game 等 chat の全
-        # first-party tool が "user cancelled" で全滅すると実機E2Eで判明（2026-07-23・F10）。
+        # first-party tool が "user cancelled" で全滅すると実機E2Eで判明（F10）。
         lines.append('default_tools_approval_mode = "approve"')
         env = server.get("env") or {}
         if env:

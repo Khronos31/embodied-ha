@@ -62,6 +62,6 @@ def grant_file_read(allowed_tools: str, mcp_servers, harness: str) -> tuple[str,
         if "files" not in servers:
             # 既定の Codex モデルは大量の tool schema を選別するため、末尾へ足すと
             # read_file だけがモデルから見えなくなる。native Read の代替となる基本能力なので
-            # 先頭に置き、tool 選別時にも必ず残す（chat 側と同じ理由・2026-07-23）。
+            # 先頭に置き、tool 選別時にも必ず残す（chat 側と同じ理由）。
             servers = ("files",) + servers
     return allowed, servers

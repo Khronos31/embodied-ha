@@ -12,7 +12,7 @@ falls back to its built-in defaults (sonnet/medium, terra/medium, Gemini flash) 
 so an instance with no prefs behaves exactly as before (byte-safe for existing instances).
 
 Changes take effect on the next run.sh boot; the save endpoint self-restarts to
-apply them (save-then-restart contract, sol Med6).
+apply them (save-then-restart contract).
 """
 from __future__ import annotations
 
@@ -25,20 +25,20 @@ VALID_HARNESSES = ("claude", "codex", "agy")
 VALID_EFFORTS = ("low", "medium", "high")
 
 # Serialises the endpoint's load→merge→save so concurrent saves don't lose an
-# update (sol Med6/Low). os.replace() only prevents a torn file, not a lost write.
+# update. os.replace() only prevents a torn file, not a lost write.
 _save_lock = threading.Lock()
 
 
 def _has_control_chars(value: str) -> bool:
     """True if the string contains control chars (incl. the TSV/record separators
-    run.sh parses on). Blocks env-record injection via a crafted model name (sol High)."""
+    run.sh parses on). Blocks env-record injection via a crafted model name."""
     return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
 
 _PREFS_FILE_ENV = "EHA_AGENT_PREFS_FILE"
 _DEFAULT_PREFS_FILE = "/data/agent_prefs.json"
 
 # Per-harness mapping of logical field -> the exact env var invoke-agent.sh reads
-# for the default tier. Note codex's effort key is REASONING_EFFORT (sol Med6).
+# for the default tier. Note codex's effort key is REASONING_EFFORT.
 _ENV_KEY_MAP = {
     "claude": {"model": "EHA_CLAUDE_MODEL_DEFAULT", "effort": "EHA_CLAUDE_EFFORT_DEFAULT"},
     "codex": {"model": "EHA_CODEX_MODEL_DEFAULT", "effort": "EHA_CODEX_REASONING_EFFORT_DEFAULT"},
@@ -151,7 +151,7 @@ def save(prefs: dict) -> None:
 def update_default_tier(harness: str, model: str | None = None, effort: str | None = None) -> dict:
     """Validate, merge, and persist a default-tier change under a lock, returning the
     new prefs. Serialising load→merge→save prevents a concurrent save from dropping
-    the other field (sol Low)."""
+    the other field."""
     with _save_lock:
         updated = set_default_tier(harness, model=model, effort=effort)
         save(updated)

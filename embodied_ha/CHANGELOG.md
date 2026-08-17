@@ -8,6 +8,16 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.24] - 2026-08-17
+
+### Changed / 変更
+
+- コード内のコメントを整理しました。実装の判断がどこから来たかの記録（日付、レビューの参照、
+  誰が測ったか、居住者の名前）はコメントから外し、コードだけでは分からない制約の説明に絞りました。
+  動作は変わりません。
+  Tidied source comments: provenance notes (dates, review references, who measured what, resident
+  names) were removed, leaving the constraints that the code itself cannot express. No behaviour change.
+
 ## [2.1.23] - 2026-08-16
 
 ### Fixed / 修正
