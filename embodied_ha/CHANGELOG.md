@@ -8,6 +8,24 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.25] - 2026-08-18
+
+### Fixed / 修正
+
+- 自律ループが復旧しても「ループが止まっています」の通知が残り続けていた問題を直しました。
+  成功したときに通知を片付けます。
+  Fixed the "autonomous loop has stopped" notification lingering after the loop recovered; it is
+  now cleared on the next success.
+
+### Changed / 変更
+
+- 中身のない日誌を作る要求を、その場で断るようにしました。空の日誌ができると、その日の
+  記録は「日誌あり」とみなされて要約されないまま失われます。日次の要約は夜間に自動で
+  作られるので、手で作る必要はありません。
+  Requests to create an empty daybook are now refused. An empty daybook made that day look
+  already summarised, so its records were dropped. Daily summaries are produced automatically
+  overnight, so there is no need to build them by hand.
+
 ## [2.1.24] - 2026-08-17
 
 ### Changed / 変更

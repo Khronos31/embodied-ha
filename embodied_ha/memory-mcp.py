@@ -276,9 +276,34 @@ def list_episodes(args: dict[str, Any]):
     return _json_text(episodes)
 
 
+def _daybook_payload_is_empty(payload: Mapping[str, Any]) -> bool:
+    """中身のない生成要求か（要約・エピソード・テーマ等がすべて空）。"""
+    if _clean(payload.get("summary")):
+        return False
+    for key in ("episodes", "episode_ids", "themes", "highlights", "open_questions"):
+        value = payload.get(key)
+        # 空のコンテナは中身ではない。dictを無条件に中身とみなすと、`episodes: {}` が
+        # 自動生成の要約を持つ日誌になり、夜間バッチの空スタブ判定もすり抜ける。
+        if isinstance(value, dict) and value:
+            return False
+        if isinstance(value, (list, tuple)) and any(value):
+            return False
+    return True
+
+
 def build_daybook(args: dict[str, Any]):
     payload = _merge_payload(args, "daybook")
     date = _clean(payload.get("date") or payload.get("day"))
+    # 中身のない daybook を新規に作らせない。空の日誌ができると、その日の観察は
+    # 「日誌あり」とみなされて要約されないまま捨てられる。日次の要約は夜間に自動で
+    # 作られるので、ここで手動生成する必要はない。既存の日誌を読み直すだけの呼び出しは
+    # そのまま通す（この関数は既存があればそれを返す契約のため）。
+    if _daybook_payload_is_empty(payload) and not (date and ms.daybook_exists(LOG_DIR, date)):
+        return [text(
+            "中身のない daybook は作れません。summary か episodes/episode_ids を渡してください。"
+            "その日の要約が欲しいだけなら、日次の要約は夜間に自動で作られるので待てば済みます。"
+            "既にある日誌を読むには get_daybook を使ってください。"
+        )], True
     episodes = payload.get("episodes")
     if isinstance(episodes, dict):
         episodes = [episodes]
@@ -618,7 +643,9 @@ def main() -> None:
                 "name": "build_daybook",
                 "description": (
                     "指定日の daybook を生成・保存する。既存の daybook があれば、それをそのまま返す。\n"
-                    "episodes か episode_ids を渡して structured な日次圧縮を保存できる。"
+                    "episodes か episode_ids を渡して structured な日次圧縮を保存できる。\n"
+                    "日次の要約は夜間に自動で作られるので、その用途では呼ばなくてよい。\n"
+                    "中身（summary / episodes / episode_ids 等）が空の生成要求はエラーになる。"
                 ),
                 "inputSchema": {
                     "type": "object",

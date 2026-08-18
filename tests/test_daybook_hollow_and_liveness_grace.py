@@ -254,12 +254,15 @@ class McpDaybookSourceTests(unittest.TestCase):
     def _daybook(self, result) -> dict:
         return json.loads(result[0]["text"])
 
+    # 中身のない生成要求はハンドラが拒否するので、source を確かめるにも summary が要る。
     def test_default_source_is_mcp(self):
-        result = self.memory_mcp.build_daybook({"date": "2026-08-14"})
+        result = self.memory_mcp.build_daybook({"date": "2026-08-14", "summary": "静かな一日。"})
         self.assertEqual(self._daybook(result)["source"], "mcp")
 
     def test_explicit_source_is_preserved(self):
-        result = self.memory_mcp.build_daybook({"date": "2026-08-15", "source": "loop"})
+        result = self.memory_mcp.build_daybook(
+            {"date": "2026-08-15", "summary": "静かな一日。", "source": "loop"}
+        )
         self.assertEqual(self._daybook(result)["source"], "loop")
 
 
