@@ -80,6 +80,27 @@ class EmptyDaybookRequestTests(unittest.TestCase):
         })
         self.assertTrue(self._is_error(result))
 
+    def test_empty_containers_are_not_content(self):
+        """空のdict/listを中身とみなすと、自動生成の要約を持つ日誌ができて塞げなくなる。
+
+        `episodes: {}` はハンドラが `[{}]` へ正規化し、要約 "observation" と
+        episode_id を持つ日誌になる。夜間バッチの空スタブ判定にも引っかからないため、
+        その日の記録は永久に要約されない。
+        """
+        for key in ("episodes", "themes", "highlights", "open_questions"):
+            with self.subTest(key=key):
+                result = self._call({"date": "2026-08-19", key: {}})
+                self.assertTrue(self._is_error(result))
+                self.assertFalse(self.mcp.ms.daybook_exists(self.tmp.name, "2026-08-19"))
+
+    def test_missing_date_still_reaches_the_guidance(self):
+        """date を省いた呼び出しでも、原因不明のエラーではなく代替手段が伝わること。"""
+        result = self._call({})
+        self.assertTrue(self._is_error(result))
+        text = result[0][0]["text"]
+        self.assertIn("summary", text)
+        self.assertIn("get_daybook", text)
+
     def test_request_with_summary_is_accepted(self):
         result = self._call({"date": "2026-08-18", "summary": "静かな一日だった。"})
         self.assertFalse(self._is_error(result))
@@ -122,6 +143,20 @@ class LoopFailureNotificationRecoveryTests(unittest.TestCase):
         ):
             self.daemon.track_loop_outcome(True, trigger_reason="定期実行")
         dismiss.assert_not_called()
+
+    def test_failed_dismissal_is_retried_on_the_next_success(self):
+        """消去に失敗したら状態を進めない。進めると二度と再試行されない。"""
+        state = {"alerted_at": "2026-08-17T17:42:00+09:00"}
+        with (
+            mock.patch.object(self.daemon.invoke_failure, "read_state", return_value=state),
+            mock.patch.object(self.daemon.invoke_failure, "mark_success") as mark_success,
+            mock.patch.object(self.daemon, "dismiss_loop_failure_notification",
+                              return_value=False) as dismiss,
+        ):
+            self.daemon.track_loop_outcome(True, trigger_reason="定期実行")
+            self.daemon.track_loop_outcome(True, trigger_reason="定期実行")
+        self.assertEqual(dismiss.call_count, 2, "1回失敗したら次の成功で再試行すること")
+        mark_success.assert_not_called()
 
     def test_dismissal_targets_the_same_id_the_alert_uses(self):
         response = mock.MagicMock()

@@ -333,11 +333,15 @@ def track_loop_outcome(success: bool, *, trigger_reason: str) -> None:
             if success:
                 # 通知を出したまま回復すると、動いているのに警告が残る。HAの永続通知は
                 # Core再起動でしか消えないため、ここで明示的に片付ける。
-                was_alerted = bool(invoke_failure.read_state(_LOG_DIR).get("alerted_at"))
-                invoke_failure.mark_success(_LOG_DIR)
-                if was_alerted:
+                # ⚠️ 消去に成功したときだけ状態を進める。先に進めると、1回の通信失敗で
+                # 二度と再試行されず通知が残り続ける（障害明けの最初の成功は、HA側が
+                # まだ不安定な瞬間と重なりやすい）。
+                if not invoke_failure.read_state(_LOG_DIR).get("alerted_at"):
+                    invoke_failure.mark_success(_LOG_DIR)
+                    return
+                if dismiss_loop_failure_notification():
                     print("[daemon] loop failure recovered", flush=True)
-                    dismiss_loop_failure_notification()
+                    invoke_failure.mark_success(_LOG_DIR)
                 return
             state = invoke_failure.mark_failure(_LOG_DIR, source="loop", detail=trigger_reason)
             threshold = invoke_failure.alert_threshold()

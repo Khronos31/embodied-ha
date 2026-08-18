@@ -282,7 +282,9 @@ def _daybook_payload_is_empty(payload: Mapping[str, Any]) -> bool:
         return False
     for key in ("episodes", "episode_ids", "themes", "highlights", "open_questions"):
         value = payload.get(key)
-        if isinstance(value, dict):
+        # 空のコンテナは中身ではない。dictを無条件に中身とみなすと、`episodes: {}` が
+        # 自動生成の要約を持つ日誌になり、夜間バッチの空スタブ判定もすり抜ける。
+        if isinstance(value, dict) and value:
             return False
         if isinstance(value, (list, tuple)) and any(value):
             return False
@@ -296,7 +298,7 @@ def build_daybook(args: dict[str, Any]):
     # 「日誌あり」とみなされて要約されないまま捨てられる。日次の要約は夜間に自動で
     # 作られるので、ここで手動生成する必要はない。既存の日誌を読み直すだけの呼び出しは
     # そのまま通す（この関数は既存があればそれを返す契約のため）。
-    if _daybook_payload_is_empty(payload) and not ms.daybook_exists(LOG_DIR, date):
+    if _daybook_payload_is_empty(payload) and not (date and ms.daybook_exists(LOG_DIR, date)):
         return [text(
             "中身のない daybook は作れません。summary か episodes/episode_ids を渡してください。"
             "その日の要約が欲しいだけなら、日次の要約は夜間に自動で作られるので待てば済みます。"
