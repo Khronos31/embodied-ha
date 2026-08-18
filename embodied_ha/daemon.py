@@ -310,6 +310,14 @@ def dismiss_persistent_notification(notification_id: str, *, log_name: str) -> b
     return True
 
 
+def dismiss_loop_failure_notification() -> bool:
+    """Clear the loop-failure warning once the loop succeeds again."""
+    return dismiss_persistent_notification(
+        _LOOP_FAILURE_NOTIFICATION_ID,
+        log_name="loop failure",
+    )
+
+
 def dismiss_setup_wait_notification() -> bool:
     """Clear a setup reminder once runtime readiness has recovered."""
     return dismiss_persistent_notification(
@@ -323,7 +331,13 @@ def track_loop_outcome(success: bool, *, trigger_reason: str) -> None:
     try:
         with _loop_failure_lock:
             if success:
+                # 通知を出したまま回復すると、動いているのに警告が残る。HAの永続通知は
+                # Core再起動でしか消えないため、ここで明示的に片付ける。
+                was_alerted = bool(invoke_failure.read_state(_LOG_DIR).get("alerted_at"))
                 invoke_failure.mark_success(_LOG_DIR)
+                if was_alerted:
+                    print("[daemon] loop failure recovered", flush=True)
+                    dismiss_loop_failure_notification()
                 return
             state = invoke_failure.mark_failure(_LOG_DIR, source="loop", detail=trigger_reason)
             threshold = invoke_failure.alert_threshold()
