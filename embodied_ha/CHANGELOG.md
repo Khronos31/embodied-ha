@@ -8,6 +8,24 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.26] - 2026-08-19
+
+### Changed / 変更
+
+- 自律ループ（observe / explore）から関係性の記録を残せるようにしました。`update_relationship` と、
+  読み取り側の `get_relationship` / `get_social_state` / `get_shared_focus` を許可ツールへ追加しています。
+  従来これらはチャットからしか呼べず、エージェントCLIによっては呼び出しが失敗し続けるか、
+  ツール自体が見えていませんでした。
+  `update_social_state` は追加していません。このツールは「最後に交流した時刻」を無条件で
+  上書きするため、周期実行のループから呼ぶと、誰とも交流していなくてもその時刻が更新され続け、
+  経過時間が意味を失うためです。
+  The autonomous loop modes (observe / explore) can now record relationship notes. `update_relationship`
+  and the read-side `get_relationship` / `get_social_state` / `get_shared_focus` were added to the allowed
+  tools; previously they were reachable only from chat, so depending on the agent CLI the calls either
+  failed repeatedly or the tools were never visible. `update_social_state` was deliberately left out: it
+  overwrites the last-interaction timestamp unconditionally, so a periodic loop calling it would keep
+  resetting "time since the last interaction" even when no interaction happened.
+
 ## [2.1.25] - 2026-08-18
 
 ### Fixed / 修正
