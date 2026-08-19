@@ -69,6 +69,7 @@ def serve(name, version, tools):
     tools: {tool_name: {"spec": <MCP tool schema>, "handler": fn(args)->content|（content, is_error）}}
     """
     specs = [t["spec"] for t in tools.values()]
+    mcp_call_log.record(name, "", True, "server_start")
 
     for line in sys.stdin:
         line = line.strip()
@@ -100,11 +101,13 @@ def serve(name, version, tools):
         elif method == "tools/call":
             params = req.get("params", {})
             if not isinstance(params, dict):
+                mcp_call_log.record(name, "", False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue
             tool_name = params.get("name", "")
             if not isinstance(tool_name, str):
+                mcp_call_log.record(name, "", False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue
@@ -112,6 +115,7 @@ def serve(name, version, tools):
             if call_args is None:
                 call_args = {}
             elif not isinstance(call_args, dict):
+                mcp_call_log.record(name, tool_name, False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue

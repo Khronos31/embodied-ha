@@ -15,13 +15,15 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 - MCPツールの呼び出しをサーバー側で `log/mcp_tool_calls.jsonl` へ記録するようにしました。
   これまでツール利用の記録はエージェントCLIの出力から作っており、対応する形式を出さないCLIでは
   常に空でした。記録するのはサーバー名・ツール名・成否だけで、引数の値は含めません。
-  ⚠️ サーバーへ届いた呼び出しだけが残ります。CLIの権限層で止められた呼び出しや、
-  MCPを経由しない組み込みツールは対象外です。
+  サーバー起動時にも1行残すので、「呼び出しが0件」と「そのサーバーが起動していない」を区別できます。
+  ⚠️ 「行が無い＝呼んでいない」ではありません。CLIの権限層で止められた呼び出し、MCPを経由しない
+  組み込みツール、`EHA_LOG_DIR` を持たない `files` サーバーは、いずれもここに残りません。
   MCP tool calls are now recorded server-side in `log/mcp_tool_calls.jsonl`. Tool-usage facts were
   previously derived from the agent CLI's output stream, so they were always empty for CLIs that do not
   emit that format. Only the server name, tool name and success flag are stored — never argument values.
-  Note that only calls that reach the server are recorded; calls blocked by the CLI's permission layer,
-  and built-in tools that do not go through MCP, are not.
+  A line is also written when a server starts, so "no calls" can be told apart from "the server never ran".
+  An absent line does not mean the tool was not called: calls blocked by the CLI's permission layer,
+  built-in tools that bypass MCP, and the `files` server (which runs without `EHA_LOG_DIR`) never appear here.
 
 ## [2.1.26] - 2026-08-19
 

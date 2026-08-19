@@ -65,7 +65,7 @@ class McpCallLogTests(unittest.TestCase):
 
     def test_successful_call_is_recorded_without_argument_values(self):
         out = _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [_call()])
-        rows = _rows(self.log_dir)
+        rows = [r for r in _rows(self.log_dir) if r.get("reason") != "server_start"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["server"], "probe-mcp")
         self.assertEqual(rows[0]["tool"], "probe")
@@ -76,7 +76,7 @@ class McpCallLogTests(unittest.TestCase):
 
     def test_handler_error_tuple_is_recorded_as_failure(self):
         _run({"probe": _tool(lambda args: ([mcp_lib.text("だめ")], True))}, [_call()])
-        rows = _rows(self.log_dir)
+        rows = [r for r in _rows(self.log_dir) if r.get("reason") != "server_start"]
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["ok"])
 
@@ -85,7 +85,7 @@ class McpCallLogTests(unittest.TestCase):
             raise RuntimeError("boom")
 
         _run({"probe": _tool(boom)}, [_call(), _call("nope")])
-        rows = _rows(self.log_dir)
+        rows = [r for r in _rows(self.log_dir) if r.get("reason") != "server_start"]
         self.assertEqual([(r["tool"], r["ok"], r.get("reason")) for r in rows], [
             ("probe", False, "handler_exception"),
             ("nope", False, "unknown_tool"),
@@ -108,6 +108,26 @@ class McpCallLogTests(unittest.TestCase):
             if not line.strip():
                 continue
             self.assertEqual(json.loads(line)["jsonrpc"], "2.0")
+
+    def test_server_start_is_recorded_before_any_call(self):
+        _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [])
+        rows = _rows(self.log_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason"], "server_start")
+        self.assertEqual(rows[0]["server"], "probe-mcp")
+
+    def test_invalid_params_are_recorded(self):
+        bad = [
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": "not-a-dict"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": 7}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+             "params": {"name": "probe", "arguments": "住人の観察"}},
+        ]
+        _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, bad)
+        rows = [r for r in _rows(self.log_dir) if r.get("reason") != "server_start"]
+        self.assertEqual([r["reason"] for r in rows], ["invalid_params"] * 3)
+        self.assertEqual([r["tool"] for r in rows], ["", "", "probe"])
+        self.assertNotIn("住人の観察", json.dumps(rows, ensure_ascii=False))
 
     def test_no_log_dir_means_no_file_and_no_error(self):
         os.environ.pop("EHA_LOG_DIR", None)
