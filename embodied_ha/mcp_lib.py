@@ -26,7 +26,11 @@ stdio JSON-RPC (MCP) のボイラープレートをまとめ、各サーバー�
 （stdout は JSON-RPC 専用。ログは stderr へ）。
 """
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mcp_call_log  # noqa: E402
 
 
 def text(s):
@@ -113,6 +117,7 @@ def serve(name, version, tools):
                 continue
             tool = tools.get(tool_name)
             if not tool:
+                mcp_call_log.record(name, tool_name, False, "unknown_tool")
                 _send_result(id_, [text(f"未知のツール: {tool_name}")], True)
                 continue
             try:
@@ -121,8 +126,10 @@ def serve(name, version, tools):
                     content, is_error = out
                 else:
                     content, is_error = out, False
+                mcp_call_log.record(name, tool_name, not is_error)
                 _send_result(id_, content, is_error)
             except Exception as e:
+                mcp_call_log.record(name, tool_name, False, "handler_exception")
                 log(f"Tool handler failed ({tool_name}): {type(e).__name__}: {e}")
                 _send_result(id_, [text(f"ツール実行エラー（{tool_name}）")], True)
 
