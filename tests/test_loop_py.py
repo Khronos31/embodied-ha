@@ -999,13 +999,19 @@ class LoopPyStandaloneRunTests(unittest.TestCase):
                 for tool in required_tools:
                     self.assertIn(tool, cfg.allowed_tools.split(","))
 
-    def test_autonomous_modes_do_not_gain_relationship_or_social_state_writes(self):
+    def test_autonomous_modes_write_relationships_but_not_social_state(self):
         for mode in ("observe", "explore"):
             with self.subTest(mode=mode):
                 tools = set(loop.mode_config(mode).allowed_tools.split(","))
-                self.assertNotIn("mcp__sociality__update_relationship", tools)
+                self.assertIn("mcp__sociality__update_relationship", tools)
+                self.assertIn("mcp__sociality__get_relationship", tools)
+                self.assertIn("mcp__sociality__get_social_state", tools)
+                self.assertIn("mcp__sociality__get_shared_focus", tools)
+                # update_social_state overwrites last_interaction_ts unconditionally,
+                # so letting the periodic loop call it would reset "time since the
+                # last interaction" on every tick even when nobody interacted.
                 self.assertNotIn("mcp__sociality__update_social_state", tools)
-                # Existing person-boundary tools remain unchanged by this fix.
+                self.assertNotIn("mcp__sociality__set_shared_focus", tools)
                 self.assertIn("mcp__sociality__record_boundary", tools)
                 self.assertIn("mcp__sociality__record_consent", tools)
                 self.assertIn("mcp__sociality__ingest_interaction", tools)
