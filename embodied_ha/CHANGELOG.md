@@ -8,6 +8,21 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.27] - 2026-08-20
+
+### Added / 追加
+
+- MCPツールの呼び出しをサーバー側で `log/mcp_tool_calls.jsonl` へ記録するようにしました。
+  これまでツール利用の記録はエージェントCLIの出力から作っており、対応する形式を出さないCLIでは
+  常に空でした。記録するのはサーバー名・ツール名・成否だけで、引数の値は含めません。
+  ⚠️ サーバーへ届いた呼び出しだけが残ります。CLIの権限層で止められた呼び出しや、
+  MCPを経由しない組み込みツールは対象外です。
+  MCP tool calls are now recorded server-side in `log/mcp_tool_calls.jsonl`. Tool-usage facts were
+  previously derived from the agent CLI's output stream, so they were always empty for CLIs that do not
+  emit that format. Only the server name, tool name and success flag are stored — never argument values.
+  Note that only calls that reach the server are recorded; calls blocked by the CLI's permission layer,
+  and built-in tools that do not go through MCP, are not.
+
 ## [2.1.26] - 2026-08-19
 
 ### Changed / 変更
