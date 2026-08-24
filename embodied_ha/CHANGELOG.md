@@ -8,37 +8,21 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [2.1.31] - 2026-08-24
-
-### Fixed / 修正
-
-- ツール呼び出しの記録で、時刻がこの機器の時間帯にならないことがある問題を修正しました。
-  2.1.29 と 2.1.30 の対処は方向を取り違えており、環境によっては直っていませんでした。
-  時間帯の設定を各ツールサーバーへ確実に渡すようにしています。
-  Fixed tool-call log timestamps that could ignore this machine's timezone. The 2.1.29 and 2.1.30
-  attempts addressed the wrong layer and did not take effect on some setups; the timezone setting is
-  now passed explicitly to every tool server.
-
-## [2.1.30] - 2026-08-24
-
-### Fixed / 修正
-
-- 2.1.29 のタイムゾーン修正が、この機器の構成では効かない場合があったのを直しました。
-  地域設定の読み取り方を増やし、端末側の設定に左右されないようにしています。
-  Fixed the 2.1.29 timezone correction, which could still fall back to the environment on setups
-  where the expected system file is absent. The timezone is now resolved through several paths.
-
-## [2.1.29] - 2026-08-24
+## [2.1.31] - 2026-08-25
 
 ### Fixed / 修正
 
 - ツール呼び出しの記録（`log/mcp_tool_calls.jsonl`）で、時刻のタイムゾーンが行ごとに
-  食い違うことがある問題を修正しました。記録の時刻は端末の設定ではなく、この機器の地域設定に
-  従うようになります。書式も他のログと揃えました。
+  食い違うことがある問題を修正しました。ツールサーバーは起動のされ方によって時間帯の設定を
+  受け取らないことがあり、その場合は協定世界時で記録していました。設定を各サーバーへ確実に
+  渡すようにしたので、他のログと同じ時刻で並びます。書式もそちらへ揃えました。
   Fixed timestamps in the tool-call log (`log/mcp_tool_calls.jsonl`) that could carry different
-  timezone offsets from line to line. Timestamps now follow this machine's configured timezone
-  rather than the environment the tool server happened to start in, and the format matches the
-  other logs.
+  timezone offsets from line to line. Tool servers did not always receive the timezone setting
+  depending on how they were started, and fell back to UTC. The setting is now passed explicitly to
+  every tool server, so entries line up with the other logs; the format was aligned too.
+
+  （2.1.29 と 2.1.30 は同じ問題への対処でしたが、公開ビルドへ入る前に本版へ置き換わりました。
+  2.1.29 and 2.1.30 addressed the same issue but were superseded by this release before shipping.）
 
 ## [2.1.28] - 2026-08-24
 
