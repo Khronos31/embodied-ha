@@ -8,6 +8,17 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.31] - 2026-08-24
+
+### Fixed / 修正
+
+- ツール呼び出しの記録で、時刻がこの機器の時間帯にならないことがある問題を修正しました。
+  2.1.29 と 2.1.30 の対処は方向を取り違えており、環境によっては直っていませんでした。
+  時間帯の設定を各ツールサーバーへ確実に渡すようにしています。
+  Fixed tool-call log timestamps that could ignore this machine's timezone. The 2.1.29 and 2.1.30
+  attempts addressed the wrong layer and did not take effect on some setups; the timezone setting is
+  now passed explicitly to every tool server.
+
 ## [2.1.30] - 2026-08-24
 
 ### Fixed / 修正
