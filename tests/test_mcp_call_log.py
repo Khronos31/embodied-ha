@@ -151,6 +151,44 @@ class McpCallLogTests(unittest.TestCase):
         offsets = {r["timestamp"][-6:] for r in _rows(self.log_dir)}
         self.assertEqual(len(offsets), 1, f"オフセットが混ざっている: {offsets}")
 
+    def test_system_zone_is_found_even_without_etc_timezone_or_a_symlink(self):
+        # アドオンのベースイメージには /etc/timezone が無い。最初の実装はそこで
+        # 環境変数依存のフォールバックへ落ち、TZ=UTC の起動で UTC のまま記録していた。
+        import builtins
+
+        real_open, real_readlink = builtins.open, os.readlink
+
+        def no_timezone_file(path, *a, **k):
+            if str(path) == "/etc/timezone":
+                raise FileNotFoundError(path)
+            return real_open(path, *a, **k)
+
+        def no_symlink(path, *a, **k):
+            if str(path) == "/etc/localtime":
+                raise OSError("not a symlink")
+            return real_readlink(path, *a, **k)
+
+        baseline = mcp_call_log._now_ts()[-6:]
+        for patches in ({"open": no_timezone_file},
+                        {"open": no_timezone_file, "readlink": no_symlink}):
+            with mock.patch.dict(os.environ, {"TZ": "UTC"}), \
+                    mock.patch.object(builtins, "open", patches["open"]), \
+                    mock.patch.object(os, "readlink", patches.get("readlink", real_readlink)):
+                time.tzset()
+                importlib.reload(mcp_call_log)
+                self.assertEqual(mcp_call_log._now_ts()[-6:], baseline)
+        os.environ.pop("TZ", None)
+        time.tzset()
+        importlib.reload(mcp_call_log)
+
+    def test_resolving_the_zone_restores_the_tz_variable(self):
+        with mock.patch.dict(os.environ, {"TZ": "America/New_York"}):
+            importlib.reload(mcp_call_log)
+            self.assertEqual(os.environ.get("TZ"), "America/New_York")
+        os.environ.pop("TZ", None)
+        time.tzset()
+        importlib.reload(mcp_call_log)
+
     def test_timestamp_is_iso8601_with_a_colon_in_the_offset(self):
         _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [_call()])
         ts = _rows(self.log_dir)[0]["timestamp"]
