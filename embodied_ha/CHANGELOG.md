@@ -8,6 +8,18 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.29] - 2026-08-24
+
+### Fixed / 修正
+
+- ツール呼び出しの記録（`log/mcp_tool_calls.jsonl`）で、時刻のタイムゾーンが行ごとに
+  食い違うことがある問題を修正しました。記録の時刻は端末の設定ではなく、この機器の地域設定に
+  従うようになります。書式も他のログと揃えました。
+  Fixed timestamps in the tool-call log (`log/mcp_tool_calls.jsonl`) that could carry different
+  timezone offsets from line to line. Timestamps now follow this machine's configured timezone
+  rather than the environment the tool server happened to start in, and the format matches the
+  other logs.
+
 ## [2.1.28] - 2026-08-24
 
 ### Fixed / 修正
