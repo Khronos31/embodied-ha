@@ -15,7 +15,7 @@ from typing import Any
 
 from embodied_action import action_fields_for_move, apply_action_to_body_state
 from instance_identity import MQTT_PREFIX
-from mcp_lib import serve, text
+from mcp_lib import log, serve, text
 from room_graph import data_dir as _data_dir
 from room_graph import (
     initial_room,
@@ -185,8 +185,9 @@ def publish_body_presence(state: dict[str, Any]) -> None:
     ):
         try:
             subprocess.run(base + ["-r", "-t", topic, "-m", payload], capture_output=True, text=True, timeout=5)
-        except Exception:
-            pass
+        except Exception as exc:
+            # 黙って握り潰すと、身体位置が届いていないことに誰も気づけない。
+            log(f"[body-mcp] mqtt publish failed: {type(exc).__name__}")
 
 
 def get_location(args: dict[str, Any]):

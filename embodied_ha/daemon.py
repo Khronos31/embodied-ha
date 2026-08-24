@@ -31,7 +31,7 @@ import invoke_failure
 import wake_routing
 from instance_identity import MQTT_PREFIX
 from path_env import build_tools_path
-from state_utils import load_prefs
+from state_utils import load_prefs, read_json
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOG_DIR = os.environ.get("EHA_LOG_DIR", os.path.join(_SCRIPT_DIR, "log"))
@@ -498,6 +498,7 @@ def finish_body_state(loop_name, success, duration_seconds, *, spoke=False, acti
         spoke="yes" if spoke else "no",
         action="yes" if action_taken else "no",
     )
+    publish_body_location()
     return updated
 
 def tick_desires(body_state_snapshot=None, loop_name="loop", trigger_reason="", emit_active=True):
@@ -695,6 +696,25 @@ def mqtt_pub(topic, payload):
         )
     except Exception as e:
         print(f"[daemon] mqtt_pub error: {e}", flush=True)
+
+
+def publish_body_location():
+    """身体の位置を MQTT へ流す。
+
+    body-mcp 側にも同じ publish があるが、そちらは MQTT の接続情報を
+    MCP サーバーの env に必要とする。env 宣言を置き換えとして扱うかは
+    エージェントCLIごとに違い、守る側のCLIでは publish が黙って no-op になる。
+    接続情報を持つ daemon から流せば、CLIの違いに関係なく届く。
+    """
+    path = os.environ.get("EHA_BODY_LOCATION_FILE") or os.path.join(
+        os.environ.get("EHA_DATA_DIR") or _SCRIPT_DIR, "body_location.json")
+    state = read_json(path, {})
+    if not isinstance(state, dict) or not state:
+        return
+    physical_room = str(state.get("current_room") or "")
+    current_place = str(state.get("current_entity") or "") or "身体の中"
+    mqtt_pub(f"{MQTT_PREFIX}/body/physical_room/state", physical_room)
+    mqtt_pub(f"{MQTT_PREFIX}/body/current_place/state", current_place)
 
 
 def on_chat_trigger(payload):
@@ -1004,6 +1024,7 @@ def start_runtime_threads() -> bool:
         print("[daemon] concentrate-hearing cleanup enabled", flush=True)
         threading.Thread(target=camera_history.run_from_environment, daemon=True).start()
         print("[daemon] camera history worker enabled", flush=True)
+        publish_body_location()
         print("[daemon] started (I/O + loop-sched)", flush=True)
         _runtime_started.set()
         return True
