@@ -8,6 +8,15 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.30] - 2026-08-24
+
+### Fixed / 修正
+
+- 2.1.29 のタイムゾーン修正が、この機器の構成では効かない場合があったのを直しました。
+  地域設定の読み取り方を増やし、端末側の設定に左右されないようにしています。
+  Fixed the 2.1.29 timezone correction, which could still fall back to the environment on setups
+  where the expected system file is absent. The timezone is now resolved through several paths.
+
 ## [2.1.29] - 2026-08-24
 
 ### Fixed / 修正
