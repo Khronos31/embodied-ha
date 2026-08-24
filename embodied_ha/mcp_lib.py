@@ -26,7 +26,11 @@ stdio JSON-RPC (MCP) のボイラープレートをまとめ、各サーバー�
 （stdout は JSON-RPC 専用。ログは stderr へ）。
 """
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mcp_call_log  # noqa: E402
 
 
 def text(s):
@@ -65,6 +69,7 @@ def serve(name, version, tools):
     tools: {tool_name: {"spec": <MCP tool schema>, "handler": fn(args)->content|（content, is_error）}}
     """
     specs = [t["spec"] for t in tools.values()]
+    mcp_call_log.record(name, "", True, "server_start")
 
     for line in sys.stdin:
         line = line.strip()
@@ -96,11 +101,13 @@ def serve(name, version, tools):
         elif method == "tools/call":
             params = req.get("params", {})
             if not isinstance(params, dict):
+                mcp_call_log.record(name, "", False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue
             tool_name = params.get("name", "")
             if not isinstance(tool_name, str):
+                mcp_call_log.record(name, "", False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue
@@ -108,11 +115,13 @@ def serve(name, version, tools):
             if call_args is None:
                 call_args = {}
             elif not isinstance(call_args, dict):
+                mcp_call_log.record(name, tool_name, False, "invalid_params")
                 if id_ is not None:
                     _send_error(id_, -32602, "Invalid params")
                 continue
             tool = tools.get(tool_name)
             if not tool:
+                mcp_call_log.record(name, tool_name, False, "unknown_tool")
                 _send_result(id_, [text(f"未知のツール: {tool_name}")], True)
                 continue
             try:
@@ -121,8 +130,10 @@ def serve(name, version, tools):
                     content, is_error = out
                 else:
                     content, is_error = out, False
+                mcp_call_log.record(name, tool_name, not is_error)
                 _send_result(id_, content, is_error)
             except Exception as e:
+                mcp_call_log.record(name, tool_name, False, "handler_exception")
                 log(f"Tool handler failed ({tool_name}): {type(e).__name__}: {e}")
                 _send_result(id_, [text(f"ツール実行エラー（{tool_name}）")], True)
 

@@ -8,6 +8,37 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.28] - 2026-08-24
+
+### Fixed / 修正
+
+- 身体の位置を示すセンサーが `unknown` のまま更新されないことがある問題を修正しました。
+  位置の通知はこれまでツール側からのみ行っており、必要な接続情報が渡らないエージェントCLIでは
+  黙って行われないままでした。アドオン本体からも通知するようにしたので、起動直後と各ループの
+  完了時に必ず反映されます。
+  Fixed body-location sensors that could stay at `unknown`. The location was previously published only
+  from the tool layer, which silently did nothing on agent CLIs that do not receive the connection
+  settings. The add-on itself now publishes as well — at startup and after each loop.
+- 個体の名前が、ツールの説明文で既定の「エージェント」になることがある問題を修正しました。
+  Fixed the individual's own name falling back to a generic default in a tool description.
+
+## [2.1.27] - 2026-08-20
+
+### Added / 追加
+
+- MCPツールの呼び出しをサーバー側で `log/mcp_tool_calls.jsonl` へ記録するようにしました。
+  これまでツール利用の記録はエージェントCLIの出力から作っており、対応する形式を出さないCLIでは
+  常に空でした。記録するのはサーバー名・ツール名・成否だけで、引数の値は含めません。
+  サーバー起動時にも1行残すので、「呼び出しが0件」と「そのサーバーが起動していない」を区別できます。
+  ⚠️ 「行が無い＝呼んでいない」ではありません。CLIの権限層で止められた呼び出し、MCPを経由しない
+  組み込みツール、`EHA_LOG_DIR` を持たない `files` サーバーは、いずれもここに残りません。
+  MCP tool calls are now recorded server-side in `log/mcp_tool_calls.jsonl`. Tool-usage facts were
+  previously derived from the agent CLI's output stream, so they were always empty for CLIs that do not
+  emit that format. Only the server name, tool name and success flag are stored — never argument values.
+  A line is also written when a server starts, so "no calls" can be told apart from "the server never ran".
+  An absent line does not mean the tool was not called: calls blocked by the CLI's permission layer,
+  built-in tools that bypass MCP, and the `files` server (which runs without `EHA_LOG_DIR`) never appear here.
+
 ## [2.1.26] - 2026-08-19
 
 ### Changed / 変更

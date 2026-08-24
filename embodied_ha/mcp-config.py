@@ -148,7 +148,15 @@ SERVER_SPECS = {
         lambda: _server("audio-mcp.py", extra_env={"EHA_AGENT_HARNESS": SELECTED_HARNESS or None}),
         _audio_tools,
     ),
-    "body": ServerSpec(lambda: _server("body-mcp.py"), (
+    # EHA_CHARACTER_NAME は COMMON_ENV に無く、宣言した env だけを渡すハーネスでは
+    # get_location の説明が既定の「エージェント」になり、個体が自分の名前で
+    # 呼ばれなくなる。秘密ではないので body へ明示的に渡す。
+    # ⚠️ MQTT の接続情報はここへ足さない。agy 向け設定はモデルが読めるファイルへ
+    # そのまま書き出され、秘密の退避対象は _SENSITIVE_ENV_KEYS だけである。
+    # 身体位置の publish は daemon 側(full env)から行う。
+    "body": ServerSpec(lambda: _server("body-mcp.py", extra_env={
+        "EHA_CHARACTER_NAME": os.environ.get("EHA_CHARACTER_NAME"),
+    }), (
         "get_location",
         "move_to",
         "enter_cyberspace",
