@@ -1,11 +1,14 @@
+import datetime as dt
 import importlib
 import io
 import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "embodied_ha"))
 
@@ -128,6 +131,32 @@ class McpCallLogTests(unittest.TestCase):
         self.assertEqual([r["reason"] for r in rows], ["invalid_params"] * 3)
         self.assertEqual([r["tool"] for r in rows], ["", "", "probe"])
         self.assertNotIn("住人の観察", json.dumps(rows, ensure_ascii=False))
+
+    def test_timestamp_offset_does_not_follow_the_tz_variable(self):
+        # MCPサーバーはエージェントCLIが起動するため、起動のしかたで TZ が付いたり
+        # 付かなかったりする。オフセットが混ざると行を文字列で並べ替えられなくなる。
+        offsets = []
+        for tz in ("UTC", "America/New_York", ""):
+            env = {"EHA_LOG_DIR": self.log_dir}
+            if tz:
+                env["TZ"] = tz
+            with mock.patch.dict(os.environ, env, clear=False):
+                if tz:
+                    time.tzset()
+                importlib.reload(mcp_call_log)
+                importlib.reload(mcp_lib)
+                _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [_call()])
+        os.environ.pop("TZ", None)
+        time.tzset()
+        offsets = {r["timestamp"][-6:] for r in _rows(self.log_dir)}
+        self.assertEqual(len(offsets), 1, f"オフセットが混ざっている: {offsets}")
+
+    def test_timestamp_is_iso8601_with_a_colon_in_the_offset(self):
+        _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [_call()])
+        ts = _rows(self.log_dir)[0]["timestamp"]
+        self.assertRegex(ts, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
+        parsed = dt.datetime.fromisoformat(ts)
+        self.assertIsNotNone(parsed.tzinfo)
 
     def test_no_log_dir_means_no_file_and_no_error(self):
         os.environ.pop("EHA_LOG_DIR", None)

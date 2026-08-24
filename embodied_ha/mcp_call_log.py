@@ -17,12 +17,36 @@
 サーバー起動時にも1行（`reason=server_start`）を残す。「呼び出し0件」と
 「そもそもそのサーバーが起動していない／配線が切れている」を区別するため。
 """
+import datetime as _dt
 import json
 import os
 import sys
-import time
+import zoneinfo
 
 _MAX_BYTES = 2 * 1024 * 1024
+_TZ = None
+
+
+def _local_tz():
+    """コンテナの地域設定から現地時刻の時間帯を得る。
+
+    `TZ` 環境変数は見ない。MCPサーバーはエージェントCLIが起動するため、
+    起動のしかたによって `TZ` が付いたり付かなかったりし、同じログの中で
+    オフセットが混ざる（実測: 同一分内に +00:00 と +09:00 が並んだ）。
+    オフセットが混ざると、行を文字列として並べ替えたときに順序が狂う。
+    """
+    global _TZ
+    if _TZ is None:
+        try:
+            with open("/etc/timezone", encoding="utf-8") as fh:
+                _TZ = zoneinfo.ZoneInfo(fh.read().strip())
+        except Exception:
+            _TZ = _dt.datetime.now().astimezone().tzinfo
+    return _TZ
+
+
+def _now_ts():
+    return _dt.datetime.now(_local_tz()).isoformat(timespec="seconds")
 
 
 def _log_path():
@@ -55,7 +79,7 @@ def record(server, tool, ok, reason=""):
     if not path:
         return
     row = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "timestamp": _now_ts(),
         "server": str(server),
         "tool": str(tool),
         "ok": bool(ok),
