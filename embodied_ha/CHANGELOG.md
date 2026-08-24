@@ -8,6 +8,20 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.28] - 2026-08-24
+
+### Fixed / 修正
+
+- 身体の位置を示すセンサーが `unknown` のまま更新されないことがある問題を修正しました。
+  位置の通知はこれまでツール側からのみ行っており、必要な接続情報が渡らないエージェントCLIでは
+  黙って行われないままでした。アドオン本体からも通知するようにしたので、起動直後と各ループの
+  完了時に必ず反映されます。
+  Fixed body-location sensors that could stay at `unknown`. The location was previously published only
+  from the tool layer, which silently did nothing on agent CLIs that do not receive the connection
+  settings. The add-on itself now publishes as well — at startup and after each loop.
+- 個体の名前が、ツールの説明文で既定の「エージェント」になることがある問題を修正しました。
+  Fixed the individual's own name falling back to a generic default in a tool description.
+
 ## [2.1.27] - 2026-08-20
 
 ### Added / 追加
