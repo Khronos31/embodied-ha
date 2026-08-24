@@ -8,6 +8,22 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.31] - 2026-08-25
+
+### Fixed / 修正
+
+- ツール呼び出しの記録（`log/mcp_tool_calls.jsonl`）で、時刻のタイムゾーンが行ごとに
+  食い違うことがある問題を修正しました。ツールサーバーは起動のされ方によって時間帯の設定を
+  受け取らないことがあり、その場合は協定世界時で記録していました。設定を各サーバーへ確実に
+  渡すようにしたので、他のログと同じ時刻で並びます。書式もそちらへ揃えました。
+  Fixed timestamps in the tool-call log (`log/mcp_tool_calls.jsonl`) that could carry different
+  timezone offsets from line to line. Tool servers did not always receive the timezone setting
+  depending on how they were started, and fell back to UTC. The setting is now passed explicitly to
+  every tool server, so entries line up with the other logs; the format was aligned too.
+
+  （2.1.29 と 2.1.30 は同じ問題への対処でしたが、公開ビルドへ入る前に本版へ置き換わりました。
+  2.1.29 and 2.1.30 addressed the same issue but were superseded by this release before shipping.）
+
 ## [2.1.28] - 2026-08-24
 
 ### Fixed / 修正

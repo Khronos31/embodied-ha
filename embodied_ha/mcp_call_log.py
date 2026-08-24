@@ -17,12 +17,27 @@
 サーバー起動時にも1行（`reason=server_start`）を残す。「呼び出し0件」と
 「そもそもそのサーバーが起動していない／配線が切れている」を区別するため。
 """
+import datetime as _dt
 import json
 import os
 import sys
-import time
 
 _MAX_BYTES = 2 * 1024 * 1024
+
+
+def _now_ts():
+    """記録用の時刻。この機器が使っている時間帯で書く。
+
+    時間帯は `TZ` から決まる。アドオン本体のログも同じ決め方なので、
+    そちらと突き合わせられる。⚠️ コンテナの `/etc/localtime` は UTC で、
+    現地時刻になっているのは `TZ` のおかげ——`/etc` を見に行ってはいけない。
+
+    `TZ` は `mcp-config.py` が各サーバーへ明示的に渡す。継承に頼ると、
+    エージェントCLIによっては付かず、同じログの中でオフセットが混ざる
+    （実測: 同一分内に +00:00 と +09:00 の行が並んだ）。混ざると、行を
+    文字列として並べ替えたときに順序が狂う。
+    """
+    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _log_path():
@@ -55,7 +70,7 @@ def record(server, tool, ok, reason=""):
     if not path:
         return
     row = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "timestamp": _now_ts(),
         "server": str(server),
         "tool": str(tool),
         "ok": bool(ok),

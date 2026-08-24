@@ -89,6 +89,12 @@ MINIMAL_ENV = {"PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/u
 
 def _server(script, extra_args=None, extra_env=None, base_env=None):
     env = dict(COMMON_ENV if base_env is None else base_env)
+    # TZ は最小 env のサーバーにも渡す。無いとコンテナ既定の UTC で時刻を書き、
+    # 同じログの中でオフセットが混ざる(実測: 同一分内に +00:00 と +09:00 が並んだ)。
+    # 秘密ではないので、絞り込みの意図(SUPERVISOR_TOKEN 等を渡さない)を損なわない。
+    tz = os.environ.get("TZ")
+    if tz:
+        env["TZ"] = tz
     if extra_env:
         env.update({k: str(v) for k, v in extra_env.items() if v is not None})
     return {

@@ -68,6 +68,26 @@ class BodyServerEnvTests(unittest.TestCase):
         self.assertNotIn("SUPERSECRETPW", raw)
         self.assertNotIn("TOKENVALUE", raw)
 
+    def test_timezone_reaches_every_server_including_the_minimal_ones(self):
+        # TZ が無いサーバーはコンテナ既定の UTC で時刻を書き、同じログの中で
+        # オフセットが混ざる。秘密ではないので最小 env のサーバーにも渡す。
+        with tempfile.TemporaryDirectory() as tmp:
+            config, _ = _run({"TZ": "Asia/Tokyo", "SUPERVISOR_TOKEN": "t"}, tmp,
+                             servers=("body", "sociality", "files", "memory", "sensors", "audio"))
+        for name, server in config["mcpServers"].items():
+            self.assertEqual((server.get("env") or {}).get("TZ"), "Asia/Tokyo",
+                             f"{name} に TZ が渡っていない")
+
+    def test_timezone_does_not_widen_the_minimal_servers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config, _ = _run({"TZ": "Asia/Tokyo", "SUPERVISOR_TOKEN": "t", **MQTT_ENV}, tmp,
+                             servers=("sociality", "files"))
+        for name in ("sociality", "files"):
+            env = config["mcpServers"][name]["env"]
+            self.assertNotIn("SUPERVISOR_TOKEN", env)
+            for key in MQTT_KEYS:
+                self.assertNotIn(key, env)
+
     def test_sociality_still_has_no_supervisor_token(self):
         with tempfile.TemporaryDirectory() as tmp:
             config, _ = _run({"SUPERVISOR_TOKEN": "t"}, tmp, servers=("body", "sociality"))
