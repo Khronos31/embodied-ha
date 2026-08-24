@@ -21,67 +21,23 @@ import datetime as _dt
 import json
 import os
 import sys
-import time
-import zoneinfo
 
 _MAX_BYTES = 2 * 1024 * 1024
 
 
-def _system_tz():
-    """この機器の地域設定から時間帯を得る。`TZ` 環境変数は見ない。
-
-    MCPサーバーはエージェントCLIが起動するため、起動のしかたによって `TZ` が
-    付いたり付かなかったりし、同じログの中でオフセットが混ざる
-    （実測: 同一分内に +00:00 と +09:00 の行が並んだ）。混ざると、行を文字列として
-    並べ替えたときに順序が狂う。
-
-    解決の順:
-      1. `/etc/timezone`（地域名が書かれていれば一番素直）
-      2. `/etc/localtime` のリンク先から地域名を取る
-      3. `TZ` を一時的に外して既定の時間帯を読む
-         （1と2はイメージによっては存在しない。3はシステムの設定さえあれば効く）
-
-    3は環境変数を一瞬だけ変える。モジュールの読み込み時に一度だけ行い、
-    スレッドが立つ前に終える。
-    """
-    try:
-        with open("/etc/timezone", encoding="utf-8") as fh:
-            name = fh.read().strip()
-        if name:
-            return zoneinfo.ZoneInfo(name)
-    except Exception:
-        pass
-    try:
-        target = os.readlink("/etc/localtime")
-        marker = "zoneinfo/"
-        if marker in target:
-            return zoneinfo.ZoneInfo(target.split(marker, 1)[1])
-    except Exception:
-        pass
-    saved = os.environ.pop("TZ", None)
-    try:
-        time.tzset()
-        return _dt.datetime.now().astimezone().tzinfo
-    except Exception:
-        return _dt.datetime.now().astimezone().tzinfo
-    finally:
-        if saved is not None:
-            os.environ["TZ"] = saved
-        try:
-            time.tzset()
-        except Exception:
-            pass
-
-
-_TZ = _system_tz()
-
-
-def _local_tz():
-    return _TZ
-
-
 def _now_ts():
-    return _dt.datetime.now(_local_tz()).isoformat(timespec="seconds")
+    """記録用の時刻。この機器が使っている時間帯で書く。
+
+    時間帯は `TZ` から決まる。アドオン本体のログも同じ決め方なので、
+    そちらと突き合わせられる。⚠️ コンテナの `/etc/localtime` は UTC で、
+    現地時刻になっているのは `TZ` のおかげ——`/etc` を見に行ってはいけない。
+
+    `TZ` は `mcp-config.py` が各サーバーへ明示的に渡す。継承に頼ると、
+    エージェントCLIによっては付かず、同じログの中でオフセットが混ざる
+    （実測: 同一分内に +00:00 と +09:00 の行が並んだ）。混ざると、行を
+    文字列として並べ替えたときに順序が狂う。
+    """
+    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _log_path():

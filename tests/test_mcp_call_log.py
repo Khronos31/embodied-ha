@@ -132,59 +132,16 @@ class McpCallLogTests(unittest.TestCase):
         self.assertEqual([r["tool"] for r in rows], ["", "", "probe"])
         self.assertNotIn("住人の観察", json.dumps(rows, ensure_ascii=False))
 
-    def test_timestamp_offset_does_not_follow_the_tz_variable(self):
-        # MCPサーバーはエージェントCLIが起動するため、起動のしかたで TZ が付いたり
-        # 付かなかったりする。オフセットが混ざると行を文字列で並べ替えられなくなる。
-        offsets = []
-        for tz in ("UTC", "America/New_York", ""):
-            env = {"EHA_LOG_DIR": self.log_dir}
-            if tz:
-                env["TZ"] = tz
-            with mock.patch.dict(os.environ, env, clear=False):
-                if tz:
-                    time.tzset()
-                importlib.reload(mcp_call_log)
-                importlib.reload(mcp_lib)
-                _run({"probe": _tool(lambda args: [mcp_lib.text("ok")])}, [_call()])
-        os.environ.pop("TZ", None)
-        time.tzset()
-        offsets = {r["timestamp"][-6:] for r in _rows(self.log_dir)}
-        self.assertEqual(len(offsets), 1, f"オフセットが混ざっている: {offsets}")
-
-    def test_system_zone_is_found_even_without_etc_timezone_or_a_symlink(self):
-        # アドオンのベースイメージには /etc/timezone が無い。最初の実装はそこで
-        # 環境変数依存のフォールバックへ落ち、TZ=UTC の起動で UTC のまま記録していた。
-        import builtins
-
-        real_open, real_readlink = builtins.open, os.readlink
-
-        def no_timezone_file(path, *a, **k):
-            if str(path) == "/etc/timezone":
-                raise FileNotFoundError(path)
-            return real_open(path, *a, **k)
-
-        def no_symlink(path, *a, **k):
-            if str(path) == "/etc/localtime":
-                raise OSError("not a symlink")
-            return real_readlink(path, *a, **k)
-
-        baseline = mcp_call_log._now_ts()[-6:]
-        for patches in ({"open": no_timezone_file},
-                        {"open": no_timezone_file, "readlink": no_symlink}):
-            with mock.patch.dict(os.environ, {"TZ": "UTC"}), \
-                    mock.patch.object(builtins, "open", patches["open"]), \
-                    mock.patch.object(os, "readlink", patches.get("readlink", real_readlink)):
+    def test_timestamp_uses_the_configured_timezone(self):
+        # コンテナ既定は UTC で、現地時刻になるのは TZ のおかげ。アドオン本体のログも
+        # 同じ決め方なので、TZ に従うことで両者を突き合わせられる。
+        # TZ は mcp-config.py が各サーバーへ明示的に渡す（継承に頼らない）。
+        for tz, expected in (("Asia/Tokyo", "+09:00"), ("UTC", "+00:00")):
+            with mock.patch.dict(os.environ, {"TZ": tz, "EHA_LOG_DIR": self.log_dir}):
                 time.tzset()
                 importlib.reload(mcp_call_log)
-                self.assertEqual(mcp_call_log._now_ts()[-6:], baseline)
-        os.environ.pop("TZ", None)
-        time.tzset()
-        importlib.reload(mcp_call_log)
-
-    def test_resolving_the_zone_restores_the_tz_variable(self):
-        with mock.patch.dict(os.environ, {"TZ": "America/New_York"}):
-            importlib.reload(mcp_call_log)
-            self.assertEqual(os.environ.get("TZ"), "America/New_York")
+                self.assertTrue(mcp_call_log._now_ts().endswith(expected),
+                                f"TZ={tz} で {expected} にならない: {mcp_call_log._now_ts()}")
         os.environ.pop("TZ", None)
         time.tzset()
         importlib.reload(mcp_call_log)
