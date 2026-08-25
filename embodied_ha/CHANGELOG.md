@@ -8,6 +8,17 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.32] - 2026-08-25
+
+### Fixed / 修正
+
+- Antigravity を使う個体が、読めるはずのファイルを「セキュリティで読めない」と判断してしまう問題を
+  修正しました。ファイルの読み取り口が2系統あり、指示文が使えない側を例として挙げていたためです。
+  設定ファイルや、ツールの引数仕様を書いた一覧が読めるようになります。
+  Fixed individuals on Antigravity concluding that readable files were blocked by security. Two file-reading
+  paths exist and the instructions named the unusable one as an example. Configuration files and the tool
+  schema manifest are now reachable.
+
 ## [2.1.31] - 2026-08-25
 
 ### Fixed / 修正
