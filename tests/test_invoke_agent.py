@@ -1454,7 +1454,11 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertIn(".agents/mcp_config.json", prompt)
             self.assertIn("調査対象にしないでください", prompt)
             self.assertIn("native command、write_file、shell、terminal", prompt)
-            self.assertIn("read_file、WebSearch等", prompt)
+            # ファイルの読み口は files サーバーに寄せる。組み込みの read_file は同名で、
+            # /config・/data が deny されているため、名指しで勧めると必ず失敗する方へ誘導する。
+            self.assertIn("files サーバーの read_file", prompt)
+            self.assertIn("view_file", prompt)
+            self.assertNotIn("read_file、WebSearch等", prompt)
             self.assertIn("確認できない事実は推測で補わず", prompt)
 
     def test_agy_without_mcp_does_not_add_headless_tool_instruction(self):
