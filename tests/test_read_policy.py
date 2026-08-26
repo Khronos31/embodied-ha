@@ -28,11 +28,15 @@ class SystemGeneratedExceptionTests(unittest.TestCase):
     def test_spilled_tool_output_is_readable(self):
         self.assertEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/steps/10/output.txt"), "")
 
-    def test_transcript_in_the_same_branch_is_readable(self):
-        # ⚠️ ここには注入したプロンプト全文とモデルの思考過程が入る。
-        # 「小さければ提示されていたもの」ではなく、開示は増える。枝ごと開ける判断。
-        self.assertEqual(
-            read_policy.read_deny_reason(f"{AGY_BRAIN}/logs/transcript_full.jsonl"), "")
+    def test_transcript_and_thinking_log_stay_denied(self):
+        # logs/ には注入したプロンプト全文とモデルの思考過程が入る。
+        # 「小さければ提示されていたもの」ではないので開けない。
+        for leaf in ("logs/transcript.jsonl", "logs/transcript_full.jsonl"):
+            with self.subTest(leaf=leaf):
+                self.assertNotEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/{leaf}"), "")
+
+    def test_agent_messages_are_readable(self):
+        self.assertEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/messages/abc.json"), "")
 
     def test_credentials_and_config_stay_denied(self):
         for path in (
@@ -52,7 +56,7 @@ class SystemGeneratedExceptionTests(unittest.TestCase):
                 self.assertNotEqual(read_policy.read_deny_reason(path), "")
 
     def test_only_the_addon_data_directory_is_opened(self):
-        for leaf in ("steps/1/output.txt", "logs/transcript_full.jsonl", "messages/1.json"):
+        for leaf in ("steps/1/output.txt", "messages/1.json"):
             with self.subTest(leaf=leaf):
                 self.assertEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/{leaf}"), "")
                 self.assertNotEqual(read_policy.read_deny_reason(f"{DEV_BRAIN}/{leaf}"), "")

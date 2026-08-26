@@ -26,7 +26,7 @@ _DENIED_COMPONENTS = frozenset({
 # (/config/.tools/... 配下)にも同じ形の枝があり、そこには非公開の資料から
 # 組み立てたプロンプト全文が入る。アドオンは config を map しているので届く。
 _SPILL_PATTERN = re.compile(
-    r"^/data/\.gemini/antigravity-cli/brain/[^/]+/\.system_generated/(?:steps|messages|logs)/"
+    r"^/data/\.gemini/antigravity-cli/brain/[^/]+/\.system_generated/(?:steps|messages)/"
 )
 
 CLAUDE_DENY_RULES = (
@@ -60,9 +60,10 @@ def read_deny_reason(path: str) -> str:
     # Antigravity は大きい MCP ツール結果を .system_generated 配下へ退避する。そこが
     # 読めないと「出力が大きいほど届かない」状態になり、ツールを呼べても結果を受け取れない。
     # `steps/` に置かれるのは、小さければそのまま提示されていたツール結果。
-    # ⚠️ 同じ枝の `logs/` と `messages/` には、注入したプロンプト全文とモデルの
-    # 思考過程が入る。これは「提示されていたもの」ではない。枝ごと開ける判断であり、
-    # 開示は増える。範囲を広げるときはこの点を踏まえること。
+    # `messages/` はエージェント間のメッセージ(sender/recipient/content)。
+    # ⚠️ 同じ枝の `logs/` は開けない。そこには注入したプロンプト全文とモデルの
+    # 思考過程が入り、「提示されていたもの」ではないため。範囲を広げるときは
+    # それが自己の思考を一次資料として読み返せることを意味する点を踏まえること。
     if _SPILL_PATTERN.match(normalized):
         return ""
     if components & _DENIED_COMPONENTS:
