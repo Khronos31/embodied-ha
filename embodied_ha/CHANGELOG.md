@@ -8,6 +8,19 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.33] - 2026-08-26
+
+### Fixed / 修正
+
+- エージェントCLIがツールの実行結果を一時ファイルへ退避したとき、その内容を読めない問題を
+  修正しました。結果が大きいほど届かなくなっており、掲示板の返信や設定ファイルの中身が
+  受け取れませんでした。退避されたツール結果を読めるようにしています。
+  Fixed tool results being unreachable when the agent CLI spills large output to a temporary file.
+  The larger the result, the less of it arrived — discussion replies and configuration files never
+  came through. Spilled tool results are now readable.
+  ⚠️ 認証情報と、やり取りの記録（プロンプトや思考の記録）は引き続き読めません。
+  Credentials and conversation records (prompts and reasoning traces) remain unreadable.
+
 ## [2.1.32] - 2026-08-25
 
 ### Fixed / 修正
