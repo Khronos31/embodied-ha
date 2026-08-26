@@ -11,6 +11,10 @@ import read_policy
 
 
 AGY_BRAIN = "/data/.gemini/antigravity-cli/brain/1c0e-0d29/.system_generated"
+# 開発機側の作業ディレクトリ。同じ形の枝があり、非公開の資料から組み立てた
+# プロンプト全文が入る。アドオンは config を map しているので届いてしまう。
+DEV_BRAIN = ("/config/.tools/antigravity-home/.gemini/antigravity-cli"
+             "/brain/1c0e-0d29/.system_generated")
 
 
 class SystemGeneratedExceptionTests(unittest.TestCase):
@@ -25,8 +29,8 @@ class SystemGeneratedExceptionTests(unittest.TestCase):
         self.assertEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/steps/10/output.txt"), "")
 
     def test_transcript_in_the_same_branch_is_readable(self):
-        # 退避先のパスの形は提供元の実装しだいなので、枝ごと開ける判断
-        # （中身に秘密が無いことは実測済み）。
+        # ⚠️ ここには注入したプロンプト全文とモデルの思考過程が入る。
+        # 「小さければ提示されていたもの」ではなく、開示は増える。枝ごと開ける判断。
         self.assertEqual(
             read_policy.read_deny_reason(f"{AGY_BRAIN}/logs/transcript_full.jsonl"), "")
 
@@ -44,6 +48,21 @@ class SystemGeneratedExceptionTests(unittest.TestCase):
     def test_sibling_directories_stay_denied(self):
         for leaf in ("scratch/note.txt", ".user_uploaded/photo.png"):
             path = f"/data/.gemini/antigravity-cli/brain/1c0e-0d29/{leaf}"
+            with self.subTest(path=path):
+                self.assertNotEqual(read_policy.read_deny_reason(path), "")
+
+    def test_only_the_addon_data_directory_is_opened(self):
+        for leaf in ("steps/1/output.txt", "logs/transcript_full.jsonl", "messages/1.json"):
+            with self.subTest(leaf=leaf):
+                self.assertEqual(read_policy.read_deny_reason(f"{AGY_BRAIN}/{leaf}"), "")
+                self.assertNotEqual(read_policy.read_deny_reason(f"{DEV_BRAIN}/{leaf}"), "")
+
+    def test_marker_anywhere_in_the_path_does_not_open_credentials(self):
+        # 構成要素の集合で判定すると、順序を入れ替えるだけで資格情報が開く。
+        for path in (
+            "/data/.system_generated/.gemini/antigravity-cli/eha-mcp-credentials/observe.json",
+            f"{AGY_BRAIN}/steps/1/../../../eha-mcp-credentials/observe.json",
+        ):
             with self.subTest(path=path):
                 self.assertNotEqual(read_policy.read_deny_reason(path), "")
 

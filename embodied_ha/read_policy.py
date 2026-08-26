@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import PurePosixPath
@@ -19,9 +20,14 @@ _DENIED_COMPONENTS = frozenset({
     "codex-home",
 })
 
-# 退避されたツール結果が置かれる枝。この直下だけ、上の拒否から外す。
-_SYSTEM_GENERATED = ".system_generated"
-_AGENT_WORKSPACE_COMPONENTS = frozenset({".gemini"})
+# 退避されたツール結果が置かれる枝。アドオン自身の永続領域(/data)配下の、
+# エージェントCLIが生成する作業ディレクトリに限って、上の拒否から外す。
+# ⚠️ 構成要素の集合で判定してはいけない。開発機の作業ディレクトリ
+# (/config/.tools/... 配下)にも同じ形の枝があり、そこには非公開の資料から
+# 組み立てたプロンプト全文が入る。アドオンは config を map しているので届く。
+_SPILL_PATTERN = re.compile(
+    r"^/data/\.gemini/antigravity-cli/brain/[^/]+/\.system_generated/(?:steps|messages|logs)/"
+)
 
 CLAUDE_DENY_RULES = (
     "Read(**/secrets.yaml)",
@@ -51,16 +57,15 @@ def read_deny_reason(path: str) -> str:
         return "秘密鍵ファイルは読めません"
     if name.startswith("eha-mcp-") and name.endswith(".config.toml"):
         return "一時的なエージェント設定は読めません"
-    denied = components & _DENIED_COMPONENTS
     # Antigravity は大きい MCP ツール結果を .system_generated 配下へ退避する。そこが
     # 読めないと「出力が大きいほど届かない」状態になり、ツールを呼べても結果を受け取れない。
-    # 退避された内容は、小さければそのまま提示されていたものなので、読ませても開示は増えない。
-    # 退避先のパスの形は提供元の実装しだいで変わるため、ファイル名まで固定せず枝ごと許可する。
-    # 認証情報は別の枝(eha-mcp-credentials / *-oauth-token / settings.json / config/)にあり、
-    # ここは .gemini だけが拒否理由になっている場合に限って開ける。
-    if denied == _AGENT_WORKSPACE_COMPONENTS and _SYSTEM_GENERATED in components:
+    # `steps/` に置かれるのは、小さければそのまま提示されていたツール結果。
+    # ⚠️ 同じ枝の `logs/` と `messages/` には、注入したプロンプト全文とモデルの
+    # 思考過程が入る。これは「提示されていたもの」ではない。枝ごと開ける判断であり、
+    # 開示は増える。範囲を広げるときはこの点を踏まえること。
+    if _SPILL_PATTERN.match(normalized):
         return ""
-    if denied:
+    if components & _DENIED_COMPONENTS:
         return "認証・機密設定ディレクトリ内のファイルは読めません"
     return ""
 
