@@ -8,6 +8,19 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.34] - 2026-08-28
+
+### Fixed / 修正
+
+- Antigravity を使う個体へ、接続済みMCPツールの仕様書(manifest)をパスの案内として渡していた
+  箇所を、本文をそのまま渡す形に変更しました。案内が実際にファイルとして開かれる保証が
+  なかったため、仕様を確認せずにツールを呼び、存在しないツール名を呼ぶ等の失敗につながって
+  いました。
+  Changed how the connected MCP tool manifest is delivered to Antigravity-based individuals, from
+  a path reference to the manifest text itself. The path reference had no guarantee of actually
+  being opened as a file, which led to tool calls made without checking the real schema —
+  including calls to tool names that don't exist.
+
 ## [2.1.33] - 2026-08-26
 
 ### Fixed / 修正
