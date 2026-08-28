@@ -1449,7 +1449,8 @@ class InvokeAgentTests(unittest.TestCase):
             self.assertEqual(records[0]["cwd"], str(site_dir))
             prompt = records[0]["args"][-1]
             self.assertIn("【Antigravity headlessでのツール利用】", prompt)
-            self.assertIn(f"@{manifest_path}", prompt)
+            self.assertNotIn(f"@{manifest_path}", prompt)
+            self.assertIn(manifest_text, prompt)
             self.assertIn("required・enum・型を厳守", prompt)
             self.assertIn(".agents/mcp_config.json", prompt)
             self.assertIn("調査対象にしないでください", prompt)

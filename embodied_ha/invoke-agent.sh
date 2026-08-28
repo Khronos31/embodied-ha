@@ -976,7 +976,17 @@ run_agy() {
     # agy headless は未承認の native command/write_file をモデルが選ぶと、確認を出せず
     # ターン全体を空応答で終了する。接続済みMCPへ直行させ、許可済みの
     # read_file/WebSearch等まで禁止しない。ツール失敗時の補完も防ぐ。
-    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"接続済みMCPツールの正規description/inputSchemaは、秘密を除いた次のmanifestにあります: @${schema_manifest_path}"$'\n'"MCPツールを呼ぶ前にmanifestの該当項目を確認し、required・enum・型を厳守してください。.agents/mcp_config.jsonはserver起動配線でありSchemaの正本ではないため、調査対象にしないでください。ファイルを読むときは、必ず files サーバーの read_file / view_image を使ってください。同じ名前の組み込み read_file と、組み込み view_file は使えません（/config・/data 等が拒否されるため、使うと「Permission denied … Matches user-configured deny rule」になります）。それ以外の操作には、manifestに掲載された接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（WebSearch等）を直接使用してください。native command、write_file、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
+    #
+    # manifestは`@path`のパス参照ではなく本文をそのまま埋め込む。`@path`が
+    # agy headlessのプロンプト内で実際にファイル展開される記法だという確証が
+    # なく(この用法はこのファイル内でここにしか無い)、2.1.33時点のログでも
+    # manifestパスへの言及・読み込み試行が0件だった。読み口(files-mcp
+    # read_file)自体は2.1.32で開通済みだが、モデルが`@path`を能動的に開く
+    # 理由が無ければ意味を持たない。
+    [[ -s "$schema_manifest_path" ]] || die "MCP schema manifest is missing or empty: $schema_manifest_path"
+    local schema_manifest_json
+    schema_manifest_json="$(cat "$schema_manifest_path")"
+    full_prompt="${full_prompt}"$'\n\n'"【Antigravity headlessでのツール利用】"$'\n'"接続済みMCPツールの正規description/inputSchemaは、秘密を除いた次のmanifestです。"$'\n'"${schema_manifest_json}"$'\n'"MCPツールを呼ぶ前に上記manifestの該当項目を確認し、required・enum・型を厳守してください。.agents/mcp_config.jsonはserver起動配線でありSchemaの正本ではないため、調査対象にしないでください。ファイルを読むときは、必ず files サーバーの read_file / view_image を使ってください。同じ名前の組み込み read_file と、組み込み view_file は使えません（/config・/data 等が拒否されるため、使うと「Permission denied … Matches user-configured deny rule」になります）。それ以外の操作には、上記manifestに掲載された接続済みMCPツール、またはこのターンで明示的に許可された組み込みツール（WebSearch等）を直接使用してください。native command、write_file、shell、terminal、またはPythonスクリプトで代替してはいけません。利用可能なツールで確認できない事実は推測で補わず、確認できた範囲だけで処理を続けて、必ず指定された出力形式で最終応答を返してください。"
   fi
   if [[ -n "$json_schema" ]]; then
     full_prompt="${full_prompt}"$'\n\n'"出力は次のJSON Schemaに厳密に従ってください。JSON以外は一切含めないでください。"$'\n'"${json_schema}"$'\nJSON:\n'
