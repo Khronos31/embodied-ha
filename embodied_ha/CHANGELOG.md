@@ -8,6 +8,43 @@ Format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [2.1.34] - 2026-08-28
+
+### Fixed / 修正
+
+- Antigravity を使う個体へ、接続済みMCPツールの仕様書(manifest)をパスの案内として渡していた
+  箇所を、本文をそのまま渡す形に変更しました。案内が実際にファイルとして開かれる保証が
+  なかったため、仕様を確認せずにツールを呼び、存在しないツール名を呼ぶ等の失敗につながって
+  いました。
+  Changed how the connected MCP tool manifest is delivered to Antigravity-based individuals, from
+  a path reference to the manifest text itself. The path reference had no guarantee of actually
+  being opened as a file, which led to tool calls made without checking the real schema —
+  including calls to tool names that don't exist.
+
+## [2.1.33] - 2026-08-26
+
+### Fixed / 修正
+
+- エージェントCLIがツールの実行結果を一時ファイルへ退避したとき、その内容を読めない問題を
+  修正しました。結果が大きいほど届かなくなっており、掲示板の返信や設定ファイルの中身が
+  受け取れませんでした。退避されたツール結果を読めるようにしています。
+  Fixed tool results being unreachable when the agent CLI spills large output to a temporary file.
+  The larger the result, the less of it arrived — discussion replies and configuration files never
+  came through. Spilled tool results are now readable.
+  ⚠️ 認証情報と、やり取りの記録（プロンプトや思考の記録）は引き続き読めません。
+  Credentials and conversation records (prompts and reasoning traces) remain unreadable.
+
+## [2.1.32] - 2026-08-25
+
+### Fixed / 修正
+
+- Antigravity を使う個体が、読めるはずのファイルを「セキュリティで読めない」と判断してしまう問題を
+  修正しました。ファイルの読み取り口が2系統あり、指示文が使えない側を例として挙げていたためです。
+  設定ファイルや、ツールの引数仕様を書いた一覧が読めるようになります。
+  Fixed individuals on Antigravity concluding that readable files were blocked by security. Two file-reading
+  paths exist and the instructions named the unusable one as an example. Configuration files and the tool
+  schema manifest are now reachable.
+
 ## [2.1.31] - 2026-08-25
 
 ### Fixed / 修正
